@@ -1,137 +1,76 @@
 {
   "version": "1.0",
-  "timestamp": "2026-10-18T19:16:24.903Z",
-  "phase": "P1.6.7",
-  "phase_name": "production-ttft-provider-routing-verification",
+  "timestamp": "2026-11-21T05:10:00.000Z",
+  "phase": "PR-196",
+  "phase_name": "final-financial-integrity-payment-correctness-remediation",
   "phase_dir": ".planning",
-  "plan": 1,
-  "task": 12,
-  "total_tasks": 14,
-  "status": "paused",
+  "status": "active",
+  "pr_number": 196,
+  "pr_url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/196",
+  "branch": "feat/cashfree-razorpay-subscriptions-20261120",
+  "head_sha": "2825fbc8906f789b702f72ab0f2b75555fa480c5",
   "completed_tasks": [
     {
       "id": 1,
-      "name": "Verify baseline immutability against origin/prod-release at 80367e1",
+      "name": "P0-1: PostgreSQL Lease Acquisition Result Handling & Fail-Closed Guard",
       "status": "done",
-      "commit": "80367e1"
+      "details": "Used .onConflict('key').ignore().returning('key') with strict array-length check for cycle lease, invoice claims, and credit note claims. Enforced RELATIONAL_INVOICES_TABLE_REQUIRED and RELATIONAL_CREDIT_NOTES_TABLE_REQUIRED outside tests."
     },
     {
       "id": 2,
-      "name": "Execute empirical production baseline benchmark (20 requests: 10 Guest + 10 Auth) against https://aira-ai-2026.vercel.app",
+      "name": "P0-2: Gateway Refund Amount Normalization (Razorpay & Cashfree)",
       "status": "done",
-      "commit": "9c61591"
+      "details": "Implemented parseNormalizedRefundPayload returning integer minor units and decimal major units. Enforced positive amounts, currency matching, cumulative partial refund limits, and duplicate webhook idempotency."
     },
     {
       "id": 3,
-      "name": "Isolate upstream provider inference latency from pre-provider database latency and cold-start overhead",
+      "name": "P0-3: Multi-Cycle Subscription Authoritative Invoice Linking & Unresolved Failsafe",
       "status": "done",
-      "commit": "5940e68"
+      "details": "Updated resolveAuthoritativeOriginalInvoice to link by payment ID and cycle number without defaulting to earliest invoice. Set originalInvoiceNumber = 'UNRESOLVED_ORIGINAL_INVOICE' and prevented spurious CREDIT_NOTE_RECONCILED events."
     },
     {
       "id": 4,
-      "name": "Diagnose root cause of allam-2-7b selection (Groq daily token quota exhaustion + misconfigured candidate ordering)",
+      "name": "P0-4: Atomic Reconciliation & Removal of Custom DB Bypass",
       "status": "done",
-      "commit": "5940e68"
+      "details": "Removed Boolean(this.customDbClient) from isTestEnv so custom DB clients do not enable in-memory fallbacks or bypass relational table checks."
     },
     {
       "id": 5,
-      "name": "Fix routing policy: elevate gemini-3.5-flash-lite to Candidate #2 and set allam-2-7b to allowed: false (TERTIARY_ONLY)",
+      "name": "Real PostgreSQL 16 & 18 Multi-Engine Verification Matrix",
       "status": "done",
-      "commit": "5940e68"
+      "details": "Executed all 14 gates in test/invoice-crash-recovery-postgres.test.ts across real PG16 (:5433) and PG18 (:5432) clusters. 14/14 PASS."
     },
     {
       "id": 6,
-      "name": "Preserve P1.6.5 capacity invariants and P1.6.6 guest-mode database pool safety",
+      "name": "Full Local Verification Matrix",
       "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 7,
-      "name": "Author test/p1-6-7-ttft-routing-verification.test.ts covering 18 failure and routing scenarios",
-      "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 8,
-      "name": "Update test/p1-6-routing-policy.test.ts and package.json test scripts",
-      "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 9,
-      "name": "Enhance scripts/measure-p1-6-7-production.ts with target CLI argument and JSON export",
-      "status": "done",
-      "commit": "9c61591"
-    },
-    {
-      "id": 10,
-      "name": "Push release candidate commits 5940e68 and 9c61591 to branch fix/p1-6-7-production-ttft-routing-verification-20261018",
-      "status": "done",
-      "commit": "9c61591"
-    },
-    {
-      "id": 11,
-      "name": "Create PR #90 against prod-release on GitHub",
-      "status": "done",
-      "commit": "9c61591"
-    },
-    {
-      "id": 12,
-      "name": "Execute candidate preview certification benchmark (20 requests: 10 Guest + 10 Auth) on Vercel preview deployment dpl_9inTXcbebKTiUaGXvxouwDBCGq6n",
-      "status": "done",
-      "commit": "9c61591"
+      "details": "typecheck (PASS), test:secrets (PASS), test:release-auth:unit (PASS), test:recurring-subscriptions (PASS), test:invoice-concurrency (PASS), test:invoice-crash-recovery (PASS), test:remediations (PASS), build (PASS)."
     }
   ],
   "remaining_tasks": [
     {
-      "id": 13,
-      "name": "Obtain explicit human GO LIVE instruction from repository owner rajpunkeshwarrajgautam-boop for exact candidate SHA 9c61591a2af85bf4ac09f85b08157bdfba4b8ce3",
-      "status": "not_started"
-    },
-    {
-      "id": 14,
-      "name": "Execute authorized production release: merge PR #90, monitor Vercel production deployment, and run post-deploy production smoke verification",
-      "status": "not_started"
+      "id": 7,
+      "name": "Resolve GitHub Actions account billing lock to allow remote CI runner execution",
+      "status": "blocked_external"
     }
   ],
   "blockers": [
     {
-      "description": "Production release authority gate: AGENTS.md mandates explicit human GO LIVE instruction from rajpunkeshwarrajgautam-boop before merging PR #90 into prod-release",
-      "type": "human_action",
-      "workaround": "Release candidate fully verified on preview (PR #90) with passing CI; awaiting human authorization"
-    }
-  ],
-  "async_jobs": [],
-  "human_actions_pending": [
-    {
-      "action": "Provide explicit human GO LIVE authorization for PR #90 candidate SHA 9c61591a2af85bf4ac09f85b08157bdfba4b8ce3",
-      "context": "AGENTS.md release protocol requires fresh, explicit human authorization before merging to prod-release",
-      "blocking": true
-    }
-  ],
-  "decisions": [
-    {
-      "decision": "Promote gemini:gemini-3.5-flash-lite to Candidate #2 in routing-policy.ts",
-      "rationale": "Ensures circuit trip failovers immediately fall back to Gemini rather than jumping to tertiary low-tier models",
-      "phase": "P1.6.7"
+      "description": "GitHub Actions account billing issue (HTTP 403 on runner allocation: 'The job was not started because your account is locked due to a billing issue.')",
+      "type": "external_infrastructure"
     },
     {
-      "decision": "Set groq:allam-2-7b to allowed: false with rejectionReason: 'TERTIARY_ONLY'",
-      "rationale": "Prevents selectFastExecutionPlan from selecting allam-2-7b under any secondary failover condition",
-      "phase": "P1.6.7"
+      "description": "HOLD THE MERGE: PR #196 must not be merged into prod-release autonomously.",
+      "type": "policy_governance"
     },
     {
-      "decision": "Preserve P1.6.5 capacity limits and P1.6.6 guest DB pool safety",
-      "rationale": "Maintains 2 concurrent, 14 RPM global capacity and single-connection ephemeral guest Knex instances to prevent pool exhaustion",
-      "phase": "P1.6.7"
+      "description": "ZERO PRODUCTION DB MIGRATIONS: Migration 033 must not be executed on production Neon PostgreSQL.",
+      "type": "safety_boundary"
     },
     {
-      "decision": "Distinguish pre-provider distributed DB WAN latency (~880ms on Neon) from upstream provider inference time (~281ms)",
-      "rationale": "Provides truthful decomposition of production TTFT; confirms warm server TTFT (P50=1390ms, P95=1805ms) meets <=3000ms SLA",
-      "phase": "P1.6.7"
+      "description": "FAIL-CLOSED LIVE BILLING: AIRA_COMMERCIAL_BILLING_ENABLED=false strictly enforced.",
+      "type": "safety_boundary"
     }
   ],
-  "uncommitted_files": [],
-  "next_action": "Request explicit human GO LIVE instruction from rajpunkeshwarrajgautam-boop for PR #90 candidate SHA 9c61591a2af85bf4ac09f85b08157bdfba4b8ce3, then merge PR #90 and verify production deployment",
-  "context_notes": "All P1.6.7 technical tasks, live empirical reproductions, code fixes, regression test suites, PR creation, CI checks, and Preview candidate certifications are complete and green. Candidate Preview achieved 100% success, Server TTFT P50=576ms, P95=687ms, 0 Knex timeouts, 0 5xx, and 0 allam-2-7b occurrences. Repository is completely clean and waiting for human GO LIVE approval."
+  "certification_artifact": "C:\\Users\\WORKSTATION\\.gemini\antigravity\\brain\\9a10239e-9af0-4b68-9196-9678b4e3c76d\\AIRA-PR196-FINAL-CERTIFICATION.md"
 }
