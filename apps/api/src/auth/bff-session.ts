@@ -593,6 +593,20 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
     return true;
   }
 
+  // Legitimate payment gateway webhooks are server-to-server callbacks authenticated
+  // exclusively by cryptographic HMAC-SHA256 signatures, not browser sessions or CSRF tokens.
+  const reqPath = (req.path || (req.url ? req.url.split('?')[0] : '')).toLowerCase();
+  if (reqPath === '/api/billing/webhook/razorpay' || reqPath === '/api/billing/webhook/cashfree') {
+    const hasWebhookSignature = Boolean(
+      req.headers['x-razorpay-signature'] ||
+      req.headers['x-webhook-signature'] ||
+      req.headers['x-cashfree-signature']
+    );
+    if (hasWebhookSignature) {
+      return true;
+    }
+  }
+
   // 1. Fetch Metadata check: reject cross-site requests unconditionally on mutations
   const secFetchSite = req.headers['sec-fetch-site'];
   if (secFetchSite === 'cross-site') {
