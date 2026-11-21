@@ -21,12 +21,18 @@ import {
   validateTestGatewayCredentials,
   validateStagingDatabaseIdentity,
   assertStagingSandboxRehearsalAllowed,
+  assertStagingSandboxRehearsalAllowedAsync,
+  verifyLiveSessionDatabaseIdentity,
+  isProductionRuntime,
+  enrollSyntheticTestPrincipal,
+  revokeSyntheticTestPrincipal,
   enrollSyntheticTestPrincipalForTesting,
   resetEnrolledSyntheticTestPrincipalsForTesting,
   DEFAULT_ENROLLED_SYNTHETIC_TEST_PRINCIPALS,
   AUTHORIZED_VERCEL_PROJECT_ID,
   AUTHORIZED_STAGING_GIT_BRANCH,
   AUTHORIZED_STAGING_NEON_PROJECT_ID,
+  AUTHORIZED_STAGING_NEON_BRANCH,
   AUTHORIZED_STAGING_NEON_ENDPOINT
 } from '../apps/api/src/billing/staging-sandbox-rehearsal-guard.js';
 import { paymentGatewayService } from '../apps/api/src/billing/payment-gateway-service.js';
@@ -34,7 +40,9 @@ import {
   PRODUCTION_NEON_PROJECT_ID,
   PRODUCTION_NEON_ENDPOINT_ID,
   STAGING_NEON_PROJECT_ID,
-  STAGING_NEON_ENDPOINT_ID
+  STAGING_NEON_ENDPOINT_ID,
+  COMMERCIAL_PR92_BRANCH_ID,
+  COMMERCIAL_PR92_ENDPOINT_ID
 } from '../packages/db/src/index.js';
 
 describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
@@ -112,6 +120,73 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
       assert.throws(
         () => assertStagingSandboxRehearsalAllowed({ gateway: 'razorpay' }),
         /CRITICAL_SECURITY_VIOLATION: Staging sandbox rehearsal cannot operate while AIRA_COMMERCIAL_BILLING_ENABLED is true/
+      );
+    });
+
+    it('isProductionRuntime accurately classifies Vercel and Node environments', () => {
+      // Vercel Preview runtime with NODE_ENV=production (Vercel optimization) is NOT production
+      process.env.VERCEL = '1';
+      process.env.VERCEL_ENV = 'preview';
+      process.env.NODE_ENV = 'production';
+      assert.equal(isProductionRuntime(), false);
+
+      // Real Vercel production
+      process.env.VERCEL_ENV = 'production';
+      assert.equal(isProductionRuntime(), true);
+
+      // Explicit AIRA_ENVIRONMENT=production override
+      process.env.VERCEL_ENV = 'preview';
+      process.env.AIRA_ENVIRONMENT = 'production';
+      assert.equal(isProductionRuntime(), true);
+      delete process.env.AIRA_ENVIRONMENT;
+
+      // Non-Vercel environment with NODE_ENV=production
+      delete process.env.VERCEL;
+      delete process.env.VERCEL_ENV;
+      process.env.NODE_ENV = 'production';
+      assert.equal(isProductionRuntime(), true);
+
+      // Non-Vercel environment with NODE_ENV=test
+      process.env.NODE_ENV = 'test';
+      assert.equal(isProductionRuntime(), false);
+    });
+
+    it('permits rehearsal in Vercel Preview environment when NODE_ENV is production (Vercel optimization)', () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.VERCEL = '1';
+      process.env.VERCEL_ENV = 'preview';
+      process.env.NODE_ENV = 'production';
+      process.env.VERCEL_PROJECT_ID = AUTHORIZED_VERCEL_PROJECT_ID;
+      process.env.VERCEL_GIT_COMMIT_REF = AUTHORIZED_STAGING_GIT_BRANCH;
+      process.env.RAZORPAY_KEY_ID = 'rzp_test_previewKey123';
+      process.env.RAZORPAY_KEY_SECRET = 'valid_test_secret_123';
+      process.env.RAZORPAY_WEBHOOK_SECRET = 'valid_test_webhook_secret_123';
+
+      assert.equal(isStagingSandboxRehearsalActive(), true);
+      assert.doesNotThrow(() => {
+        assertStagingSandboxRehearsalAllowed({
+          gateway: 'razorpay',
+          databaseUrl: validStagingDbUrl,
+          principal: { userId: 'usr_synth_plus_2026' }
+        });
+      });
+    });
+
+    it('deployed Vercel runtime strictly enforces deployment invariants and ignores test harness flags', () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.VERCEL = '1';
+      process.env.VERCEL_ENV = 'preview';
+      process.env.VERCEL_PROJECT_ID = AUTHORIZED_VERCEL_PROJECT_ID;
+      process.env.VERCEL_GIT_COMMIT_REF = 'wrong-feature-branch';
+      // Attempt to spoof test fixture in deployed runtime
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+
+      assert.throws(
+        () => assertStagingSandboxRehearsalAllowed(
+          { gateway: 'razorpay', databaseUrl: validStagingDbUrl },
+          { isLocalTestFixture: true }
+        ),
+        /SECURITY_VIOLATION: Staging rehearsal is strictly restricted to branch 'staging'/
       );
     });
   });
@@ -325,6 +400,28 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
         /REHEARSAL_UNAUTHORIZED/
       );
     });
+
+    it('revokes synthetic test account and strictly fails closed upon revocation', () => {
+      const dynamicPrincipal = 'temp_revocable_principal_2026';
+      enrollSyntheticTestPrincipal(dynamicPrincipal);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: dynamicPrincipal }), true);
+
+      // Revoke the principal
+      revokeSyntheticTestPrincipal(dynamicPrincipal);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: dynamicPrincipal }), false);
+
+      // Verify that default pre-enrolled accounts can also be revoked if compromised
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'usr_synth_test_2026' }), true);
+      revokeSyntheticTestPrincipal('usr_synth_test_2026');
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'usr_synth_test_2026' }), false);
+    });
+
+    it('strictly rejects arbitrary user ID prefixes or emails masquerading as synthetic test accounts', () => {
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'usr_synth_attacker_unauthorized' }), false);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'usr_test_attacker_unauthorized' }), false);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'synthetic@aira.internal' }), false);
+      assert.equal(isAuthorizedSyntheticTestPrincipal({ userId: 'usr_real_victim', isSynthetic: true }), false);
+    });
   });
 
   // =========================================================================
@@ -349,6 +446,16 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
           })
         };
       }) as any;
+      mockDb.raw = async () => ({
+        rows: [{
+          db_name: 'neondb',
+          db_user: 'neondb_owner',
+          server_ip: '127.0.0.1',
+          neon_project_id: 'mute-frost-50372225',
+          neon_branch_id: 'br-snowy-bonus-b32thjlz',
+          neon_endpoint_id: 'ep-twilight-cherry-b3iz2oqv'
+        }]
+      });
 
       paymentGatewayService.setDbClient(mockDb);
       paymentGatewayService.setGatewayTransport(async () => ({
@@ -395,6 +502,63 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
         /BILLING_UNAVAILABLE: Live checkout has not been approved or integrated/
       );
     });
+
+    it('rejects checkout creation when route principalId mismatches authenticated principalContext userId', async () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.RAZORPAY_KEY_ID = 'rzp_test_key123';
+      process.env.DATABASE_URL = validStagingDbUrl;
+
+      await assert.rejects(
+        async () => {
+          await paymentGatewayService.createSubscriptionCheckout(
+            'usr_synth_plus_2026',
+            'plus',
+            'INR',
+            'razorpay',
+            { userId: 'usr_synth_pro_2026', isSynthetic: true }
+          );
+        },
+        /SECURITY_VIOLATION: Principal ID mismatch between route parameter and authenticated session context/
+      );
+    });
+
+    it('rejects checkout creation when live database session belongs to production Neon project', async () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.RAZORPAY_KEY_ID = 'rzp_test_key123';
+      process.env.DATABASE_URL = validStagingDbUrl;
+
+      const mockProdDb = ((table: string) => ({
+        where: () => ({ first: async () => null })
+      })) as any;
+      mockProdDb.raw = async () => ({
+        rows: [{
+          db_name: 'neondb',
+          neon_project_id: PRODUCTION_NEON_PROJECT_ID,
+          neon_branch_id: 'br-shiny-moon-b3vy9xj7',
+          neon_endpoint_id: PRODUCTION_NEON_ENDPOINT_ID
+        }]
+      });
+
+      paymentGatewayService.setDbClient(mockProdDb);
+      try {
+        await assert.rejects(
+          async () => {
+            await paymentGatewayService.createSubscriptionCheckout(
+              'usr_synth_plus_2026',
+              'plus',
+              'INR',
+              'razorpay',
+              { userId: 'usr_synth_plus_2026' }
+            );
+          },
+          /CRITICAL_SECURITY_VIOLATION: Connected database session is PRODUCTION Neon project/
+        );
+      } finally {
+        paymentGatewayService.setDbClient(null);
+      }
+    });
   });
 
   // =========================================================================
@@ -429,6 +593,16 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
           })
         };
       }) as any;
+      mockDb.raw = async () => ({
+        rows: [{
+          db_name: 'neondb',
+          db_user: 'neondb_owner',
+          server_ip: '127.0.0.1',
+          neon_project_id: 'mute-frost-50372225',
+          neon_branch_id: 'br-snowy-bonus-b32thjlz',
+          neon_endpoint_id: 'ep-twilight-cherry-b3iz2oqv'
+        }]
+      });
 
       paymentGatewayService.setDbClient(mockDb);
 
@@ -479,6 +653,16 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
           })
         };
       }) as any;
+      mockDb.raw = async () => ({
+        rows: [{
+          db_name: 'neondb',
+          db_user: 'neondb_owner',
+          server_ip: '127.0.0.1',
+          neon_project_id: 'mute-frost-50372225',
+          neon_branch_id: 'br-snowy-bonus-b32thjlz',
+          neon_endpoint_id: 'ep-twilight-cherry-b3iz2oqv'
+        }]
+      });
 
       paymentGatewayService.setDbClient(mockDb);
 
@@ -534,6 +718,16 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
           })
         };
       }) as any;
+      mockDb.raw = async () => ({
+        rows: [{
+          db_name: 'neondb',
+          db_user: 'neondb_owner',
+          server_ip: '127.0.0.1',
+          neon_project_id: 'mute-frost-50372225',
+          neon_branch_id: 'br-snowy-bonus-b32thjlz',
+          neon_endpoint_id: 'ep-twilight-cherry-b3iz2oqv'
+        }]
+      });
 
       paymentGatewayService.setDbClient(mockDb);
 
@@ -636,6 +830,249 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
       const audit = await paymentGatewayService.auditInvoiceSequenceGaps(nonPgTrx, 2026);
       assert.equal(audit.status, 'AUDIT_UNSUPPORTED_STORAGE');
       assert.equal(audit.isGapless, false);
+    });
+
+    it('returns AUDIT_INCOMPLETE_EVIDENCE with isGapless: false when sequence row is missing from sequence relation', async () => {
+      const mockTrx = {
+        raw: async (sql: string) => {
+          if (sql.includes('billing_invoice_number_seq')) {
+            return { rows: [] }; // No row returned
+          }
+          return { rows: [] };
+        }
+      };
+
+      const audit = await paymentGatewayService.auditInvoiceSequenceGaps(mockTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_INCOMPLETE_EVIDENCE');
+      assert.equal(audit.isGapless, false);
+      assert.match(audit.error || '', /Sequence record missing from billing_invoice_number_seq/);
+    });
+
+    it('returns AUDIT_INCOMPLETE_EVIDENCE with isGapless: false when sequence is_called is false but invoices already exist', async () => {
+      const mockTrx = {
+        raw: async (sql: string) => {
+          if (sql.includes('billing_invoice_number_seq')) {
+            return { rows: [{ last_value: 1, is_called: false }] };
+          }
+          if (sql.includes('billing_invoices')) {
+            return {
+              rows: [{ invoice_number: 'INV-2026-0001' }]
+            };
+          }
+          return { rows: [] };
+        }
+      };
+
+      const audit = await paymentGatewayService.auditInvoiceSequenceGaps(mockTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_INCOMPLETE_EVIDENCE');
+      assert.equal(audit.isGapless, false);
+      assert.match(audit.error || '', /Sequence is uncalled but invoices already exist in series/);
+    });
+
+    it('returns AUDIT_VERIFIED_GAPLESS with isGapless: true when sequence is_called is false and 0 invoices exist', async () => {
+      const mockTrx = {
+        raw: async (sql: string) => {
+          if (sql.includes('billing_invoice_number_seq')) {
+            return { rows: [{ last_value: 1, is_called: false }] };
+          }
+          if (sql.includes('billing_invoices')) {
+            return { rows: [] };
+          }
+          return { rows: [] };
+        }
+      };
+
+      const audit = await paymentGatewayService.auditInvoiceSequenceGaps(mockTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_VERIFIED_GAPLESS');
+      assert.equal(audit.isGapless, true);
+      assert.equal(audit.currentSeq, 0);
+      assert.equal(audit.recordedInvoicesCount, 0);
+    });
+
+    it('returns AUDIT_INCOMPLETE_EVIDENCE with isGapless: false when sequence value is invalid or <= 0', async () => {
+      const mockTrx = {
+        raw: async (sql: string) => {
+          if (sql.includes('billing_invoice_number_seq')) {
+            return { rows: [{ last_value: -5, is_called: true }] };
+          }
+          return { rows: [] };
+        }
+      };
+
+      const audit = await paymentGatewayService.auditInvoiceSequenceGaps(mockTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_INCOMPLETE_EVIDENCE');
+      assert.equal(audit.isGapless, false);
+      assert.match(audit.error || '', /Invalid sequence counter value/);
+    });
+
+    it('returns AUDIT_GAP_DETECTED with isGapless: false and detects duplicate invoice numbers', async () => {
+      const mockTrx = {
+        raw: async (sql: string) => {
+          if (sql.includes('billing_invoice_number_seq')) {
+            return { rows: [{ last_value: 2, is_called: true }] };
+          }
+          if (sql.includes('billing_invoices')) {
+            return {
+              rows: [
+                { invoice_number: 'INV-2026-0001' },
+                { invoice_number: 'INV-2026-0001' }, // Duplicate!
+                { invoice_number: 'INV-2026-0002' }
+              ]
+            };
+          }
+          return { rows: [] };
+        }
+      };
+
+      const audit = await paymentGatewayService.auditInvoiceSequenceGaps(mockTrx, 2026);
+      assert.equal(audit.status, 'AUDIT_GAP_DETECTED');
+      assert.equal(audit.isGapless, false);
+      assert.deepEqual(audit.duplicates, ['INV-2026-0001']);
+      assert.match(audit.error || '', /Duplicate invoice numbers detected/);
+    });
+  });
+
+  // =========================================================================
+  // 10. LIVE DATABASE SESSION IDENTITY VERIFICATION (NEON GUCS)
+  // =========================================================================
+  describe('10. Live Database Session Identity Verification (Neon GUCs)', () => {
+    it('successfully validates live database session matching staging Neon identity', async () => {
+      const validTrx = {
+        raw: async () => ({
+          rows: [{
+            db_name: 'neondb',
+            db_user: 'aira_staging_user',
+            server_ip: '10.0.0.1',
+            neon_project_id: AUTHORIZED_STAGING_NEON_PROJECT_ID,
+            neon_branch_id: AUTHORIZED_STAGING_NEON_BRANCH,
+            neon_endpoint_id: AUTHORIZED_STAGING_NEON_ENDPOINT,
+            neon_timeline_id: 't-12345'
+          }]
+        })
+      };
+
+      const identity = await verifyLiveSessionDatabaseIdentity(validTrx, { isLocalTestFixture: true });
+      assert.equal(identity.neonProjectId, AUTHORIZED_STAGING_NEON_PROJECT_ID);
+      assert.equal(identity.neonBranchId, AUTHORIZED_STAGING_NEON_BRANCH);
+      assert.equal(identity.neonEndpointId, AUTHORIZED_STAGING_NEON_ENDPOINT);
+      assert.equal(identity.databaseName, 'neondb');
+    });
+
+    it('panics and aborts with CRITICAL_SECURITY_VIOLATION if session returns Production Neon project', async () => {
+      const prodTrx = {
+        raw: async () => ({
+          rows: [{
+            db_name: 'neondb',
+            neon_project_id: PRODUCTION_NEON_PROJECT_ID, // old-sky-50952395
+            neon_branch_id: 'br-shiny-moon-b3vy9xj7',
+            neon_endpoint_id: PRODUCTION_NEON_ENDPOINT_ID
+          }]
+        })
+      };
+
+      await assert.rejects(
+        async () => {
+          await verifyLiveSessionDatabaseIdentity(prodTrx, { isLocalTestFixture: true });
+        },
+        /CRITICAL_SECURITY_VIOLATION: Connected database session is PRODUCTION Neon project/
+      );
+    });
+
+    it('panics and aborts with CRITICAL_SECURITY_VIOLATION if session returns Commercial PR #92 branch', async () => {
+      const pr92Trx = {
+        raw: async () => ({
+          rows: [{
+            db_name: 'neondb',
+            neon_project_id: 'mute-frost-50372225',
+            neon_branch_id: COMMERCIAL_PR92_BRANCH_ID, // br-green-snow-b3dsci5u
+            neon_endpoint_id: COMMERCIAL_PR92_ENDPOINT_ID
+          }]
+        })
+      };
+
+      await assert.rejects(
+        async () => {
+          await verifyLiveSessionDatabaseIdentity(pr92Trx, { isLocalTestFixture: true });
+        },
+        /CRITICAL_SECURITY_VIOLATION: Connected database session is Commercial PR #92 branch/
+      );
+    });
+
+    it('fails closed with SECURITY_VIOLATION when live session query throws an error', async () => {
+      const brokenTrx = {
+        raw: async () => {
+          throw new Error('Connection terminated by server');
+        }
+      };
+
+      await assert.rejects(
+        async () => {
+          await verifyLiveSessionDatabaseIdentity(brokenTrx, { isLocalTestFixture: true });
+        },
+        /SECURITY_VIOLATION: Failed to query database session identity: Connection terminated by server/
+      );
+    });
+
+    it('fails closed in deployed Vercel mode when session is missing required Neon GUCs', async () => {
+      process.env.VERCEL = '1';
+      process.env.VERCEL_ENV = 'preview';
+
+      const missingGucsTrx = {
+        raw: async () => ({
+          rows: [{
+            db_name: 'neondb',
+            db_user: 'postgres',
+            server_ip: '127.0.0.1'
+            // Missing neon_project_id, neon_branch_id, neon_endpoint_id
+          }]
+        })
+      };
+
+      await assert.rejects(
+        async () => {
+          await verifyLiveSessionDatabaseIdentity(missingGucsTrx);
+        },
+        /SECURITY_VIOLATION: Connected database session lacks required Neon control-plane identity/
+      );
+    });
+
+    it('fails closed in deployed Vercel mode when database name is not neondb', async () => {
+      process.env.VERCEL = '1';
+      process.env.VERCEL_ENV = 'preview';
+
+      const wrongDbNameTrx = {
+        raw: async () => ({
+          rows: [{
+            db_name: 'foreign_db', // Wrong database name!
+            neon_project_id: AUTHORIZED_STAGING_NEON_PROJECT_ID,
+            neon_branch_id: AUTHORIZED_STAGING_NEON_BRANCH,
+            neon_endpoint_id: AUTHORIZED_STAGING_NEON_ENDPOINT
+          }]
+        })
+      };
+
+      await assert.rejects(
+        async () => {
+          await verifyLiveSessionDatabaseIdentity(wrongDbNameTrx);
+        },
+        /SECURITY_VIOLATION: Live database session database name 'foreign_db' does not match expected 'neondb'/
+      );
+    });
+
+    it('fails closed when clientOrTrx is null or does not support raw SQL execution', async () => {
+      await assert.rejects(
+        async () => {
+          await verifyLiveSessionDatabaseIdentity(null);
+        },
+        /SECURITY_VIOLATION: Database connection or transaction required for live session verification does not support SQL execution/
+      );
+
+      await assert.rejects(
+        async () => {
+          await verifyLiveSessionDatabaseIdentity({});
+        },
+        /SECURITY_VIOLATION: Database connection or transaction required for live session verification does not support SQL execution/
+      );
     });
   });
 });

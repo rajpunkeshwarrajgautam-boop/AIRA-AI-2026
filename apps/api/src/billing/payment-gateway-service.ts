@@ -11,7 +11,9 @@ import { taxDeterminationService, TaxDeterminationResult } from './tax-determina
 import {
   isStagingSandboxRehearsalActive,
   assertStagingSandboxRehearsalAllowed,
-  isAuthorizedSyntheticTestPrincipal
+  assertStagingSandboxRehearsalAllowedAsync,
+  isAuthorizedSyntheticTestPrincipal,
+  isProductionRuntime
 } from './staging-sandbox-rehearsal-guard.js';
 
 export interface WebhookVerificationResult {
@@ -304,7 +306,7 @@ export function assertCommercialFulfillmentAllowed(eventType: string, gateway: s
   }
 
   // 3. Centralized fail-closed check
-  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+  const isProduction = isProductionRuntime();
   const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
   const isIsolatedTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true') && !isProduction && !isStaging;
   const rehearsalGateway: 'razorpay' | 'cashfree' | undefined = (gateway === 'razorpay' || gateway === 'cashfree') ? gateway : undefined;
@@ -419,13 +421,15 @@ export class PaymentGatewayService {
    * - AUDIT_VERIFIED_GAPLESS: Sequence inspected, all numbers accounted for
    * - AUDIT_GAP_DETECTED: Sequence consumed without matching invoice record
    * - AUDIT_QUERY_FAILED: Database error, table missing, query failure (NEVER returns isGapless: true)
+   * - AUDIT_INCOMPLETE_EVIDENCE: Sequence row missing, uncalled sequence with existing invoices, or invalid sequence
    * - AUDIT_UNSUPPORTED_STORAGE: Client does not support PostgreSQL sequence inspection
    */
   async auditInvoiceSequenceGaps(trx?: any, year: number = 2026): Promise<{
-    status: 'AUDIT_VERIFIED_GAPLESS' | 'AUDIT_GAP_DETECTED' | 'AUDIT_QUERY_FAILED' | 'AUDIT_UNSUPPORTED_STORAGE';
+    status: 'AUDIT_VERIFIED_GAPLESS' | 'AUDIT_GAP_DETECTED' | 'AUDIT_QUERY_FAILED' | 'AUDIT_UNSUPPORTED_STORAGE' | 'AUDIT_INCOMPLETE_EVIDENCE';
     currentSeq: number;
     recordedInvoicesCount: number;
     voidOrMissing: string[];
+    duplicates?: string[];
     isGapless: boolean;
     error?: string;
   }> {
@@ -444,24 +448,69 @@ export class PaymentGatewayService {
     try {
       const seqRes = await trx.raw("SELECT last_value, is_called FROM billing_invoice_number_seq");
       const row = seqRes?.rows?.[0] || seqRes?.[0];
-      if (!row || !row.is_called) {
+      if (!row) {
         return {
-          status: 'AUDIT_VERIFIED_GAPLESS',
+          status: 'AUDIT_INCOMPLETE_EVIDENCE',
           currentSeq: 0,
           recordedInvoicesCount: 0,
           voidOrMissing: [],
-          isGapless: true
+          isGapless: false,
+          error: 'Sequence record missing from billing_invoice_number_seq'
         };
       }
-      const currentSeq = Number(row.last_value);
+
       const invoicesRes = await trx.raw("SELECT invoice_number FROM billing_invoices WHERE invoice_number LIKE ?", [`INV-${year}-%`]);
       const rows = invoicesRes?.rows || invoicesRes || [];
+
+      if (!row.is_called) {
+        if (rows.length === 0) {
+          return {
+            status: 'AUDIT_VERIFIED_GAPLESS',
+            currentSeq: 0,
+            recordedInvoicesCount: 0,
+            voidOrMissing: [],
+            isGapless: true
+          };
+        } else {
+          return {
+            status: 'AUDIT_INCOMPLETE_EVIDENCE',
+            currentSeq: 0,
+            recordedInvoicesCount: rows.length,
+            voidOrMissing: [],
+            isGapless: false,
+            error: 'Sequence is uncalled but invoices already exist in series'
+          };
+        }
+      }
+
+      const currentSeq = Number(row.last_value);
+      if (isNaN(currentSeq) || currentSeq <= 0) {
+        return {
+          status: 'AUDIT_INCOMPLETE_EVIDENCE',
+          currentSeq: isNaN(currentSeq) ? 0 : currentSeq,
+          recordedInvoicesCount: rows.length,
+          voidOrMissing: [],
+          isGapless: false,
+          error: `Invalid sequence counter value: ${row.last_value}`
+        };
+      }
+
       const presentNumbers = new Set<number>();
+      const duplicates: string[] = [];
+      const seenNumbers = new Set<number>();
+
       for (const r of rows) {
-        const numStr = (r.invoice_number || '').split('-').pop();
+        const invNum = r.invoice_number || '';
+        const numStr = invNum.split('-').pop();
         if (numStr) {
           const n = parseInt(numStr, 10);
-          if (!isNaN(n)) presentNumbers.add(n);
+          if (!isNaN(n)) {
+            if (seenNumbers.has(n)) {
+              duplicates.push(invNum);
+            }
+            seenNumbers.add(n);
+            presentNumbers.add(n);
+          }
         }
       }
 
@@ -472,13 +521,18 @@ export class PaymentGatewayService {
         }
       }
 
-      const isGapless = voidOrMissing.length === 0;
+      const hasGaps = voidOrMissing.length > 0;
+      const hasDuplicates = duplicates.length > 0;
+      const isGapless = !hasGaps && !hasDuplicates;
+
       return {
         status: isGapless ? 'AUDIT_VERIFIED_GAPLESS' : 'AUDIT_GAP_DETECTED',
         currentSeq,
         recordedInvoicesCount: presentNumbers.size,
         voidOrMissing,
-        isGapless
+        duplicates: hasDuplicates ? duplicates : undefined,
+        isGapless,
+        error: hasDuplicates ? `Duplicate invoice numbers detected: ${duplicates.join(', ')}` : (hasGaps ? `Missing invoice sequence numbers: ${voidOrMissing.join(', ')}` : undefined)
       };
     } catch (err: any) {
       return {
@@ -987,7 +1041,7 @@ export class PaymentGatewayService {
       }
 
       if (!purchaseRecord) {
-        const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+        const isProduction = isProductionRuntime();
         const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
         if (!isProduction && !isStaging && (gatewayOrderId.startsWith('ord_test_') || gatewayOrderId.startsWith('test_'))) {
           return; // Acknowledged test webhook event in isolated test environment without entitlement mutation
@@ -1052,13 +1106,19 @@ export class PaymentGatewayService {
       // was created in rehearsal mode AND its owner is an enrolled synthetic test account.
       if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
         if (isStagingSandboxRehearsalActive()) {
-          const isRehearsalRecord = purchaseRecord.is_sandbox === true || meta.rehearsal === true || meta.is_sandbox === true;
+          const isRehearsalRecord = purchaseRecord.is_sandbox === true || meta.rehearsal === true || meta.isSandbox === true || meta.is_sandbox === true;
           if (!isRehearsalRecord) {
             throw new TerminalRejectionError(`REHEARSAL_SECURITY_VIOLATION: Webhook received for non-rehearsal subscription ${purchaseRecord.id} while commercial billing is disabled.`);
           }
           if (!isAuthorizedSyntheticTestPrincipal({ userId: principalId })) {
             throw new TerminalRejectionError(`REHEARSAL_UNAUTHORIZED: Staging rehearsal fulfillment rejected: subscription owner '${principalId}' is not an enrolled synthetic test account.`);
           }
+          // Live database session verification on the active transaction executing fulfillment
+          await assertStagingSandboxRehearsalAllowedAsync({
+            gateway: (gateway === 'razorpay' || gateway === 'cashfree') ? gateway : undefined,
+            principal: { userId: principalId },
+            clientOrTrx: trx
+          });
         }
       }
 
@@ -1675,9 +1735,13 @@ export class PaymentGatewayService {
     const isRehearsal = isStagingSandboxRehearsalActive();
     if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
       if (isRehearsal) {
-        assertStagingSandboxRehearsalAllowed({
+        if (principalContext && principalContext.userId && principalContext.userId !== principalId) {
+          throw new Error('SECURITY_VIOLATION: Principal ID mismatch between route parameter and authenticated session context.');
+        }
+        await assertStagingSandboxRehearsalAllowedAsync({
           gateway: requestedGateway || 'razorpay',
-          principal: principalContext || { userId: principalId }
+          principal: principalContext || { userId: principalId },
+          clientOrTrx: this.getDb()
         });
       } else {
         throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');

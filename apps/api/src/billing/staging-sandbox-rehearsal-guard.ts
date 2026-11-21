@@ -1,5 +1,5 @@
 /**
- * AIRA AI 2026 — Staging Sandbox Rehearsal Guard (Remediated Revision 2.0)
+ * AIRA AI 2026 — Staging Sandbox Rehearsal Guard (Revision 3.0)
  *
  * Implements strict, multi-dimensional security isolation permitting genuine
  * Cashfree & Razorpay test-mode checkout and webhook reconciliation on the
@@ -7,7 +7,8 @@
  *
  * Fail-Closed Security Invariants:
  * 1. Explicit Feature Flag: AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED === 'true'
- * 2. Strict Non-Production Environment: Rehearsal is strictly forbidden when VERCEL_ENV === 'production' or NODE_ENV === 'production'.
+ * 2. Strict Non-Production Environment: Rehearsal is strictly forbidden in real production.
+ *    Distinguishes Vercel Preview runtime (where NODE_ENV is 'production' for performance) from real production.
  * 3. Commercial Billing Invariant: AIRA_COMMERCIAL_BILLING_ENABLED must remain false/falsy. Strict mutual exclusion.
  * 4. Verified Staging Runtime Identity: On Vercel deployments (VERCEL=1 or VERCEL_ENV set), requires:
  *    - VERCEL_ENV === 'preview'
@@ -15,28 +16,37 @@
  *    - VERCEL_GIT_COMMIT_REF === 'staging'
  *    All missing platform values FAIL CLOSED.
  * 5. Local Test Harness Separation: Rehearsal in non-deployed local environments is strictly restricted to
- *    explicit isolated test fixtures (isLocalTestFixture=true or AIRA_TEST_HARNESS_REHEARSAL=true).
+ *    explicit isolated test fixtures. Deployed executions CANNOT be tricked into test-harness mode.
  *    Setting AIRA_ENVIRONMENT=staging or NODE_ENV=test alone NEVER grants rehearsal authorization.
  * 6. Authoritative Database Identity: Target database must be verified Staging Neon:
  *    - Project: mute-frost-50372225
  *    - Branch: br-snowy-bonus-b32thjlz
  *    - Endpoint: ep-twilight-cherry-b3iz2oqv
+ *    - Database: neondb
  *    Production Neon (old-sky-50952395) and Commercial PR #92 (br-green-snow-b3dsci5u) trigger immediate fatal panics.
  *    Missing or unknown database identity FAILS CLOSED.
- * 7. Test-Mode Gateway Credentials:
+ * 7. Live Database Session Verification:
+ *    Where an active PostgreSQL connection pool or transaction is used, session GUCs (neon.project_id,
+ *    neon.branch_id, neon.endpoint_id) and current_database() are queried and validated on the connection
+ *    actually performing protected writes.
+ * 8. Test-Mode Gateway Credentials:
  *    - Razorpay Key must strictly match '^rzp_test_[a-zA-Z0-9]+$'. Live keys ('rzp_live_*') cause immediate security panic.
  *    - Cashfree App ID must strictly match '^TEST[a-zA-Z0-9]+$' and CASHFREE_ENV === 'TEST'.
  *    - Mock credential aliases (rzp_test_mock, cf_test_mock) are strictly forbidden in deployed rehearsal.
- * 8. Authoritative Synthetic Account Enrollment:
- *    Checkout and fulfillment are permitted exclusively for explicitly enrolled synthetic test accounts.
- *    Arbitrary test prefixes (usr_test_*), arbitrary synthetic-looking emails, and client-supplied flags are strictly rejected.
+ * 9. Authoritative Synthetic Account Enrollment:
+ *    Checkout and fulfillment are permitted exclusively for explicitly enrolled synthetic test accounts bound to
+ *    stable internal account/user IDs. Email addresses or string prefixes alone NEVER grant access. Client-supplied
+ *    flags ('isSynthetic') are strictly rejected. Revoked identities fail closed.
  */
 
 import {
   classifyDatabaseUrl,
   STAGING_NEON_PROJECT_ID,
   STAGING_NEON_ENDPOINT_ID,
-  PRODUCTION_NEON_PROJECT_ID
+  PRODUCTION_NEON_PROJECT_ID,
+  PRODUCTION_NEON_ENDPOINT_ID,
+  COMMERCIAL_PR92_BRANCH_ID,
+  COMMERCIAL_PR92_ENDPOINT_ID
 } from '../../../../packages/db/src/index.js';
 
 export const AUTHORIZED_VERCEL_PROJECT_ID = 'prj_FZLU4vBIYSsBn28AI6drkpD5WfbH';
@@ -48,32 +58,90 @@ export const AUTHORIZED_STAGING_CANONICAL_DOMAIN = 'staging.virexaaiventures.com
 
 /**
  * Pre-enrolled authorized synthetic test accounts for staging rehearsal.
- * Accounts not enrolled here or via AIRA_STAGING_REHEARSAL_ENROLLED_PRINCIPALS are rejected.
+ * Bound to stable internal user/account IDs. Email or string prefixes alone do NOT grant access.
  */
 export const DEFAULT_ENROLLED_SYNTHETIC_TEST_PRINCIPALS = new Set<string>([
   'usr_synth_plus_2026',
   'usr_synth_pro_2026',
-  'usr_synth_test_2026',
-  'synthetic_rehearsal_plus@aira.internal',
-  'synthetic_rehearsal_pro@aira.internal',
-  'sandbox_test_user@aira.internal'
+  'usr_synth_test_2026'
 ]);
 
-let testHarnessEnrolledPrincipals: Set<string> | null = null;
+let adminEnrolledPrincipals: Set<string> | null = null;
+const revokedPrincipals: Set<string> = new Set<string>();
+
+/**
+ * Detects whether the current process is executing in a production runtime environment.
+ * Properly separates Vercel Preview runtime (where NODE_ENV is 'production' for performance optimization)
+ * from real production.
+ */
+export function isProductionRuntime(): boolean {
+  if (process.env.AIRA_ENVIRONMENT === 'production') {
+    return true;
+  }
+
+  const isVercel = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+  if (isVercel) {
+    return process.env.VERCEL_ENV === 'production';
+  }
+
+  return process.env.NODE_ENV === 'production';
+}
+
+/**
+ * Authoritatively enrolls a synthetic test account bound to its stable internal user ID.
+ */
+export function enrollSyntheticTestPrincipal(principalId: string): void {
+  if (isProductionRuntime()) {
+    throw new Error('CRITICAL_SECURITY_VIOLATION: Cannot enroll synthetic test principals in production.');
+  }
+  if (!principalId || typeof principalId !== 'string' || !principalId.trim()) {
+    throw new Error('SECURITY_VIOLATION: Invalid principalId for synthetic enrollment.');
+  }
+  const normalized = principalId.toLowerCase().trim();
+  revokedPrincipals.delete(normalized);
+  if (!adminEnrolledPrincipals) adminEnrolledPrincipals = new Set();
+  adminEnrolledPrincipals.add(normalized);
+}
+
+/**
+ * Revokes a previously enrolled synthetic test account. Revoked identities fail closed.
+ */
+export function revokeSyntheticTestPrincipal(principalId: string): void {
+  if (!principalId || typeof principalId !== 'string') return;
+  const normalized = principalId.toLowerCase().trim();
+  revokedPrincipals.add(normalized);
+  if (adminEnrolledPrincipals) {
+    adminEnrolledPrincipals.delete(normalized);
+  }
+}
 
 /**
  * Programmatic enrollment helper for isolated test harnesses.
  */
 export function enrollSyntheticTestPrincipalForTesting(principalId: string): void {
-  if (!testHarnessEnrolledPrincipals) testHarnessEnrolledPrincipals = new Set();
-  testHarnessEnrolledPrincipals.add(principalId.toLowerCase().trim());
+  enrollSyntheticTestPrincipal(principalId);
 }
 
 /**
  * Reset programmatic test harness enrollments.
  */
+export function resetEnrolledSyntheticTestPrincipals(): void {
+  adminEnrolledPrincipals = null;
+  revokedPrincipals.clear();
+}
+
 export function resetEnrolledSyntheticTestPrincipalsForTesting(): void {
-  testHarnessEnrolledPrincipals = null;
+  resetEnrolledSyntheticTestPrincipals();
+}
+
+export interface DatabaseSessionIdentity {
+  databaseName?: string;
+  user?: string;
+  serverAddr?: string;
+  neonProjectId?: string;
+  neonBranchId?: string;
+  neonEndpointId?: string;
+  neonTimelineId?: string;
 }
 
 export interface StagingRehearsalContext {
@@ -86,6 +154,7 @@ export interface StagingRehearsalContext {
   gateway?: 'razorpay' | 'cashfree';
   databaseUrl?: string;
   isLocalTestFixture?: boolean;
+  clientOrTrx?: any;
 }
 
 export interface RehearsalValidationResult {
@@ -118,32 +187,25 @@ export function isStagingSandboxRehearsalActive(options?: { isLocalTestFixture?:
     return false;
   }
 
-  // 3. Hard production block: Production signals must be strictly absent
-  if (
-    process.env.VERCEL_ENV === 'production' ||
-    process.env.NODE_ENV === 'production' ||
-    process.env.AIRA_ENVIRONMENT === 'production'
-  ) {
+  // 3. Hard production block: Production runtime must be strictly absent
+  if (isProductionRuntime()) {
     return false;
   }
 
   // 4. Determine deployment environment vs local test fixture
   const isVercelRuntime = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
-  const isLocalFixture = options?.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true';
 
   if (isVercelRuntime) {
-    // In a deployed Vercel environment, ALL staging identity requirements are MANDATORY and fail-closed:
-    // a. Must be preview environment
+    // In deployed Vercel runtime, test-only switches are STRICTLY IGNORED!
+    // Cannot be bypassed by AIRA_TEST_HARNESS_REHEARSAL, options.isLocalTestFixture, or NODE_ENV=test.
     if (process.env.VERCEL_ENV !== 'preview') {
       return false;
     }
 
-    // b. Must match authorized Vercel project ID
     if (process.env.VERCEL_PROJECT_ID !== AUTHORIZED_VERCEL_PROJECT_ID) {
       return false;
     }
 
-    // c. Must strictly match authorized staging branch (no arbitrary feature branches in deployment)
     if (process.env.VERCEL_GIT_COMMIT_REF !== AUTHORIZED_STAGING_GIT_BRANCH) {
       return false;
     }
@@ -153,11 +215,8 @@ export function isStagingSandboxRehearsalActive(options?: { isLocalTestFixture?:
 
   // 5. In a non-Vercel local environment, rehearsal is ONLY active if explicitly running
   // in an authorized local test fixture. AIRA_ENVIRONMENT=staging or NODE_ENV=test alone is INSUFFICIENT.
-  if (isLocalFixture) {
-    return true;
-  }
-
-  return false;
+  const isLocalFixture = options?.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true';
+  return isLocalFixture;
 }
 
 /**
@@ -167,51 +226,50 @@ export function isStagingSandboxRehearsalActive(options?: { isLocalTestFixture?:
  * - Arbitrary 'usr_test_*' prefixes
  * - Arbitrary synthetic-looking emails
  * - Client-supplied 'isSynthetic: true'
+ * - Revoked accounts
  */
 export function isAuthorizedSyntheticTestPrincipal(
   principal?: {
     userId: string;
     email?: string;
     isSynthetic?: boolean;
+    roles?: string[];
   } | null,
   options?: { isLocalTestFixture?: boolean }
 ): boolean {
-  if (!principal || !principal.userId) return false;
+  if (isProductionRuntime()) {
+    return false; // Permanently denied in production
+  }
+
+  if (!principal || !principal.userId || typeof principal.userId !== 'string') {
+    return false;
+  }
 
   const uid = principal.userId.toLowerCase().trim();
-  const email = (principal.email || '').toLowerCase().trim();
+  if (!uid) return false;
 
-  // Specifically reject weak/arbitrary identifiers if not explicitly enrolled
-  if (
-    uid === 'admin' ||
-    uid === 'account_1' ||
-    uid === 'account_2' ||
-    uid.startsWith('usr_test_') ||
-    uid.startsWith('test_') ||
-    uid.startsWith('synthetic_') ||
-    uid.startsWith('sandbox_') ||
-    email.endsWith('@example.com')
-  ) {
-    // Weak identifier detected: must still pass explicit enrollment verification below.
+  // Revocation check: fail closed
+  if (revokedPrincipals.has(uid)) {
+    return false;
   }
 
   // 1. Check default authoritative enrolled principals
-  if (DEFAULT_ENROLLED_SYNTHETIC_TEST_PRINCIPALS.has(uid) || (email && DEFAULT_ENROLLED_SYNTHETIC_TEST_PRINCIPALS.has(email))) {
+  if (DEFAULT_ENROLLED_SYNTHETIC_TEST_PRINCIPALS.has(uid)) {
     return true;
   }
 
-  // 2. Check explicit environment-configured allowlist (comma-separated exact IDs or emails)
+  // 2. Check admin-enrolled set
+  if (adminEnrolledPrincipals && adminEnrolledPrincipals.has(uid)) {
+    return true;
+  }
+
+  // 3. Check explicit environment-configured allowlist (comma-separated exact internal user IDs only)
   const envEnrolled = (process.env.AIRA_STAGING_REHEARSAL_ENROLLED_PRINCIPALS || '')
     .split(',')
     .map(s => s.trim().toLowerCase())
     .filter(Boolean);
 
-  if (envEnrolled.includes(uid) || (email && envEnrolled.includes(email))) {
-    return true;
-  }
-
-  // 3. Check programmatic test harness enrollment (isolated unit tests only)
-  if (testHarnessEnrolledPrincipals && (testHarnessEnrolledPrincipals.has(uid) || (email && testHarnessEnrolledPrincipals.has(email)))) {
+  if (envEnrolled.includes(uid)) {
     return true;
   }
 
@@ -227,8 +285,9 @@ export function validateTestGatewayCredentials(
   gateway: 'razorpay' | 'cashfree',
   options?: { isLocalTestFixture?: boolean }
 ): void {
-  const isDeployedVercel = process.env.VERCEL === '1' || process.env.VERCEL_ENV === 'preview';
-  const isLocalFixture = (options?.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true' || process.env.NODE_ENV === 'test') && !isDeployedVercel;
+  const isVercelRuntime = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+  // In deployed Vercel mode, local test fixture mode is STRICTLY DISABLED
+  const isLocalFixture = !isVercelRuntime && (options?.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true');
 
   if (gateway === 'razorpay') {
     const keyId = (process.env.RAZORPAY_KEY_ID || process.env.AIRA_TEST_GATEWAY_KEY_ID || '').trim();
@@ -302,7 +361,7 @@ export function validateTestGatewayCredentials(
 }
 
 /**
- * Validates target database identity to guarantee zero cross-contamination with production.
+ * Validates target database URL to guarantee zero cross-contamination with production.
  * Fails closed on missing or unknown database targets.
  */
 export function validateStagingDatabaseIdentity(options?: {
@@ -333,8 +392,8 @@ export function validateStagingDatabaseIdentity(options?: {
     throw new Error('CRITICAL_SECURITY_VIOLATION: Connected database is Commercial PR #92 branch (br-green-snow-b3dsci5u)! Staging rehearsal strictly aborted.');
   }
 
-  const isVercelRuntime = process.env.VERCEL === '1' || process.env.VERCEL_ENV === 'preview';
-  const isLocalFixture = options?.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true';
+  const isVercelRuntime = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+  const isLocalFixture = !isVercelRuntime && (options?.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true');
 
   // If local / CI test container
   if (classification.isLocalOrCiTest) {
@@ -372,6 +431,99 @@ export function validateStagingDatabaseIdentity(options?: {
 }
 
 /**
+ * P0: Authenticated live database session identity verification.
+ * Executes directly against the active connection / transaction performing protected mutations.
+ * Fails closed if query fails, fields are unavailable, or session values mismatch approved staging Neon identity.
+ */
+export async function verifyLiveSessionDatabaseIdentity(
+  clientOrTrx: any,
+  options?: { isLocalTestFixture?: boolean }
+): Promise<DatabaseSessionIdentity> {
+  const isVercelRuntime = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+  const isLocalFixture = !isVercelRuntime && (options?.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true');
+
+  if (!clientOrTrx || typeof clientOrTrx.raw !== 'function') {
+    throw new Error('SECURITY_VIOLATION: Database connection or transaction required for live session verification does not support SQL execution.');
+  }
+
+  let row: any;
+  try {
+    const res = await clientOrTrx.raw(`
+      SELECT 
+        current_database() as db_name, 
+        current_user as db_user, 
+        inet_server_addr() as server_ip,
+        current_setting('neon.project_id', true) as neon_project_id,
+        current_setting('neon.branch_id', true) as neon_branch_id,
+        current_setting('neon.endpoint_id', true) as neon_endpoint_id,
+        current_setting('neon.timeline_id', true) as neon_timeline_id
+    `);
+    row = res?.rows?.[0] || res?.[0] || {};
+  } catch (err: any) {
+    throw new Error(`SECURITY_VIOLATION: Failed to query database session identity: ${err?.message || 'Query execution error'}`);
+  }
+
+  const identity: DatabaseSessionIdentity = {
+    databaseName: row.db_name || undefined,
+    user: row.db_user || undefined,
+    serverAddr: row.server_ip ? String(row.server_ip) : undefined,
+    neonProjectId: row.neon_project_id || undefined,
+    neonBranchId: row.neon_branch_id || undefined,
+    neonEndpointId: row.neon_endpoint_id || undefined,
+    neonTimelineId: row.neon_timeline_id || undefined
+  };
+
+  // Immediate detection of Production Neon session
+  if (
+    identity.neonProjectId === PRODUCTION_NEON_PROJECT_ID ||
+    identity.neonEndpointId === PRODUCTION_NEON_ENDPOINT_ID
+  ) {
+    throw new Error(`CRITICAL_SECURITY_VIOLATION: Connected database session is PRODUCTION Neon project (${PRODUCTION_NEON_PROJECT_ID})! Staging rehearsal strictly aborted.`);
+  }
+
+  // Immediate detection of Commercial PR #92 session
+  if (
+    identity.neonBranchId === COMMERCIAL_PR92_BRANCH_ID ||
+    identity.neonEndpointId === COMMERCIAL_PR92_ENDPOINT_ID
+  ) {
+    throw new Error(`CRITICAL_SECURITY_VIOLATION: Connected database session is Commercial PR #92 branch (${COMMERCIAL_PR92_BRANCH_ID})! Staging rehearsal strictly aborted.`);
+  }
+
+  if (isVercelRuntime) {
+    // In deployed Vercel preview rehearsal, live Neon identity fields are MANDATORY and fail-closed
+    if (!identity.neonProjectId || !identity.neonBranchId || !identity.neonEndpointId) {
+      throw new Error('SECURITY_VIOLATION: Connected database session lacks required Neon control-plane identity. Deployed rehearsal requires verified Staging Neon session.');
+    }
+
+    if (identity.neonProjectId !== AUTHORIZED_STAGING_NEON_PROJECT_ID) {
+      throw new Error(`SECURITY_VIOLATION: Live database session Neon project (${identity.neonProjectId}) does not match authorized Staging Neon project (${AUTHORIZED_STAGING_NEON_PROJECT_ID}).`);
+    }
+
+    if (identity.neonBranchId !== AUTHORIZED_STAGING_NEON_BRANCH) {
+      throw new Error(`SECURITY_VIOLATION: Live database session Neon branch (${identity.neonBranchId}) does not match authorized Staging Neon branch (${AUTHORIZED_STAGING_NEON_BRANCH}).`);
+    }
+
+    if (identity.neonEndpointId !== AUTHORIZED_STAGING_NEON_ENDPOINT) {
+      throw new Error(`SECURITY_VIOLATION: Live database session Neon endpoint (${identity.neonEndpointId}) does not match authorized Staging Neon endpoint (${AUTHORIZED_STAGING_NEON_ENDPOINT}).`);
+    }
+
+    if (identity.databaseName && identity.databaseName !== 'neondb') {
+      throw new Error(`SECURITY_VIOLATION: Live database session database name '${identity.databaseName}' does not match expected 'neondb'.`);
+    }
+  } else {
+    // In local non-Vercel environment
+    if (!isLocalFixture) {
+      throw new Error('SECURITY_VIOLATION: Live database verification outside Vercel requires explicit local test fixture authorization.');
+    }
+    if (identity.neonProjectId && identity.neonProjectId !== AUTHORIZED_STAGING_NEON_PROJECT_ID) {
+      throw new Error(`SECURITY_VIOLATION: Local test database session connected to foreign Neon project (${identity.neonProjectId}).`);
+    }
+  }
+
+  return identity;
+}
+
+/**
  * Asserts all staging sandbox rehearsal security invariants simultaneously.
  * Throws a fatal security exception if ANY invariant fails.
  */
@@ -379,7 +531,8 @@ export function assertStagingSandboxRehearsalAllowed(
   context: StagingRehearsalContext,
   options?: { isLocalTestFixture?: boolean }
 ): void {
-  const isLocalFixture = options?.isLocalTestFixture === true || context.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true';
+  const isVercelRuntime = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+  const isLocalFixture = !isVercelRuntime && (options?.isLocalTestFixture === true || context.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true');
 
   // 1. Explicit feature flag
   if (process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED !== 'true') {
@@ -387,11 +540,7 @@ export function assertStagingSandboxRehearsalAllowed(
   }
 
   // 2. Production environment fence
-  if (
-    process.env.VERCEL_ENV === 'production' ||
-    process.env.NODE_ENV === 'production' ||
-    process.env.AIRA_ENVIRONMENT === 'production'
-  ) {
+  if (isProductionRuntime()) {
     throw new Error('CRITICAL_SECURITY_VIOLATION: Staging sandbox rehearsal is strictly prohibited in production.');
   }
 
@@ -401,8 +550,6 @@ export function assertStagingSandboxRehearsalAllowed(
   }
 
   // 4. Staging environment verification
-  const isVercelRuntime = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
-
   if (isVercelRuntime) {
     if (process.env.VERCEL_ENV !== 'preview') {
       throw new Error('SECURITY_VIOLATION: Staging sandbox rehearsal requires VERCEL_ENV=preview on Vercel deployments.');
@@ -435,5 +582,22 @@ export function assertStagingSandboxRehearsalAllowed(
     if (!isAuthorizedSyntheticTestPrincipal(context.principal, { isLocalTestFixture: isLocalFixture })) {
       throw new Error(`REHEARSAL_UNAUTHORIZED: Staging sandbox checkout is restricted exclusively to authorized enrolled synthetic test accounts. Caller '${context.principal?.userId || 'unknown'}' is not an authorized test principal.`);
     }
+  }
+}
+
+/**
+ * Asynchronous version that additionally performs live database session identity verification.
+ */
+export async function assertStagingSandboxRehearsalAllowedAsync(
+  context: StagingRehearsalContext,
+  options?: { isLocalTestFixture?: boolean }
+): Promise<void> {
+  assertStagingSandboxRehearsalAllowed(context, options);
+
+  const isVercelRuntime = process.env.VERCEL === '1' || Boolean(process.env.VERCEL_ENV);
+  const isLocalFixture = !isVercelRuntime && (options?.isLocalTestFixture === true || context.isLocalTestFixture === true || process.env.AIRA_TEST_HARNESS_REHEARSAL === 'true');
+
+  if (context.clientOrTrx) {
+    await verifyLiveSessionDatabaseIdentity(context.clientOrTrx, { isLocalTestFixture: isLocalFixture });
   }
 }
