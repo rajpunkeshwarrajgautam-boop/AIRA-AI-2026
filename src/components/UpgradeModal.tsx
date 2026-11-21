@@ -428,7 +428,7 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
             {/* Isolated Sandbox Notice */}
             <div className="p-2.5 rounded-xl bg-claude-surface2-light dark:bg-white/5 border border-claude-border-light/60 dark:border-white/5 text-[10px] text-claude-muted-light dark:text-stone-400 flex items-center gap-2">
               <Shield className="w-3.5 h-3.5 text-claude-accentInk shrink-0" />
-              <span>Paid checkout is currently in preview mode. Commercial activation is isolated.</span>
+              <span>Plan features are fully operational for entitled accounts. Online checkout is currently offline pending commercial gateway activation.</span>
             </div>
           </div>
 

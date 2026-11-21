@@ -7,6 +7,7 @@ import {
   CurrencyCode
 } from '../../../../packages/contracts/src/commercial.js';
 import { commercialBillingService } from './commercial-billing-service.js';
+import { taxDeterminationService, TaxDeterminationResult } from './tax-determination.js';
 
 export interface WebhookVerificationResult {
   valid: boolean;
@@ -48,9 +49,36 @@ export interface InvoiceRecord {
   totalAmount: number;
   taxableBase: number;
   gstAmount: number;
+  cgstAmount?: number;
+  sgstAmount?: number;
+  igstAmount?: number;
   sacCode: string;
   supplierName: string;
+  supplierGstin?: string;
+  taxComplianceStatus?:
+    | 'COMPLIANT'
+    | 'COMPLIANT_ZERO_RATED_EXPORT'
+    | 'PROVISIONAL_PENDING_GSTIN'
+    | 'PROVISIONAL_PENDING_PLACE_OF_SUPPLY'
+    | 'PROVISIONAL_PENDING_GSTIN_VERIFICATION'
+    | 'PROVISIONAL_PENDING_GSTIN_AND_POS'
+    | 'PROVISIONAL_PENDING_RECONCILIATION';
+  placeOfSupply?: string;
   status: string;
+  pdfDownloadAvailable?: boolean;
+  creditNoteNumber?: string;
+  refundAmount?: number;
+  refundAmountMinorUnits?: number;
+}
+
+export interface NormalizedRefundInfo {
+  refundId: string;
+  paymentId?: string;
+  orderId?: string;
+  currency: string;
+  refundAmountMinor: number;
+  refundAmountMajor: number;
+  gateway: string;
 }
 
 export interface PaymentDbQueryBuilder {
@@ -58,6 +86,8 @@ export interface PaymentDbQueryBuilder {
   update: (patch: Record<string, unknown>) => Promise<unknown>;
   delete?: () => Promise<unknown>;
   orderBy?: (column: string, direction?: string) => Promise<SubscriptionRow[]>;
+  select?: (columns?: unknown) => Promise<SubscriptionRow[]>;
+  whereIn?: (column: string, values: readonly unknown[]) => PaymentDbQueryBuilder;
 }
 
 export type PaymentDbClient = {
@@ -111,7 +141,61 @@ export type GatewayOrderTransport = (params: {
   principalId: string;
   customerId: string;
   planTier: PlanTier;
-}) => Promise<{ gatewayOrderId: string; shortUrl?: string }>;
+  planId?: string;
+  action?: 'create_subscription' | 'create_order' | 'cancel_subscription';
+  gatewaySubscriptionId?: string;
+}) => Promise<{ gatewayOrderId: string; shortUrl?: string; cancelled?: boolean }>;
+
+export const CANDIDATE_RAZORPAY_PLANS: Record<PlanTier, Record<CurrencyCode, string>> = {
+  guest: { INR: '', USD: '' },
+  free: { INR: '', USD: '' },
+  plus: {
+    INR: process.env.RAZORPAY_PLAN_ID_PLUS_INR || 'plan_plus_inr_monthly',
+    USD: process.env.RAZORPAY_PLAN_ID_PLUS_USD || 'plan_plus_usd_monthly'
+  },
+  pro: {
+    INR: process.env.RAZORPAY_PLAN_ID_PRO_INR || 'plan_pro_inr_monthly',
+    USD: process.env.RAZORPAY_PLAN_ID_PRO_USD || 'plan_pro_usd_monthly'
+  }
+};
+
+export const CANDIDATE_CASHFREE_PLANS: Record<PlanTier, Record<CurrencyCode, string>> = {
+  guest: { INR: '', USD: '' },
+  free: { INR: '', USD: '' },
+  plus: {
+    INR: process.env.CASHFREE_PLAN_ID_PLUS_INR || 'plan_cf_plus_inr_monthly',
+    USD: process.env.CASHFREE_PLAN_ID_PLUS_USD || 'plan_cf_plus_usd_monthly'
+  },
+  pro: {
+    INR: process.env.CASHFREE_PLAN_ID_PRO_INR || 'plan_cf_pro_inr_monthly',
+    USD: process.env.CASHFREE_PLAN_ID_PRO_USD || 'plan_cf_pro_usd_monthly'
+  }
+};
+
+export function resolvePaymentGateway(requestedGateway?: string): 'razorpay' | 'cashfree' {
+  const allowedGatewaysRaw = process.env.AIRA_ALLOWED_PAYMENT_GATEWAYS || 'razorpay,cashfree';
+  const allowedGateways = allowedGatewaysRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  const defaultGateway = (
+    process.env.AIRA_PAYMENT_GATEWAY_DEFAULT ||
+    (process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_WEBHOOK_SECRET ? 'razorpay' : 'cashfree')
+  ).toLowerCase() as 'razorpay' | 'cashfree';
+
+  if (requestedGateway) {
+    const reqLower = requestedGateway.toLowerCase();
+    if (!allowedGateways.includes(reqLower)) {
+      throw new Error(`BILLING_UNAVAILABLE: Requested payment gateway '${requestedGateway}' is not permitted by policy.`);
+    }
+    if (reqLower === 'razorpay' || reqLower === 'cashfree') {
+      return reqLower;
+    }
+  }
+
+  if (allowedGateways.includes(defaultGateway)) {
+    return defaultGateway;
+  }
+
+  return (allowedGateways[0] as 'razorpay' | 'cashfree') || 'razorpay';
+}
 
 /**
  * AIRA AI 2026 — Candidate Pricing Matrix.
@@ -135,7 +219,7 @@ export const CANDIDATE_PRICE_CATALOG: Record<PlanTier, Record<CurrencyCode, { id
     USD: { id: 'price_plus_usd', amountMinorUnits: 799, currency: 'USD' }
   },
   pro: {
-    INR: { id: 'price_pro_inr', amountMinorUnits: 149900, currency: 'INR' },
+    INR: { id: 'price_pro_inr', amountMinorUnits: 99900, currency: 'INR' },
     USD: { id: 'price_pro_usd', amountMinorUnits: 1999, currency: 'USD' }
   }
 };
@@ -236,10 +320,76 @@ export class PaymentGatewayService {
   private cashfreeSecret: string;
   private customDbClient: Knex | PaymentDbClient | null = null;
   private customGatewayTransport: GatewayOrderTransport | null = null;
+  private memoryInvoiceCounter: number = 0;
+  private memoryCreditNoteCounter: number = 0;
 
   constructor() {
     this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
     this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || '';
+  }
+
+  /**
+   * Allocates sequential, collision-free invoice number.
+   * Utilizes native PostgreSQL sequence `billing_invoice_number_seq` (created via Migration 033).
+   * Outside isolated tests, fails closed if native PostgreSQL sequence is unavailable.
+   */
+  async allocateInvoiceNumber(trx?: any, year: number = 2026): Promise<string> {
+    const isPg = trx && typeof trx.raw === 'function' && (trx.client?.config?.client === 'pg' || typeof trx.client === 'object');
+    if (isPg) {
+      try {
+        const res = await trx.raw("SELECT nextval('billing_invoice_number_seq') AS seq");
+        const rawSeq = res?.rows?.[0]?.seq ?? res?.[0]?.seq;
+        if (rawSeq !== undefined && rawSeq !== null) {
+          const seq = Number(rawSeq);
+          return `INV-${year}-${String(seq).padStart(4, '0')}`;
+        }
+      } catch (err: any) {
+        const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
+        if (!isTestEnv) {
+          throw new Error(`INVOICE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_invoice_number_seq sequence failed: ${err?.message || err}`);
+        }
+      }
+    }
+
+    const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
+    if (!isTestEnv) {
+      throw new Error('INVOICE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_invoice_number_seq sequence required outside isolated tests');
+    }
+
+    this.memoryInvoiceCounter++;
+    return `INV-${year}-${String(this.memoryInvoiceCounter).padStart(4, '0')}`;
+  }
+
+  /**
+   * Allocates sequential, collision-free credit note number.
+   * Utilizes native PostgreSQL sequence `billing_credit_note_number_seq` (created via Migration 033).
+   * Outside isolated tests, fails closed if native PostgreSQL sequence is unavailable.
+   */
+  async allocateCreditNoteNumber(trx?: any, year: number = 2026): Promise<string> {
+    const isPg = trx && typeof trx.raw === 'function' && (trx.client?.config?.client === 'pg' || typeof trx.client === 'object');
+    if (isPg) {
+      try {
+        const res = await trx.raw("SELECT nextval('billing_credit_note_number_seq') AS seq");
+        const rawSeq = res?.rows?.[0]?.seq ?? res?.[0]?.seq;
+        if (rawSeq !== undefined && rawSeq !== null) {
+          const seq = Number(rawSeq);
+          return `CN-${year}-${String(seq).padStart(4, '0')}`;
+        }
+      } catch (err: any) {
+        const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
+        if (!isTestEnv) {
+          throw new Error(`CREDIT_NOTE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_credit_note_number_seq sequence failed: ${err?.message || err}`);
+        }
+      }
+    }
+
+    const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
+    if (!isTestEnv) {
+      throw new Error('CREDIT_NOTE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_credit_note_number_seq sequence required outside isolated tests');
+    }
+
+    this.memoryCreditNoteCounter++;
+    return `CN-${year}-${String(this.memoryCreditNoteCounter).padStart(4, '0')}`;
   }
 
   setDbClient(client: Knex | PaymentDbClient | null): void {
@@ -260,6 +410,95 @@ export class PaymentGatewayService {
 
   private getDb(): Knex | PaymentDbClient {
     return this.customDbClient || db;
+  }
+
+  /**
+   * Normalizes gateway refund webhook payloads into explicit integer minor units (paise/cents)
+   * and decimal major units, avoiding floating-point inaccuracies.
+   */
+  public parseNormalizedRefundPayload(gateway: string, rawPayload: any): NormalizedRefundInfo {
+    if (!rawPayload || typeof rawPayload !== 'object') {
+      throw new Error('INVALID_REFUND_PAYLOAD: Raw refund payload must be an object');
+    }
+
+    const normGateway = (gateway || '').toLowerCase();
+    let refundId = '';
+    let paymentId: string | undefined;
+    let orderId: string | undefined;
+    let currency = 'INR';
+    let refundAmountMinor = 0;
+
+    if (normGateway === 'razorpay') {
+      const paymentEntity = rawPayload.payload?.payment?.entity || rawPayload.payment || rawPayload.data?.payment || {};
+      const refundEntity = rawPayload.payload?.refund?.entity || rawPayload.refund || rawPayload.data?.refund || {};
+
+      refundId = String(refundEntity.id || rawPayload.id || '');
+      paymentId = refundEntity.payment_id || paymentEntity.id || rawPayload.payment_id;
+      orderId = refundEntity.order_id || paymentEntity.order_id || rawPayload.order_id;
+      currency = (refundEntity.currency || paymentEntity.currency || rawPayload.currency || 'INR').toUpperCase();
+
+      const rawAmount = refundEntity.amount ?? rawPayload.amount;
+      if (rawAmount === undefined || rawAmount === null || rawAmount === '') {
+        throw new Error('INVALID_REFUND_AMOUNT: Razorpay payload missing amount');
+      }
+      const numAmount = Number(rawAmount);
+      if (!Number.isFinite(numAmount) || numAmount <= 0) {
+        throw new Error(`INVALID_REFUND_AMOUNT: Razorpay refund amount must be positive, received: ${rawAmount}`);
+      }
+      // Razorpay provides amount in integer minor units (paise)
+      refundAmountMinor = Math.round(numAmount);
+    } else if (normGateway === 'cashfree') {
+      const refundObj = rawPayload.data?.refund || rawPayload.refund || {};
+      const paymentObj = rawPayload.data?.payment || rawPayload.payment || {};
+      const orderObj = rawPayload.data?.order || rawPayload.order || {};
+
+      refundId = String(refundObj.cf_refund_id || refundObj.refund_id || rawPayload.cf_refund_id || rawPayload.refund_id || '');
+      paymentId = refundObj.cf_payment_id || paymentObj.cf_payment_id || paymentObj.payment_id || rawPayload.cf_payment_id;
+      orderId = refundObj.order_id || orderObj.order_id || paymentObj.order_id || rawPayload.order_id;
+      currency = (refundObj.refund_currency || refundObj.currency || paymentObj.payment_currency || paymentObj.currency || rawPayload.currency || 'INR').toUpperCase();
+
+      const rawAmount = refundObj.refund_amount ?? refundObj.amount ?? rawPayload.refund_amount ?? rawPayload.amount;
+      if (rawAmount === undefined || rawAmount === null || rawAmount === '') {
+        throw new Error('INVALID_REFUND_AMOUNT: Cashfree payload missing refund_amount');
+      }
+      const numAmount = typeof rawAmount === 'string' ? parseFloat(rawAmount) : Number(rawAmount);
+      if (!Number.isFinite(numAmount) || numAmount <= 0) {
+        throw new Error(`INVALID_REFUND_AMOUNT: Cashfree refund amount must be positive, received: ${rawAmount}`);
+      }
+      // Cashfree provides refund_amount in major decimal units (e.g. 399.00 or 100.00)
+      refundAmountMinor = Math.round(numAmount * 100);
+    } else {
+      // Generic fallback
+      const refundObj = rawPayload.payload?.refund?.entity || rawPayload.refund || rawPayload.data?.refund || rawPayload;
+      const paymentObj = rawPayload.payload?.payment?.entity || rawPayload.payment || rawPayload.data?.payment || {};
+      refundId = String(refundObj.id || refundObj.refund_id || refundObj.cf_refund_id || '');
+      paymentId = refundObj.payment_id || paymentObj.id || refundObj.cf_payment_id;
+      orderId = refundObj.order_id || paymentObj.order_id;
+      currency = (refundObj.currency || paymentObj.currency || 'INR').toUpperCase();
+
+      const rawAmount = refundObj.amount ?? refundObj.refund_amount;
+      const numAmount = Number(rawAmount);
+      if (!Number.isFinite(numAmount) || numAmount <= 0) {
+        throw new Error(`INVALID_REFUND_AMOUNT: Refund amount must be positive, received: ${rawAmount}`);
+      }
+      refundAmountMinor = Math.round(numAmount);
+    }
+
+    if (!refundId) {
+      refundId = `ref_${Date.now()}`;
+    }
+
+    const refundAmountMajor = Number((refundAmountMinor / 100).toFixed(2));
+
+    return {
+      refundId,
+      paymentId,
+      orderId,
+      currency,
+      refundAmountMinor,
+      refundAmountMajor,
+      gateway: normGateway
+    };
   }
 
   /**
@@ -331,7 +570,8 @@ export class PaymentGatewayService {
     }
 
     const payload = JSON.parse(rawBody);
-    const eventId = payload.event_id || payload.id || `evt_${crypto.randomUUID().replace(/-/g, '')}`;
+    const deterministicFallback = `evt_rzp_${crypto.createHash('sha256').update(rawBody).digest('hex').slice(0, 32)}`;
+    const eventId = payload.event_id || payload.id || deterministicFallback;
     const eventType = payload.event;
 
     return await this.executeWebhookTransaction('razorpay', eventId, eventType, rawBody, payload);
@@ -347,7 +587,9 @@ export class PaymentGatewayService {
     }
 
     const payload = JSON.parse(rawBody);
-    const eventId = payload.event_id || payload.data?.order?.order_id || payload.data?.payment?.cf_payment_id || payload.id || `evt_cf_${crypto.randomUUID().replace(/-/g, '')}`;
+    const cfEventId = payload.event_id || payload.data?.order?.order_id || payload.data?.payment?.cf_payment_id || payload.id;
+    const deterministicFallback = `evt_cf_${crypto.createHash('sha256').update(`${timestamp}_${rawBody}`).digest('hex').slice(0, 32)}`;
+    const eventId = cfEventId || deterministicFallback;
     const eventType = payload.type || payload.event || 'cashfree.webhook';
 
     return await this.executeWebhookTransaction('cashfree', eventId, eventType, rawBody, payload);
@@ -843,6 +1085,60 @@ export class PaymentGatewayService {
           created_at: now
         });
 
+        try {
+          await this.issueDurableInvoice({
+            trx,
+            customerId,
+            principalId,
+            purchaseRecord: {
+              ...purchaseRecord,
+              amount_minor_units: expectedAmount
+            },
+            planTier,
+            gateway,
+            actualPaymentId,
+            gatewayOrderId,
+            cycleNumber: newFulfilledCycle,
+            now
+          });
+        } catch (invErr: any) {
+          const correlationId = `rec_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+          const sanitizedError = (invErr?.message || 'INVOICE_GENERATION_FAILED').replace(/[\r\n\t]/g, ' ').slice(0, 255);
+          try {
+            await trx('billing_audit_events').insert({
+              id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+              customer_id: customerId,
+              event_type: 'TAX_INVOICE_PENDING_RECONCILIATION',
+              actor_type: 'system',
+              actor_id: purchaseRecord.id,
+              payload: JSON.stringify({
+                errorCode: 'INVOICE_GENERATION_FAILED',
+                errorMessage: sanitizedError,
+                correlationId,
+                purchaseId: purchaseRecord.id,
+                cycleNumber: newFulfilledCycle,
+                paymentId: actualPaymentId,
+                gateway,
+                amount: expectedAmount,
+                planTier
+              }),
+              created_at: now
+            });
+          } catch {}
+          try {
+            const existingMeta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
+            await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+              metadata: JSON.stringify({
+                ...existingMeta,
+                invoice_status: 'PENDING_RECONCILIATION',
+                invoice_error: sanitizedError,
+                invoice_correlation_id: correlationId
+              }),
+              updated_at: now
+            });
+          } catch {}
+        }
+
         return;
       }
 
@@ -923,6 +1219,58 @@ export class PaymentGatewayService {
         }),
         created_at: now
       });
+
+      try {
+        await this.issueDurableInvoice({
+          trx,
+          customerId,
+          principalId,
+          purchaseRecord,
+          planTier,
+          gateway,
+          actualPaymentId,
+          gatewayOrderId,
+          cycleNumber: meta.fulfilledCycle,
+          now
+        });
+      } catch (invErr: any) {
+        const correlationId = `rec_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+        const sanitizedError = (invErr?.message || 'INVOICE_GENERATION_FAILED').replace(/[\r\n\t]/g, ' ').slice(0, 255);
+        try {
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: customerId,
+            event_type: 'TAX_INVOICE_PENDING_RECONCILIATION',
+            actor_type: 'system',
+            actor_id: purchaseRecord.id,
+            payload: JSON.stringify({
+              errorCode: 'INVOICE_GENERATION_FAILED',
+              errorMessage: sanitizedError,
+              correlationId,
+              purchaseId: purchaseRecord.id,
+              cycleNumber: meta.fulfilledCycle,
+              paymentId: actualPaymentId,
+              gateway,
+              amount: purchaseRecord.amount_minor_units,
+              planTier
+            }),
+            created_at: now
+          });
+        } catch {}
+        try {
+          const existingMeta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
+          await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+            metadata: JSON.stringify({
+              ...existingMeta,
+              invoice_status: 'PENDING_RECONCILIATION',
+              invoice_error: sanitizedError,
+              invoice_correlation_id: correlationId
+            }),
+            updated_at: now
+          });
+        } catch {}
+      }
+
       return;
     }
 
@@ -936,11 +1284,116 @@ export class PaymentGatewayService {
       const subEntity = payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
       const gatewaySubId = subEntity.id || payload.data?.subscription?.subscription_id;
       if (gatewaySubId) {
-        await trx('subscriptions').where({ gateway_subscription_id: gatewaySubId }).update({
-          status: 'cancelled',
-          cancelled_at: now,
-          cancel_at_period_end: false,
-          updated_at: now
+        const existingSub = await trx('subscriptions').where({ gateway_subscription_id: gatewaySubId }).first();
+        if (existingSub) {
+          let meta: any = {};
+          try {
+            meta = typeof existingSub.metadata === 'string' ? JSON.parse(existingSub.metadata) : (existingSub.metadata || {});
+          } catch {}
+          meta.cancellation_status = 'CANCELLATION_CONFIRMED';
+          meta.cancelled_at = now;
+
+          await trx('subscriptions').where({ id: existingSub.id }).update({
+            status: 'cancelled',
+            cancelled_at: now,
+            cancel_at_period_end: false,
+            metadata: JSON.stringify(meta),
+            updated_at: now
+          });
+
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: existingSub.customer_id,
+            event_type: 'SUBSCRIPTION_CANCELLED',
+            actor_type: 'gateway_webhook',
+            actor_id: gatewaySubId,
+            payload: JSON.stringify({
+              subscriptionId: existingSub.id,
+              cancellation_status: 'CANCELLATION_CONFIRMED',
+              cancelled_at: now
+            }),
+            created_at: now
+          });
+        }
+      }
+      return;
+    }
+
+    if (eventType === 'refund.created') {
+      // Refund initiated at gateway: record audit trail only, do NOT modify subscription status or revoke entitlements yet
+      const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
+      const refundEntity = payload.payload?.refund?.entity || payload.refund || payload.data?.refund || {};
+      const gatewayPaymentId = paymentEntity.id || refundEntity.payment_id || payload.data?.payment?.cf_payment_id;
+      const gatewayOrderId = paymentEntity.order_id || refundEntity.order_id || payload.data?.order?.order_id;
+
+      let subRecord: any = null;
+      if (gatewayOrderId) {
+        subRecord = await trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId }).first();
+      }
+      if (!subRecord && gatewayPaymentId) {
+        let candidateQuery = trx('subscriptions').whereIn('status', ['active', 'pending', 'cancelled']);
+        if (typeof candidateQuery.select === 'function') {
+          const candidateSubs = await candidateQuery.select('*');
+          subRecord = (candidateSubs || []).find((s: any) => {
+            try {
+              const m = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {});
+              return m.lastPaymentId === gatewayPaymentId || m.initialPaymentId === gatewayPaymentId;
+            } catch { return false; }
+          });
+        }
+      }
+
+      await trx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: subRecord?.customer_id || 'cust_unknown',
+        event_type: 'REFUND_INITIATED',
+        actor_type: 'gateway_webhook',
+        actor_id: refundEntity.id || refundEntity.cf_refund_id || eventType,
+        payload: JSON.stringify({
+          subscriptionId: subRecord?.id,
+          gatewayPaymentId,
+          refundAmount: refundEntity.amount || payload.data?.refund?.refund_amount,
+          status: 'INITIATED'
+        }),
+        created_at: now
+      });
+      return;
+    }
+
+    if (
+      eventType === 'refund.processed' ||
+      eventType === 'refund.speed_processed' ||
+      eventType === 'REFUND_SUCCESS'
+    ) {
+      const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
+      const refundEntity = payload.payload?.refund?.entity || payload.refund || payload.data?.refund || {};
+      const gatewayPaymentId = paymentEntity.id || refundEntity.payment_id || payload.data?.payment?.cf_payment_id;
+      const gatewayOrderId = paymentEntity.order_id || refundEntity.order_id || payload.data?.order?.order_id;
+
+      let subRecord: any = null;
+      if (gatewayOrderId) {
+        subRecord = await trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId }).first();
+      }
+      if (!subRecord && gatewayPaymentId) {
+        let candidateQuery = trx('subscriptions').whereIn('status', ['active', 'pending', 'cancelled']);
+        if (typeof candidateQuery.select === 'function') {
+          const candidateSubs = await candidateQuery.select('*');
+          subRecord = (candidateSubs || []).find((s: any) => {
+            try {
+              const m = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {});
+              return m.lastPaymentId === gatewayPaymentId || m.initialPaymentId === gatewayPaymentId;
+            } catch { return false; }
+          });
+        }
+      }
+
+      if (subRecord) {
+        await this.handleSubscriptionRefund({
+          gateway: gateway as any,
+          subRecord,
+          refundPayload: payload,
+          now,
+          trx
         });
       }
       return;
@@ -1095,7 +1548,8 @@ export class PaymentGatewayService {
   async createSubscriptionCheckout(
     principalId: string,
     planTier: PlanTier,
-    currency: CurrencyCode = 'INR'
+    currency: CurrencyCode = 'INR',
+    requestedGateway?: 'razorpay' | 'cashfree'
   ): Promise<CheckoutSessionResult> {
     const plan = COMMERCIAL_PLANS[planTier];
     if (!plan || planTier === 'free' || planTier === 'guest') {
@@ -1122,7 +1576,11 @@ export class PaymentGatewayService {
       throw new Error(`BILLING_UNAVAILABLE: No valid price configured for plan ${planTier} in ${currency}.`);
     }
 
-    const keyId = process.env.RAZORPAY_KEY_ID || process.env.CASHFREE_APP_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined);
+    const gateway = resolvePaymentGateway(requestedGateway);
+    const keyId = gateway === 'razorpay'
+      ? (process.env.RAZORPAY_KEY_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined))
+      : (process.env.CASHFREE_APP_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined));
+
     if (!keyId) {
       throw new Error('BILLING_UNAVAILABLE: Gateway credentials not configured.');
     }
@@ -1146,11 +1604,14 @@ export class PaymentGatewayService {
       customerId = customer.id;
     }
 
-    const gateway: 'razorpay' | 'cashfree' = process.env.RAZORPAY_KEY_ID || process.env.RAZORPAY_WEBHOOK_SECRET ? 'razorpay' : 'cashfree';
     const purchaseId = `pur_${crypto.randomUUID().replace(/-/g, '')}`;
 
     let gatewayOrderId: string;
     let gatewayCheckoutUrl: string | undefined;
+
+    const recurringPlanId = gateway === 'razorpay'
+      ? CANDIDATE_RAZORPAY_PLANS[planTier]?.[currency]
+      : CANDIDATE_CASHFREE_PLANS[planTier]?.[currency];
 
     if (this.customGatewayTransport) {
       const res = await this.customGatewayTransport({
@@ -1160,22 +1621,29 @@ export class PaymentGatewayService {
         currency,
         principalId,
         customerId,
-        planTier
+        planTier,
+        planId: recurringPlanId,
+        action: 'create_subscription'
       });
       gatewayOrderId = res.gatewayOrderId;
       gatewayCheckoutUrl = res.shortUrl;
-    } else if (process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_mock')) {
+    } else if (gateway === 'razorpay' && process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_mock')) {
+      if (!recurringPlanId) {
+        throw new Error(`BILLING_UNAVAILABLE: Razorpay recurring plan ID is not configured for ${planTier} in ${currency}.`);
+      }
       const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
-      const rzpRes = await fetch('https://api.razorpay.com/v1/orders', {
+      // Razorpay Subscriptions API for recurring e-mandates & recurring plan billing
+      const rzpSubRes = await fetch('https://api.razorpay.com/v1/subscriptions', {
         method: 'POST',
         headers: {
           'Authorization': authHeader,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          amount: price.amountMinorUnits,
-          currency,
-          receipt: purchaseId,
+          plan_id: recurringPlanId,
+          total_count: 12,
+          quantity: 1,
+          customer_notify: 1,
           notes: {
             principal_id: principalId,
             customer_id: customerId,
@@ -1184,14 +1652,66 @@ export class PaymentGatewayService {
           }
         })
       });
-      if (!rzpRes.ok) {
-        const errText = await rzpRes.text();
-        throw new Error(`GATEWAY_ORDER_FAILED: Gateway order creation returned status ${rzpRes.status}: ${errText}`);
+
+      if (!rzpSubRes.ok) {
+        const errText = await rzpSubRes.text();
+        throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Razorpay subscription creation returned status ${rzpSubRes.status}: ${errText}`);
       }
-      const rzpData: any = await rzpRes.json();
+
+      const rzpData: any = await rzpSubRes.json();
       gatewayOrderId = rzpData.id;
+      gatewayCheckoutUrl = rzpData.short_url;
+    } else if (gateway === 'cashfree' && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY && !process.env.CASHFREE_APP_ID.startsWith('cf_test_mock')) {
+      if (!recurringPlanId) {
+        throw new Error(`BILLING_UNAVAILABLE: Cashfree recurring plan ID is not configured for ${planTier} in ${currency}.`);
+      }
+      const cfBaseUrl = (isSandbox || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST'))
+        ? 'https://sandbox.cashfree.com/pg/subscriptions'
+        : 'https://api.cashfree.com/pg/subscriptions';
+
+      const cfSubRes = await fetch(cfBaseUrl, {
+        method: 'POST',
+        headers: {
+          'x-client-id': process.env.CASHFREE_APP_ID,
+          'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+          'x-api-version': '2023-08-01',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          subscription_id: purchaseId,
+          plan_details: {
+            plan_id: recurringPlanId,
+            plan_name: `AIRA ${planTier.toUpperCase()}`,
+            plan_type: 'PERIODIC',
+            plan_currency: currency,
+            plan_amount: price.amountMinorUnits / 100,
+            plan_interval_type: 'MONTH',
+            plan_intervals: 1
+          },
+          customer_details: {
+            customer_id: customerId,
+            customer_email: `${principalId}@aira.internal`
+          },
+          subscription_notes: {
+            principal_id: principalId,
+            plan_tier: planTier,
+            purchase_id: purchaseId
+          }
+        })
+      });
+
+      if (!cfSubRes.ok) {
+        const errText = await cfSubRes.text();
+        throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Cashfree subscription creation returned status ${cfSubRes.status}: ${errText}`);
+      }
+
+      const cfData: any = await cfSubRes.json();
+      gatewayOrderId = cfData.subscription_id || cfData.sub_id || purchaseId;
+      gatewayCheckoutUrl = cfData.auth_link || cfData.sub_link || cfData.payment_link;
     } else if (isSandbox) {
-      gatewayOrderId = `order_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
+      gatewayOrderId = gateway === 'cashfree'
+        ? `sub_cf_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`
+        : `sub_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
     } else {
       throw new Error('BILLING_UNAVAILABLE: Live gateway secret keys not configured for order creation.');
     }
@@ -1263,16 +1783,20 @@ export class PaymentGatewayService {
   }
 
   /**
-   * Cancel an active subscription.
+   * Cancel an active subscription with provider-side synchronization.
    */
-  async cancelSubscription(principalId: string): Promise<{ success: boolean; message: string }> {
-    let customerId: string;
+  async cancelSubscription(principalId: string): Promise<{ success: boolean; message: string; gatewayCancelled: boolean }> {
+    let customerId: string | null = null;
     if (this.customDbClient) {
       const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
-      customerId = existingCust ? (existingCust as any).id : '';
+      customerId = existingCust ? (existingCust as any).id : null;
     } else {
-      const customer = await commercialBillingService.getOrCreateCustomer(principalId);
-      customerId = customer.id;
+      const customer = await commercialBillingService.getOrCreateCustomer(principalId).catch(() => null);
+      customerId = customer?.id || null;
+    }
+
+    if (!customerId) {
+      return { success: false, message: 'No billing customer found for principal.', gatewayCancelled: false };
     }
 
     const sub = await this.getDb()('subscriptions')
@@ -1280,26 +1804,1834 @@ export class PaymentGatewayService {
       .first();
 
     if (!sub) {
-      return { success: false, message: 'No active subscription found.' };
+      return { success: false, message: 'No active subscription found.', gatewayCancelled: false };
     }
+
+    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    let gatewayCancelled = false;
+    let gatewayError: string | null = null;
+
+    if (this.customGatewayTransport && sub.gateway_subscription_id) {
+      try {
+        const res = await this.customGatewayTransport({
+          gateway: (sub.gateway as 'razorpay' | 'cashfree') || 'razorpay',
+          orderId: sub.id,
+          amountMinorUnits: Number(sub.amount_minor_units),
+          currency: (sub.currency as CurrencyCode) || 'INR',
+          principalId,
+          customerId,
+          planTier: (sub.plan_id as PlanTier) || 'plus',
+          action: 'cancel_subscription',
+          gatewaySubscriptionId: sub.gateway_subscription_id
+        });
+        gatewayCancelled = Boolean(res.cancelled);
+        if (!gatewayCancelled) {
+          gatewayError = 'Custom gateway transport returned cancelled = false';
+        }
+      } catch (err: any) {
+        gatewayError = err.message || 'Custom gateway transport threw error';
+        console.warn(`[PaymentGateway] Custom transport cancellation failed for ${sub.id}:`, err.message);
+      }
+    } else if (sub.gateway === 'razorpay' && sub.gateway_subscription_id?.startsWith('sub_') && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+      try {
+        const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
+        const rzpRes = await fetch(`https://api.razorpay.com/v1/subscriptions/${sub.gateway_subscription_id}/cancel`, {
+          method: 'POST',
+          headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cancel_at_cycle_end: 1 })
+        });
+        if (rzpRes.ok) {
+          gatewayCancelled = true;
+        } else {
+          gatewayError = `Razorpay returned HTTP ${rzpRes.status}: ${await rzpRes.text()}`;
+        }
+      } catch (err: any) {
+        gatewayError = err.message;
+        console.warn(`[PaymentGateway] Razorpay provider cancel API error for ${sub.id}:`, err.message);
+      }
+    } else if (sub.gateway === 'cashfree' && sub.gateway_subscription_id && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY) {
+      try {
+        const cfBaseUrl = (isSandbox || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST'))
+          ? 'https://sandbox.cashfree.com/pg/subscriptions'
+          : 'https://api.cashfree.com/pg/subscriptions';
+        const cfRes = await fetch(`${cfBaseUrl}/${sub.gateway_subscription_id}/cancel`, {
+          method: 'POST',
+          headers: {
+            'x-client-id': process.env.CASHFREE_APP_ID,
+            'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+            'x-api-version': '2023-08-01',
+            'Content-Type': 'application/json'
+          }
+        });
+        if (cfRes.ok) {
+          gatewayCancelled = true;
+        } else {
+          gatewayError = `Cashfree returned HTTP ${cfRes.status}: ${await cfRes.text()}`;
+        }
+      } catch (err: any) {
+        gatewayError = err.message;
+        console.warn(`[PaymentGateway] Cashfree provider cancel API error for ${sub.id}:`, err.message);
+      }
+    } else if (isSandbox) {
+      // In isolated test/sandbox harness without live secrets, simulate provider cancellation
+      gatewayCancelled = true;
+    } else {
+      gatewayError = `Live API keys for gateway '${sub.gateway}' are not configured. Provider cancellation cannot proceed safely.`;
+    }
+
+    if (!gatewayCancelled) {
+      return {
+        success: false,
+        message: `Provider-side cancellation failed: ${gatewayError || 'Unknown gateway rejection'}. Subscription remains active.`,
+        gatewayCancelled: false
+      };
+    }
+
+    const now = Date.now();
+    let meta: any = {};
+    try {
+      meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+    } catch {}
+    meta.cancellation_status = 'CANCELLATION_REQUESTED';
+    meta.cancellation_requested_at = now;
 
     await this.getDb()('subscriptions').where({ id: sub.id }).update({
       cancel_at_period_end: true,
-      updated_at: Date.now()
+      metadata: JSON.stringify(meta),
+      updated_at: now
+    });
+
+    await this.getDb()('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: customerId,
+      event_type: 'SUBSCRIPTION_CANCEL_SCHEDULED',
+      actor_type: 'principal',
+      actor_id: principalId,
+      payload: JSON.stringify({
+        subscriptionId: sub.id,
+        gateway: sub.gateway,
+        gatewaySubscriptionId: sub.gateway_subscription_id,
+        cancellation_status: 'CANCELLATION_REQUESTED',
+        gatewayCancelled,
+        effectiveEnd: sub.current_period_end
+      }),
+      created_at: now
     });
 
     return {
       success: true,
-      message: 'Subscription marked to cancel at the end of the current billing period. Entitlements remain active until then.'
+      message: 'Subscription marked to cancel at the end of the current billing period. Entitlements remain active until then.',
+      gatewayCancelled: true
     };
   }
 
   /**
-   * Invoice history is unavailable until real, reconciled gateway invoice
-   * records exist. Subscription rows alone are not proof of a paid invoice.
+   * Atomically and safely finalizes an invoice claim in idempotent_operations using CAS.
+   * Strictly enforces non-empty ownerToken, positive integer generation, status = 'IN_PROGRESS',
+   * and requires an explicit database affected-row count of exactly 1.
+   * Throws STALE_WORKER_FENCING_LOST if the worker lost ownership.
    */
-  async getInvoices(_principalId: string): Promise<InvoiceRecord[]> {
-    return [];
+  public async finalizeInvoiceClaimCas(params: {
+    trx: any;
+    cycleBindingKey: string;
+    ownerToken: string;
+    generation: number;
+    invoiceRecord: InvoiceRecord;
+    now?: number;
+  }): Promise<void> {
+    if (!params.ownerToken || typeof params.ownerToken !== 'string' || params.ownerToken.trim().length === 0) {
+      throw new Error('INVALID_FENCING_PARAMETERS: ownerToken is required, non-empty string');
+    }
+    if (
+      params.generation === undefined ||
+      params.generation === null ||
+      typeof params.generation !== 'number' ||
+      !Number.isInteger(params.generation) ||
+      params.generation <= 0
+    ) {
+      throw new Error(`INVALID_FENCING_PARAMETERS: generation must be a positive integer, received: ${params.generation}`);
+    }
+
+    const now = params.now || Date.now();
+    const query = params.trx('idempotent_operations').where({
+      key: params.cycleBindingKey,
+      status: 'IN_PROGRESS',
+      owner_token: params.ownerToken.trim(),
+      generation: params.generation
+    });
+
+    const affected = await query.update({
+      status: 'COMPLETED',
+      response_status: 200,
+      response_body: JSON.stringify(params.invoiceRecord),
+      locked_until: 0,
+      updated_at: now
+    });
+
+    if (affected === undefined || affected === null) {
+      throw new Error('FENCING_VERIFICATION_FAILED: Database returned null or undefined affected row count');
+    }
+    const count = Array.isArray(affected) ? affected.length : Number(affected);
+    if (!Number.isFinite(count) || count !== 1) {
+      throw new Error(
+        `STALE_WORKER_FENCING_LOST: Worker lost ownership lease (token: ${params.ownerToken}, gen: ${params.generation}) before finalization (affected rows: ${count})`
+      );
+    }
+  }
+
+  /**
+   * Persists CREDIT_NOTE_PENDING_RECONCILIATION out-of-band on an independent commit boundary.
+   * Checks persistence to ensure a failed writer does not silently report durable recovery.
+   */
+  public async recordCreditNotePendingReconciliationOutOfBand(params: {
+    customerId: string;
+    subscriptionId: string;
+    refundId: string;
+    refundAmount: number;
+    gateway: string;
+    error: string;
+    now?: number;
+  }): Promise<boolean> {
+    const now = params.now || Date.now();
+    const dbClient = this.getDb();
+    const id = `bae_${crypto.randomUUID().replace(/-/g, '')}`;
+    try {
+      await dbClient('billing_audit_events').insert({
+        id,
+        customer_id: params.customerId,
+        event_type: 'CREDIT_NOTE_PENDING_RECONCILIATION',
+        actor_type: 'system',
+        actor_id: `pending_${params.refundId}`,
+        payload: JSON.stringify({
+          subscriptionId: params.subscriptionId,
+          refundId: params.refundId,
+          refundAmount: params.refundAmount,
+          gateway: params.gateway,
+          error: params.error,
+          status: 'PENDING_RECONCILIATION'
+        }),
+        created_at: now
+      });
+
+      const check = await dbClient('billing_audit_events').where({ id }).first();
+      if (!check) {
+        throw new Error('FAILURE_EVIDENCE_PERSISTENCE_FAILED: Failed to verify inserted pending reconciliation event');
+      }
+      return true;
+    } catch (err: any) {
+      console.error('[Billing] Failed to persist out-of-band CREDIT_NOTE_PENDING_RECONCILIATION:', err?.message || err);
+      throw new Error(`FAILURE_EVIDENCE_PERSISTENCE_FAILED: ${err?.message || err}`);
+    }
+  }
+
+  /**
+   * Persists CREDIT_NOTE_RECONCILED within the enclosing refund transaction.
+   * Emits CREDIT_NOTE_RECONCILED only when an existing durable pending record genuinely transitions to successfully reconciled.
+   * Deduplicates by refund identity and rolls back cleanly with the enclosing transaction on failure.
+   */
+  public async clearCreditNotePendingReconciliation(params: {
+    trx: any;
+    customerId: string;
+    subscriptionId: string;
+    refundId: string;
+    creditNoteNumber: string;
+    originalInvoiceNumber?: string;
+    now?: number;
+  }): Promise<void> {
+    const now = params.now || Date.now();
+    const trx = params.trx;
+
+    let origInvNum = params.originalInvoiceNumber;
+    if (!origInvNum && params.creditNoteNumber) {
+      try {
+        const cn = await trx('billing_credit_notes').where({ credit_note_number: params.creditNoteNumber }).first();
+        if (cn?.original_invoice_number) {
+          origInvNum = cn.original_invoice_number;
+        }
+      } catch {}
+    }
+
+    if (origInvNum === 'UNRESOLVED_ORIGINAL_INVOICE') {
+      // Original invoice could not be resolved; credit note remains PENDING_RECONCILIATION
+      return;
+    }
+
+    // 1. Check if a durable pending reconciliation record exists
+    const pendingQuery = trx('billing_audit_events')
+      .where({
+        customer_id: params.customerId,
+        event_type: 'CREDIT_NOTE_PENDING_RECONCILIATION'
+      });
+    const pendingRows = typeof pendingQuery.select === 'function' ? await pendingQuery.select('*') : (await pendingQuery || []);
+    const pendingRecord = (pendingRows || []).find((r: any) => {
+      if (r.actor_id === `pending_${params.refundId}` || r.actor_id === params.refundId) {
+        return true;
+      }
+      try {
+        const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+        return p?.refundId === params.refundId;
+      } catch {
+        return false;
+      }
+    });
+
+    if (!pendingRecord) {
+      // No prior pending reconciliation record exists; nothing to reconcile.
+      return;
+    }
+
+    // 2. Deduplicate: check if CREDIT_NOTE_RECONCILED was already emitted for this refund
+    const reconciledQuery = trx('billing_audit_events')
+      .where({
+        customer_id: params.customerId,
+        event_type: 'CREDIT_NOTE_RECONCILED'
+      });
+    const reconciledRows = typeof reconciledQuery.select === 'function' ? await reconciledQuery.select('*') : (await reconciledQuery || []);
+    const existingReconciled = (reconciledRows || []).find((r: any) => {
+      if (r.actor_id === params.creditNoteNumber || r.actor_id === params.refundId) {
+        return true;
+      }
+      try {
+        const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+        return p?.refundId === params.refundId || p?.creditNoteNumber === params.creditNoteNumber;
+      } catch {
+        return false;
+      }
+    });
+
+    if (existingReconciled) {
+      return;
+    }
+
+    // 3. Persist CREDIT_NOTE_RECONCILED within the transaction
+    await trx('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: params.customerId,
+      event_type: 'CREDIT_NOTE_RECONCILED',
+      actor_type: 'system',
+      actor_id: params.creditNoteNumber,
+      payload: JSON.stringify({
+        subscriptionId: params.subscriptionId,
+        refundId: params.refundId,
+        creditNoteNumber: params.creditNoteNumber,
+        reconciledAt: now,
+        status: 'RECONCILED'
+      }),
+      created_at: now
+    });
+  }
+
+  /**
+   * Resolves the authoritative original invoice number from relational billing_invoices,
+   * audit events, or idempotent bindings before accepting a refund replay as reconciled.
+   * Never defaults to earliest invoice when multiple invoices exist.
+   */
+  public async resolveAuthoritativeOriginalInvoice(
+    trx: any,
+    subRecord: any,
+    context?: {
+      paymentId?: string;
+      cycleNumber?: number;
+      currency?: string;
+      refundAmountMinor?: number;
+    }
+  ): Promise<string | undefined> {
+    const customerId = subRecord.customer_id;
+    const subscriptionId = subRecord.id;
+
+    // 1. Relational billing_invoices table (most authoritative)
+    try {
+      const hasInvoicesTable = typeof trx.schema?.hasTable === 'function'
+        ? await trx.schema.hasTable('billing_invoices')
+        : false;
+      if (hasInvoicesTable) {
+        const invQuery = trx('billing_invoices')
+          .where({ subscription_id: subscriptionId, customer_id: customerId })
+          .orderBy('created_at', 'asc');
+        const invoiceRows = typeof invQuery.select === 'function' ? await invQuery.select('*') : (await invQuery || []);
+
+        if (Array.isArray(invoiceRows) && invoiceRows.length > 0) {
+          if (context?.paymentId) {
+            const matchedByPayment = invoiceRows.find(
+              (r: any) => r.billing_event_id === context.paymentId
+            );
+            if (matchedByPayment?.invoice_number) {
+              return matchedByPayment.invoice_number;
+            }
+          }
+
+          if (context?.cycleNumber !== undefined && context?.cycleNumber !== null) {
+            const matchedByCycle = invoiceRows.find(
+              (r: any) => Number(r.cycle_number) === Number(context.cycleNumber)
+            );
+            if (matchedByCycle?.invoice_number) {
+              return matchedByCycle.invoice_number;
+            }
+          }
+
+          if (invoiceRows.length === 1 && !context?.paymentId) {
+            return invoiceRows[0].invoice_number;
+          }
+
+          // Multiple invoices exist and neither paymentId nor cycleNumber matched:
+          // NEVER default to earliest invoice! Return undefined to preserve PENDING_RECONCILIATION.
+          return undefined;
+        }
+      }
+    } catch {}
+
+    // 2. Billing audit events
+    try {
+      const q = trx('billing_audit_events').where({
+        customer_id: customerId,
+        event_type: 'TAX_INVOICE_ISSUED'
+      });
+      const rows = typeof q.select === 'function' ? await q.select('*') : (await q || []);
+      const subAudits = (rows || []).filter((r: any) => {
+        try {
+          const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+          return p?.subscriptionId === subscriptionId;
+        } catch { return false; }
+      });
+
+      if (subAudits.length > 0) {
+        if (context?.paymentId) {
+          const match = subAudits.find((r: any) => {
+            const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+            return p?.paymentId === context.paymentId || p?.billing_event_id === context.paymentId;
+          });
+          if (match) {
+            const p = typeof match.payload === 'string' ? JSON.parse(match.payload) : match.payload;
+            return p?.invoiceNumber || match.actor_id;
+          }
+        }
+
+        if (context?.cycleNumber !== undefined && context?.cycleNumber !== null) {
+          const match = subAudits.find((r: any) => {
+            const p = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+            return Number(p?.cycleNumber || 1) === Number(context.cycleNumber);
+          });
+          if (match) {
+            const p = typeof match.payload === 'string' ? JSON.parse(match.payload) : match.payload;
+            return p?.invoiceNumber || match.actor_id;
+          }
+        }
+
+        if (subAudits.length === 1 && !context?.paymentId) {
+          const p = typeof subAudits[0].payload === 'string' ? JSON.parse(subAudits[0].payload) : subAudits[0].payload;
+          return p?.invoiceNumber || subAudits[0].actor_id;
+        }
+
+        return undefined;
+      }
+    } catch {}
+
+    // 3. Idempotent operations binding
+    try {
+      const cycle = context?.cycleNumber || 1;
+      const invBinding = await trx('idempotent_operations').where({
+        key: `inv_binding:${customerId}:${subscriptionId}:cycle:${cycle}`
+      }).first();
+      if (invBinding?.response_body) {
+        const parsed = JSON.parse(invBinding.response_body);
+        if (parsed?.invoiceNumber) {
+          return parsed.invoiceNumber;
+        }
+      }
+    } catch {}
+
+    return undefined;
+  }
+
+  /**
+   * Validates all 6 dimensions of an existing credit note against refund parameters.
+   * Unconditionally requires refund ID, customer ID, subscription ID, currency, amount, and original invoice linkage.
+   */
+  public verifyCreditNoteDimensions(existingCn: any, expected: {
+    refundId: string;
+    subscriptionId: string;
+    customerId: string;
+    currency: string;
+    refundAmount: number;
+    originalInvoiceNumber: string;
+  }): void {
+    if (
+      !expected.refundId ||
+      !expected.subscriptionId ||
+      !expected.customerId ||
+      !expected.currency ||
+      expected.refundAmount === undefined ||
+      expected.refundAmount === null ||
+      !expected.originalInvoiceNumber
+    ) {
+      throw new Error('INVALID_VERIFICATION_PARAMETERS: All 6 dimensions must be provided for credit note verification');
+    }
+    if (existingCn.customer_id !== expected.customerId) {
+      throw new Error(`CREDIT_NOTE_TENANT_MISMATCH: Existing credit note customer ${existingCn.customer_id} does not match refund customer ${expected.customerId}`);
+    }
+    if (String(existingCn.refund_id) !== String(expected.refundId)) {
+      throw new Error(`CREDIT_NOTE_DIMENSION_MISMATCH: Existing refund_id ${existingCn.refund_id} does not match ${expected.refundId}`);
+    }
+    if (existingCn.subscription_id !== expected.subscriptionId) {
+      throw new Error(`CREDIT_NOTE_DIMENSION_MISMATCH: Existing subscription_id ${existingCn.subscription_id} does not match ${expected.subscriptionId}`);
+    }
+    if ((existingCn.currency || '').toUpperCase() !== (expected.currency || 'INR').toUpperCase()) {
+      throw new Error(`CREDIT_NOTE_DIMENSION_MISMATCH: Existing currency ${existingCn.currency} does not match refund currency ${expected.currency}`);
+    }
+    if (Number(existingCn.refund_amount) !== Number(expected.refundAmount)) {
+      throw new Error(`CREDIT_NOTE_AMOUNT_MISMATCH: Existing credit note amount ${existingCn.refund_amount} does not match refund amount ${expected.refundAmount}`);
+    }
+    if (
+      expected.originalInvoiceNumber !== 'UNRESOLVED_ORIGINAL_INVOICE' &&
+      existingCn.original_invoice_number &&
+      existingCn.original_invoice_number !== 'UNRESOLVED_ORIGINAL_INVOICE' &&
+      existingCn.original_invoice_number !== expected.originalInvoiceNumber
+    ) {
+      throw new Error(`CREDIT_NOTE_DIMENSION_MISMATCH: Existing original_invoice_number ${existingCn.original_invoice_number} does not match ${expected.originalInvoiceNumber}`);
+    }
+  }
+
+  /**
+   * Issues an immutable durable tax invoice with PostgreSQL sequence / atomic monotonic allocation,
+   * database-level uniqueness enforcement in idempotent_operations, distributed generation fencing,
+   * relational billing_invoices persistence, and audit event persistence.
+   */
+  public async issueDurableInvoice(params: {
+    trx: any;
+    customerId: string;
+    principalId: string;
+    purchaseRecord: any;
+    planTier: PlanTier;
+    gateway: 'razorpay' | 'cashfree' | string;
+    actualPaymentId?: string;
+    gatewayOrderId?: string;
+    cycleNumber?: number;
+    now: number;
+    workerToken?: string;
+    leaseDurationMs?: number;
+    debugPauseMsAfterLease?: number;
+    debugHookAfterLeaseAcquired?: (lease: { ownerToken: string; generation: number }) => Promise<void> | void;
+    debugHookBeforeFinalize?: (lease: { ownerToken: string; generation: number }) => Promise<void> | void;
+  }): Promise<InvoiceRecord | null> {
+    const cycle = params.cycleNumber || 1;
+    const cycleBindingKey = `inv_binding:${params.customerId}:${params.purchaseRecord.id}:cycle:${cycle}`;
+    let currentGeneration = 1;
+    let currentOwnerToken = params.workerToken || `wkr_${crypto.randomUUID().replace(/-/g, '')}`;
+
+    // 1. Check if invoice was already bound in idempotent_operations
+    try {
+      const bindingQuery = params.trx('idempotent_operations').where({ key: cycleBindingKey });
+      const existingBinding = typeof bindingQuery.first === 'function' ? await bindingQuery.first() : null;
+      if (existingBinding && existingBinding.status === 'COMPLETED' && existingBinding.response_body) {
+        return JSON.parse(existingBinding.response_body);
+      }
+    } catch {}
+
+    // 2. Check if invoice was already issued in billing_audit_events for this subscription and cycle
+    try {
+      const auditQuery = params.trx('billing_audit_events').where({
+        customer_id: params.customerId,
+        event_type: 'TAX_INVOICE_ISSUED'
+      });
+      let existingAudit: any[] = [];
+      if (typeof auditQuery.select === 'function') {
+        existingAudit = await auditQuery.select('*');
+      } else if (typeof auditQuery.first === 'function') {
+        const f = await auditQuery.first();
+        existingAudit = f ? [f] : [];
+      } else if (Array.isArray(auditQuery)) {
+        existingAudit = auditQuery;
+      }
+      if (Array.isArray(existingAudit) && existingAudit.length > 0) {
+        const matched = existingAudit.find((ev: any) => {
+          try {
+            const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+            return p?.subscriptionId === params.purchaseRecord.id && (p?.cycleNumber || 1) === cycle;
+          } catch { return false; }
+        });
+        if (matched) {
+          return typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
+        }
+      }
+    } catch {}
+
+    // Verify relational billing_invoices table prerequisite
+    const hasInvoicesTable = typeof params.trx.schema?.hasTable === 'function'
+      ? await params.trx.schema.hasTable('billing_invoices')
+      : false;
+    if (!hasInvoicesTable) {
+      const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
+      if (!isTestEnv) {
+        throw new Error('RELATIONAL_INVOICES_TABLE_REQUIRED: Table billing_invoices is missing in non-test environment');
+      }
+    }
+
+    // 3. Atomically acquire cycle-level distributed lease in idempotent_operations with owner token & generation
+    let acquiredLease = false;
+    const leaseDuration = params.leaseDurationMs || 30000;
+    const isPostgres = typeof params.trx?.raw === 'function';
+    const inTransaction = isPostgres && (Boolean(params.trx.isTransaction) || typeof params.trx.commit === 'function');
+
+    if (inTransaction) {
+      await params.trx.raw('SAVEPOINT sp_lease_acquire');
+    }
+
+    try {
+      let ins = params.trx('idempotent_operations').insert({
+        key: cycleBindingKey,
+        principal_id: params.principalId || params.customerId,
+        operation_id: `inv_binding_${params.purchaseRecord.id}_cycle_${cycle}`,
+        operation_type: 'tax_invoice_binding',
+        payload_hash: params.actualPaymentId || params.gatewayOrderId || '',
+        status: 'IN_PROGRESS',
+        response_status: 200,
+        response_body: '',
+        owner_token: currentOwnerToken,
+        generation: currentGeneration,
+        locked_until: params.now + leaseDuration,
+        created_at: params.now,
+        updated_at: params.now
+      });
+      if (typeof ins.onConflict === 'function') {
+        const conf = ins.onConflict('key').ignore();
+        ins = typeof conf.returning === 'function' ? conf.returning('key') : conf;
+      }
+      const res = await ins;
+      if (inTransaction) {
+        await params.trx.raw('RELEASE SAVEPOINT sp_lease_acquire');
+      }
+
+      if (res && res.rowCount !== undefined) {
+        acquiredLease = res.rowCount === 1;
+      } else if (Array.isArray(res)) {
+        acquiredLease = res.length === 1 && (typeof res[0] === 'object' ? res[0]?.key === cycleBindingKey : Boolean(res[0]));
+      } else {
+        acquiredLease = true;
+      }
+    } catch (insertErr: any) {
+      if (inTransaction) {
+        try {
+          await params.trx.raw('ROLLBACK TO SAVEPOINT sp_lease_acquire');
+        } catch {}
+      }
+
+      const isContention = insertErr?.code === '23505' ||
+        String(insertErr?.message).includes('unique') ||
+        String(insertErr?.message).includes('duplicate') ||
+        String(insertErr?.message).includes('conflict');
+
+      if (isContention) {
+        acquiredLease = false;
+      } else {
+        // Propagate unrelated PostgreSQL errors!
+        // Do not treat connectivity, timeout or constraint-integrity failures as ordinary contention!
+        throw insertErr;
+      }
+    }
+
+    if (acquiredLease) {
+      if (params.debugHookAfterLeaseAcquired) {
+        await params.debugHookAfterLeaseAcquired({ ownerToken: currentOwnerToken, generation: currentGeneration });
+      }
+      if (params.debugPauseMsAfterLease && params.debugPauseMsAfterLease > 0) {
+        await new Promise((r) => setTimeout(r, params.debugPauseMsAfterLease));
+      }
+    }
+
+    if (!acquiredLease) {
+      // Lease exists. Inspect existing lease for completion, bounded polling, or crash recovery / fencing
+      let shouldTakeOverLease = false;
+
+      for (let attempt = 0; attempt < 20; attempt++) {
+        let existingBinding: any = null;
+        try {
+          const bindingQuery = params.trx('idempotent_operations').where({ key: cycleBindingKey });
+          existingBinding = typeof bindingQuery.first === 'function' ? await bindingQuery.first() : null;
+          if (existingBinding && existingBinding.status === 'COMPLETED' && existingBinding.response_body) {
+            return JSON.parse(existingBinding.response_body);
+          }
+        } catch (bindErr: any) {
+          if (bindErr?.code === '57014' || String(bindErr?.message).includes('timeout')) throw bindErr;
+        }
+
+        // Check relational billing_invoices table first if available
+        let preExistingInvRow: any = null;
+        try {
+          const hasInvTable = typeof params.trx.schema?.hasTable === 'function'
+            ? await params.trx.schema.hasTable('billing_invoices')
+            : false;
+          if (hasInvTable) {
+            preExistingInvRow = await params.trx('billing_invoices')
+              .where({ subscription_id: params.purchaseRecord.id, cycle_number: cycle })
+              .first();
+          }
+        } catch (invErr: any) {
+          if (invErr?.code === '57014' || String(invErr?.message).includes('timeout')) throw invErr;
+        }
+
+        // Check if existing lease is expired (previous worker crashed, stalled, or timed out)
+        const now = Date.now();
+        if (existingBinding && existingBinding.status === 'IN_PROGRESS' && Number(existingBinding.locked_until) <= now) {
+          // Lease expired! Atomically fence out the previous dead worker via conditional generation CAS
+          try {
+            const prevGen = Number(existingBinding.generation) || 0;
+            const newGen = prevGen + 1;
+            const newOwnerToken = params.workerToken || `wkr_${crypto.randomUUID().replace(/-/g, '')}`;
+
+            let fenceQuery = params.trx('idempotent_operations')
+              .where({ key: cycleBindingKey, status: 'IN_PROGRESS' })
+              .andWhere('locked_until', '<=', now);
+            if (existingBinding.generation !== undefined && existingBinding.generation !== null) {
+              fenceQuery = fenceQuery.andWhere('generation', prevGen);
+            }
+            const affected = await fenceQuery.update({
+              owner_token: newOwnerToken,
+              generation: newGen,
+              locked_until: now + leaseDuration,
+              payload_hash: params.actualPaymentId || params.gatewayOrderId || '',
+              updated_at: now
+            });
+
+            if (affected === 1) {
+              currentOwnerToken = newOwnerToken;
+              currentGeneration = newGen;
+              shouldTakeOverLease = true;
+
+              // If an invoice exists but its claim remains IN_PROGRESS:
+              // Complete the claim with the original invoice and return it (never leave claim stranded!)
+              if (preExistingInvRow) {
+                const mapped = this.mapBillingInvoiceRow(preExistingInvRow);
+                await this.finalizeInvoiceClaimCas({
+                  trx: params.trx,
+                  cycleBindingKey,
+                  ownerToken: currentOwnerToken,
+                  generation: currentGeneration,
+                  invoiceRecord: mapped,
+                  now
+                });
+                return mapped;
+              }
+              break;
+            }
+          } catch (fenceErr: any) {
+            if (fenceErr?.code === '57014' || String(fenceErr?.message).includes('timeout')) throw fenceErr;
+          }
+        }
+
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      if (!shouldTakeOverLease) {
+        throw new Error(`INVOICE_CYCLE_CONTENTION: Concurrent invoice generation in progress for cycle ${cycle}`);
+      }
+    }
+
+    try {
+      // 4. Perform statutory tax determination
+      let meta: any = {};
+      try {
+        meta = typeof params.purchaseRecord.metadata === 'string'
+          ? JSON.parse(params.purchaseRecord.metadata)
+          : (params.purchaseRecord.metadata || {});
+      } catch {}
+
+      const taxResult = taxDeterminationService.determineTax({
+        amountMinorUnits: Number(params.purchaseRecord.amount_minor_units) || 0,
+        currency: params.purchaseRecord.currency,
+        customerCountry: meta.customerCountry || meta.country,
+        customerState: meta.customerState || meta.billingState || meta.state,
+        placeOfSupply: meta.placeOfSupply,
+        lutNumber: meta.lutNumber || process.env.AIRA_LUT_NUMBER,
+        lutAvailable: meta.lutAvailable !== undefined ? meta.lutAvailable : (process.env.AIRA_LUT_AVAILABLE ? process.env.AIRA_LUT_AVAILABLE === 'true' : undefined),
+        supplierGstin: process.env.AIRA_SUPPLIER_GSTIN,
+        supplierGstinVerified: process.env.AIRA_SUPPLIER_GSTIN_VERIFIED ? process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true' : undefined
+      });
+
+      // Crash-recovery check: Did the crashed worker already persist an invoice in billing_invoices or audit events?
+      let preExistingInvoice: InvoiceRecord | null = null;
+      try {
+        const hasInvTable = typeof params.trx.schema?.hasTable === 'function'
+          ? await params.trx.schema.hasTable('billing_invoices')
+          : false;
+        if (hasInvTable) {
+          const invRow = await params.trx('billing_invoices')
+            .where({ subscription_id: params.purchaseRecord.id, cycle_number: cycle })
+            .first();
+          if (invRow) {
+            preExistingInvoice = this.mapBillingInvoiceRow(invRow);
+          }
+        }
+      } catch (checkErr: any) {
+        if (checkErr?.code === '57014' || String(checkErr?.message).includes('timeout')) throw checkErr;
+      }
+
+      if (!preExistingInvoice) {
+        try {
+          const auditRows = await params.trx('billing_audit_events').where({
+            customer_id: params.customerId,
+            event_type: 'TAX_INVOICE_ISSUED'
+          });
+          const matched = (auditRows || []).find((ev: any) => {
+            try {
+              const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+              return p?.subscriptionId === params.purchaseRecord.id && (p?.cycleNumber || 1) === cycle;
+            } catch { return false; }
+          });
+          if (matched) {
+            preExistingInvoice = typeof matched.payload === 'string' ? JSON.parse(matched.payload) : matched.payload;
+          }
+        } catch (auditErr: any) {
+          if (auditErr?.code === '57014' || String(auditErr?.message).includes('timeout')) throw auditErr;
+        }
+      }
+
+      if (preExistingInvoice) {
+        // Complete the cycle binding with the recovered invoice using centralized CAS
+        await this.finalizeInvoiceClaimCas({
+          trx: params.trx,
+          cycleBindingKey,
+          ownerToken: currentOwnerToken,
+          generation: currentGeneration,
+          invoiceRecord: preExistingInvoice,
+          now: Date.now()
+        });
+        return preExistingInvoice;
+      }
+
+      // 5. Allocate invoice sequence number and claim database-level uniqueness
+      let invoiceNumber = '';
+      let claimed = false;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        invoiceNumber = await this.allocateInvoiceNumber(params.trx, 2026);
+        const claimKey = `inv_num:${invoiceNumber}`;
+        if (inTransaction) {
+          await params.trx.raw('SAVEPOINT sp_inv_claim');
+        }
+        try {
+          let insClaim = params.trx('idempotent_operations').insert({
+            key: claimKey,
+            principal_id: 'system:billing',
+            operation_id: `claim_${invoiceNumber}`,
+            operation_type: 'invoice_number_claim',
+            payload_hash: crypto.createHash('sha256').update(`${params.customerId}_${params.purchaseRecord.id}_${cycle}`).digest('hex'),
+            status: 'COMPLETED',
+            response_status: 200,
+            response_body: JSON.stringify({ invoiceNumber, customerId: params.customerId, subscriptionId: params.purchaseRecord.id, cycle }),
+            locked_until: 0,
+            created_at: params.now,
+            updated_at: params.now
+          });
+          if (typeof insClaim.onConflict === 'function') {
+            const conf = insClaim.onConflict('key').ignore();
+            insClaim = typeof conf.returning === 'function' ? conf.returning('key') : conf;
+          }
+          const res = await insClaim;
+          if (inTransaction) {
+            await params.trx.raw('RELEASE SAVEPOINT sp_inv_claim');
+          }
+          if (res && res.rowCount !== undefined) {
+            claimed = res.rowCount === 1;
+          } else if (Array.isArray(res)) {
+            claimed = res.length === 1 && (typeof res[0] === 'object' ? res[0]?.key === claimKey : Boolean(res[0]));
+          } else {
+            claimed = true;
+          }
+          if (claimed) {
+            break;
+          }
+        } catch (claimErr: any) {
+          if (inTransaction) {
+            try {
+              await params.trx.raw('ROLLBACK TO SAVEPOINT sp_inv_claim');
+            } catch {}
+          }
+          const isCollision = claimErr?.code === '23505' || String(claimErr?.message).includes('unique') || String(claimErr?.message).includes('duplicate');
+          if (isCollision) {
+            continue;
+          }
+          throw claimErr;
+        }
+      }
+
+      if (!claimed) {
+        throw new Error(`FAILED_TO_CLAIM_UNIQUE_INVOICE_NUMBER: Exceeded allocation retries for cycle ${cycle}`);
+      }
+
+      const dateStr = new Date(params.now).toISOString().split('T')[0];
+      const planName = COMMERCIAL_PLANS[params.planTier]?.name || (params.planTier === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
+
+      const invoiceRecord: InvoiceRecord = {
+        invoiceNumber,
+        date: dateStr,
+        plan: planName,
+        currency: (params.purchaseRecord.currency || 'INR').toUpperCase(),
+        totalAmount: taxResult.totalAmount,
+        taxableBase: taxResult.taxableBase,
+        gstAmount: taxResult.gstAmount,
+        cgstAmount: taxResult.cgstAmount,
+        sgstAmount: taxResult.sgstAmount,
+        igstAmount: taxResult.igstAmount,
+        sacCode: taxResult.sacCode,
+        supplierName: taxResult.supplierName,
+        supplierGstin: taxResult.supplierGstin,
+        taxComplianceStatus: taxResult.taxComplianceStatus as any,
+        placeOfSupply: taxResult.placeOfSupply,
+        status: 'Paid',
+        pdfDownloadAvailable: false
+      };
+
+      // Persist in relational billing_invoices table if table exists (enforces database-level uniqueness)
+      try {
+        if (hasInvoicesTable) {
+          const isPostgres = typeof params.trx.raw === 'function';
+          const inTransaction = isPostgres && (Boolean(params.trx.isTransaction) || typeof params.trx.commit === 'function');
+          if (inTransaction) {
+            await params.trx.raw('SAVEPOINT sp_invoice_insert');
+          }
+          try {
+            await params.trx('billing_invoices').insert({
+              id: `inv_${crypto.randomUUID().replace(/-/g, '')}`,
+              invoice_number: invoiceNumber,
+              customer_id: params.customerId,
+              subscription_id: params.purchaseRecord.id,
+              cycle_number: cycle,
+              billing_event_id: params.actualPaymentId || params.gatewayOrderId || `event_${invoiceNumber}`,
+              plan_tier: params.planTier,
+              currency: invoiceRecord.currency,
+              total_amount: invoiceRecord.totalAmount,
+              taxable_base: invoiceRecord.taxableBase,
+              gst_amount: invoiceRecord.gstAmount,
+              cgst_amount: invoiceRecord.cgstAmount ?? null,
+              sgst_amount: invoiceRecord.sgstAmount ?? null,
+              igst_amount: invoiceRecord.igstAmount ?? null,
+              sac_code: invoiceRecord.sacCode,
+              supplier_name: invoiceRecord.supplierName,
+              supplier_gstin: invoiceRecord.supplierGstin ?? null,
+              tax_compliance_status: invoiceRecord.taxComplianceStatus,
+              place_of_supply: invoiceRecord.placeOfSupply,
+              status: invoiceRecord.status,
+              gateway: params.gateway,
+              pdf_download_available: invoiceRecord.pdfDownloadAvailable,
+              metadata: JSON.stringify({}),
+              created_at: params.now,
+              updated_at: params.now
+            });
+            if (inTransaction) {
+              await params.trx.raw('RELEASE SAVEPOINT sp_invoice_insert');
+            }
+          } catch (insertErr: any) {
+            if (inTransaction) {
+              try {
+                await params.trx.raw('ROLLBACK TO SAVEPOINT sp_invoice_insert');
+              } catch {}
+            }
+            if (insertErr?.code === '23505' || String(insertErr?.message).includes('unique') || String(insertErr?.message).includes('duplicate')) {
+              const existingInv = await params.trx('billing_invoices')
+                .where({ subscription_id: params.purchaseRecord.id, cycle_number: cycle })
+                .first();
+              if (existingInv) {
+                const mapped = this.mapBillingInvoiceRow(existingInv);
+                await this.finalizeInvoiceClaimCas({
+                  trx: params.trx,
+                  cycleBindingKey,
+                  ownerToken: currentOwnerToken,
+                  generation: currentGeneration,
+                  invoiceRecord: mapped,
+                  now: Date.now()
+                });
+                return mapped;
+              }
+            }
+            throw insertErr;
+          }
+        }
+      } catch (err: any) {
+        throw err;
+      }
+
+      if (params.debugHookBeforeFinalize) {
+        await params.debugHookBeforeFinalize({ ownerToken: currentOwnerToken, generation: currentGeneration });
+      }
+
+      // 6. Update cycle binding to COMPLETED with stored invoice payload in idempotent_operations verifying ownership & generation (CAS)
+      await this.finalizeInvoiceClaimCas({
+        trx: params.trx,
+        cycleBindingKey,
+        ownerToken: currentOwnerToken,
+        generation: currentGeneration,
+        invoiceRecord,
+        now: Date.now()
+      });
+
+      // 7. Persist durable tax invoice in billing_audit_events
+      await params.trx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: params.customerId,
+        event_type: 'TAX_INVOICE_ISSUED',
+        actor_type: 'system',
+        actor_id: invoiceNumber,
+        payload: JSON.stringify({
+          ...invoiceRecord,
+          subscriptionId: params.purchaseRecord.id,
+          cycleNumber: cycle,
+          paymentId: params.actualPaymentId,
+          gateway: params.gateway
+        }),
+        created_at: params.now
+      });
+
+      return invoiceRecord;
+    } catch (execErr) {
+      throw execErr;
+    }
+  }
+
+  /**
+   * Issues a linked credit note in billing_credit_notes and billing_audit_events upon refund settlement.
+   * Never manufactures invoice numbers from subscription IDs.
+   * Enforces relational database persistence, uniqueness validation, and truthful reconciliation states.
+   */
+  public async issueDurableCreditNote(params: {
+    trx: any;
+    subRecord: any;
+    refundEntity: any;
+    refundAmount: number;
+    refundAmountMinorUnits?: number;
+    isPartialRefund: boolean;
+    gateway: 'razorpay' | 'cashfree' | string;
+    now: number;
+  }): Promise<{ creditNoteNumber: string; originalInvoiceNumber?: string; status: string } | null> {
+    const refundId = params.refundEntity?.id || params.refundEntity?.cf_refund_id || `ref_${params.now}`;
+    const cnBindingKey = `cn_binding:${params.subRecord.id}:refund:${refundId}`;
+
+    // Verify relational billing_credit_notes table prerequisite
+    const hasCreditNotesTable = typeof params.trx.schema?.hasTable === 'function'
+      ? await params.trx.schema.hasTable('billing_credit_notes')
+      : false;
+    if (!hasCreditNotesTable) {
+      const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
+      if (!isTestEnv) {
+        throw new Error('RELATIONAL_CREDIT_NOTES_TABLE_REQUIRED: Table billing_credit_notes is missing in non-test environment');
+      }
+    }
+
+    const paymentId = params.refundEntity?.payment_id || params.refundEntity?.cf_payment_id;
+    const cycleNumber = params.refundEntity?.cycle_number;
+    const currency = (params.subRecord.currency || 'INR').toUpperCase();
+    let originalInvoiceNumber: string = (await this.resolveAuthoritativeOriginalInvoice(params.trx, params.subRecord, {
+      paymentId,
+      cycleNumber,
+      currency,
+      refundAmountMinor: params.refundAmountMinorUnits
+    })) || 'UNRESOLVED_ORIGINAL_INVOICE';
+    const isUnresolved = originalInvoiceNumber === 'UNRESOLVED_ORIGINAL_INVOICE';
+
+    // 1. Check if credit note was already issued in relational table
+    try {
+      const hasCreditNotesTable = typeof params.trx.schema?.hasTable === 'function'
+        ? await params.trx.schema.hasTable('billing_credit_notes')
+        : false;
+      if (hasCreditNotesTable) {
+        const existingCn = await params.trx('billing_credit_notes')
+          .where({ refund_id: String(refundId) })
+          .first();
+        if (existingCn) {
+          this.verifyCreditNoteDimensions(existingCn, {
+            refundId: String(refundId),
+            subscriptionId: params.subRecord.id,
+            customerId: params.subRecord.customer_id,
+            currency: params.subRecord.currency || 'INR',
+            refundAmount: params.refundAmount,
+            originalInvoiceNumber
+          });
+
+          await this.clearCreditNotePendingReconciliation({
+            trx: params.trx,
+            customerId: params.subRecord.customer_id,
+            subscriptionId: params.subRecord.id,
+            refundId: String(refundId),
+            creditNoteNumber: existingCn.credit_note_number,
+            originalInvoiceNumber,
+            now: params.now
+          });
+
+          return {
+            creditNoteNumber: existingCn.credit_note_number,
+            originalInvoiceNumber: existingCn.original_invoice_number,
+            status: existingCn.status
+          };
+        }
+      }
+    } catch (err: any) {
+      if (err?.message?.includes('MISMATCH') || err?.message?.includes('INVALID_VERIFICATION')) throw err;
+    }
+
+    // Check idempotent_operations binding
+    try {
+      const bindingQuery = params.trx('idempotent_operations').where({ key: cnBindingKey });
+      const existing = typeof bindingQuery.first === 'function' ? await bindingQuery.first() : null;
+      if (existing && existing.status === 'COMPLETED' && existing.response_body) {
+        return JSON.parse(existing.response_body);
+      }
+    } catch {}
+
+    // 2. Allocate credit note sequence number
+    let creditNoteNumber = '';
+    const isPostgres = typeof params.trx?.raw === 'function';
+    const inTransaction = isPostgres && (Boolean(params.trx.isTransaction) || typeof params.trx.commit === 'function');
+
+    for (let attempt = 0; attempt < 10; attempt++) {
+      creditNoteNumber = await this.allocateCreditNoteNumber(params.trx, 2026);
+
+      // Verify number is not already used in relational table
+      try {
+        const hasCnTable = typeof params.trx.schema?.hasTable === 'function'
+          ? await params.trx.schema.hasTable('billing_credit_notes')
+          : false;
+        if (hasCnTable) {
+          const existing = await params.trx('billing_credit_notes').where({ credit_note_number: creditNoteNumber }).first();
+          if (existing) {
+            continue;
+          }
+        }
+      } catch {}
+
+      const claimKey = `cn_num:${creditNoteNumber}`;
+      if (inTransaction) {
+        await params.trx.raw('SAVEPOINT sp_cn_claim');
+      }
+      try {
+        let ins = params.trx('idempotent_operations').insert({
+          key: claimKey,
+          principal_id: 'system:billing',
+          operation_id: `claim_${creditNoteNumber}`,
+          operation_type: 'credit_note_number_claim',
+          payload_hash: String(params.refundAmount),
+          status: 'COMPLETED',
+          response_status: 200,
+          response_body: JSON.stringify({ creditNoteNumber, subscriptionId: params.subRecord.id, refundId }),
+          locked_until: 0,
+          created_at: params.now,
+          updated_at: params.now
+        });
+        if (typeof ins.onConflict === 'function') {
+          const conf = ins.onConflict('key').ignore();
+          ins = typeof conf.returning === 'function' ? conf.returning('key') : conf;
+        }
+        const res = await ins;
+        if (inTransaction) {
+          await params.trx.raw('RELEASE SAVEPOINT sp_cn_claim');
+        }
+        let claimed = false;
+        if (res && res.rowCount !== undefined) {
+          claimed = res.rowCount === 1;
+        } else if (Array.isArray(res)) {
+          claimed = res.length === 1 && (typeof res[0] === 'object' ? res[0]?.key === claimKey : Boolean(res[0]));
+        } else {
+          claimed = true;
+        }
+        if (claimed) {
+          break;
+        }
+      } catch (cnClaimErr: any) {
+        if (inTransaction) {
+          try {
+            await params.trx.raw('ROLLBACK TO SAVEPOINT sp_cn_claim');
+          } catch {}
+        }
+        const isCollision = cnClaimErr?.code === '23505' || String(cnClaimErr?.message).includes('unique') || String(cnClaimErr?.message).includes('duplicate');
+        if (isCollision) {
+          continue;
+        }
+        throw cnClaimErr;
+      }
+    }
+
+    let principalId = params.subRecord.principal_id;
+    if (!principalId && params.subRecord.customer_id) {
+      try {
+        const cust = await params.trx('billing_customers').where({ id: params.subRecord.customer_id }).first();
+        principalId = cust ? (cust as any).principal_id : params.subRecord.customer_id;
+      } catch {}
+    }
+
+    const creditNoteStatus = isUnresolved
+      ? 'PENDING_RECONCILIATION'
+      : (params.isPartialRefund ? 'Partially Refunded' : 'Refunded');
+
+    // 4. Persist in relational billing_credit_notes table if available
+    if (hasCreditNotesTable) {
+      const isPostgres = typeof params.trx?.raw === 'function';
+      const inTransaction = isPostgres && (Boolean(params.trx.isTransaction) || typeof params.trx.commit === 'function');
+      if (inTransaction) {
+        await params.trx.raw('SAVEPOINT sp_credit_note_insert');
+      }
+      try {
+        await params.trx('billing_credit_notes').insert({
+          id: `cn_${crypto.randomUUID().replace(/-/g, '')}`,
+          credit_note_number: creditNoteNumber,
+          original_invoice_number: originalInvoiceNumber,
+          customer_id: params.subRecord.customer_id,
+          subscription_id: params.subRecord.id,
+          refund_id: String(refundId),
+          refund_amount: params.refundAmount,
+          currency: (params.subRecord.currency || 'INR').toUpperCase(),
+          is_partial_refund: params.isPartialRefund,
+          supplier_name: 'Virexa AI Ventures Private Limited',
+          supplier_gstin: process.env.AIRA_SUPPLIER_GSTIN || null,
+          status: creditNoteStatus,
+          gateway: params.gateway,
+          metadata: JSON.stringify({
+            refundAmountMinorUnits: params.refundAmountMinorUnits
+          }),
+          created_at: params.now,
+          updated_at: params.now
+        });
+
+        if (inTransaction) {
+          await params.trx.raw('RELEASE SAVEPOINT sp_credit_note_insert');
+        }
+
+        // Update linked invoice status in relational billing_invoices table if available
+        try {
+          const hasInvTbl = typeof params.trx.schema?.hasTable === 'function'
+            ? await params.trx.schema.hasTable('billing_invoices')
+            : false;
+          if (hasInvTbl && originalInvoiceNumber && originalInvoiceNumber !== 'UNRESOLVED_ORIGINAL_INVOICE') {
+            await params.trx('billing_invoices')
+              .where({ invoice_number: originalInvoiceNumber })
+              .update({
+                status: creditNoteStatus,
+                updated_at: params.now
+              });
+          }
+        } catch {}
+      } catch (cnErr: any) {
+        if (inTransaction) {
+          try {
+            await params.trx.raw('ROLLBACK TO SAVEPOINT sp_credit_note_insert');
+          } catch {}
+        }
+
+        if (cnErr?.code === '23505' || String(cnErr?.message).includes('unique') || String(cnErr?.message).includes('duplicate')) {
+          // Uniqueness conflict! Retrieve existing credit note and verify integrity across all 6 dimensions
+          const existingCn = await params.trx('billing_credit_notes').where({ refund_id: String(refundId) }).first();
+          if (existingCn) {
+            this.verifyCreditNoteDimensions(existingCn, {
+              refundId: String(refundId),
+              subscriptionId: params.subRecord.id,
+              customerId: params.subRecord.customer_id,
+              currency: params.subRecord.currency || 'INR',
+              refundAmount: params.refundAmount,
+              originalInvoiceNumber
+            });
+
+            await this.clearCreditNotePendingReconciliation({
+              trx: params.trx,
+              customerId: params.subRecord.customer_id,
+              subscriptionId: params.subRecord.id,
+              refundId: String(refundId),
+              creditNoteNumber: existingCn.credit_note_number,
+              originalInvoiceNumber,
+              now: params.now
+            });
+
+            return {
+              creditNoteNumber: existingCn.credit_note_number,
+              originalInvoiceNumber: existingCn.original_invoice_number,
+              status: existingCn.status
+            };
+          }
+        }
+
+        // For non-uniqueness/real database errors: persist CREDIT_NOTE_PENDING_RECONCILIATION out-of-band through separate commit boundary, then re-throw so trx rolls back
+        await this.recordCreditNotePendingReconciliationOutOfBand({
+          customerId: params.subRecord.customer_id,
+          subscriptionId: params.subRecord.id,
+          refundId: String(refundId),
+          refundAmount: Number(params.refundAmount),
+          gateway: params.gateway,
+          error: cnErr?.message || String(cnErr),
+          now: params.now
+        });
+
+        throw cnErr;
+      }
+    }
+
+    // 5. Record binding in idempotent_operations
+    try {
+      let ins = params.trx('idempotent_operations').insert({
+        key: cnBindingKey,
+        principal_id: principalId || params.subRecord.customer_id,
+        operation_id: `cn_${params.subRecord.id}_${refundId}`,
+        operation_type: 'credit_note_binding',
+        payload_hash: String(params.refundAmount),
+        status: 'COMPLETED',
+        response_status: 200,
+        response_body: JSON.stringify({ creditNoteNumber, originalInvoiceNumber, isUnresolved, status: creditNoteStatus }),
+        locked_until: 0,
+        created_at: params.now,
+        updated_at: params.now
+      });
+      if (ins && typeof ins.onConflict === 'function') {
+        ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
+      }
+      await ins;
+    } catch {}
+
+    // 6. Only emit CREDIT_NOTE_ISSUED when relational persistence succeeded (or table absent in non-relational test)
+    await params.trx('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: params.subRecord.customer_id,
+      event_type: 'CREDIT_NOTE_ISSUED',
+      actor_type: 'system',
+      actor_id: creditNoteNumber,
+      payload: JSON.stringify({
+        creditNoteNumber,
+        originalInvoiceNumber,
+        date: new Date(params.now).toISOString().split('T')[0],
+        subscriptionId: params.subRecord.id,
+        refundAmount: params.refundAmount,
+        refundAmountMinorUnits: params.refundAmountMinorUnits,
+        totalAmountMinor: params.subRecord.amount_minor_units,
+        isPartialRefund: params.isPartialRefund,
+        currency: (params.subRecord.currency || 'INR').toUpperCase(),
+        supplierName: 'Virexa AI Ventures Private Limited',
+        supplierGstin: process.env.AIRA_SUPPLIER_GSTIN || undefined,
+        status: creditNoteStatus,
+        refundId,
+        gateway: params.gateway
+      }),
+      created_at: params.now
+    });
+
+    await this.clearCreditNotePendingReconciliation({
+      trx: params.trx,
+      customerId: params.subRecord.customer_id,
+      subscriptionId: params.subRecord.id,
+      refundId: String(refundId),
+      creditNoteNumber,
+      originalInvoiceNumber,
+      now: params.now
+    });
+
+    return {
+      creditNoteNumber,
+      originalInvoiceNumber,
+      status: creditNoteStatus
+    };
+  }
+
+  /**
+   * Public helper to process subscription refunds, updating status, linked invoices, and issuing credit notes.
+   */
+  public async handleSubscriptionRefund(params: {
+    gateway: 'razorpay' | 'cashfree' | string;
+    subRecord: any;
+    refundPayload: any;
+    now?: number;
+    trx?: any;
+    debugHookBeforeCommit?: (info: { refundId: string; creditNoteNumber?: string }) => Promise<void> | void;
+  }): Promise<void> {
+    const now = params.now || Date.now();
+    const dbClient = this.getDb();
+    const hasTransaction = typeof (dbClient as any).transaction === 'function';
+
+    const norm = this.parseNormalizedRefundPayload(params.gateway, params.refundPayload);
+
+    // Validate currency match
+    const subCurrency = (params.subRecord.currency || 'INR').toUpperCase();
+    if (norm.currency !== subCurrency) {
+      throw new Error(`REFUND_CURRENCY_MISMATCH: Refund currency ${norm.currency} does not match subscription currency ${subCurrency}`);
+    }
+
+    let meta: any = {};
+    try {
+      meta = typeof params.subRecord.metadata === 'string'
+        ? JSON.parse(params.subRecord.metadata)
+        : (params.subRecord.metadata || {});
+    } catch {}
+
+    const totalSettledMinor = Number(params.subRecord.amount_minor_units) || 0;
+    const currentCumulativeMinor = Number(meta.cumulativeRefundedMinorUnits) || 0;
+
+    // Check duplicate webhook idempotency:
+    if (Array.isArray(meta.processedRefundIds) && meta.processedRefundIds.includes(norm.refundId)) {
+      const executeIdempotentReplay = async (t: any) => {
+        await this.issueDurableCreditNote({
+          trx: t,
+          subRecord: params.subRecord,
+          refundEntity: { id: norm.refundId, payment_id: norm.paymentId, order_id: norm.orderId },
+          refundAmount: norm.refundAmountMajor,
+          refundAmountMinorUnits: norm.refundAmountMinor,
+          isPartialRefund: currentCumulativeMinor < totalSettledMinor,
+          gateway: params.gateway,
+          now
+        });
+      };
+      if (params.trx) {
+        await executeIdempotentReplay(params.trx);
+      } else if (hasTransaction) {
+        await (dbClient as Knex).transaction(executeIdempotentReplay);
+      } else {
+        await executeIdempotentReplay(dbClient);
+      }
+      return;
+    }
+
+    const newCumulativeMinor = currentCumulativeMinor + norm.refundAmountMinor;
+    if (newCumulativeMinor > totalSettledMinor) {
+      throw new Error(
+        `REFUND_EXCEEDS_SETTLED_AMOUNT: Cumulative refunded amount (${newCumulativeMinor} minor units) exceeds settled amount (${totalSettledMinor} minor units)`
+      );
+    }
+
+    let creditNoteResult: any = null;
+
+    const executeRefund = async (trx: any) => {
+      const isPartialRefund = newCumulativeMinor < totalSettledMinor;
+      const processedRefundIds = Array.isArray(meta.processedRefundIds)
+        ? [...meta.processedRefundIds, norm.refundId]
+        : [norm.refundId];
+
+      meta.refundId = norm.refundId;
+      meta.refundAmount = norm.refundAmountMajor;
+      meta.refundAmountMinorUnits = norm.refundAmountMinor;
+      meta.cumulativeRefundedMinorUnits = newCumulativeMinor;
+      meta.processedRefundIds = processedRefundIds;
+      meta.refundedAt = now;
+
+      if (isPartialRefund) {
+        meta.partialRefund = true;
+        await trx('subscriptions').where({ id: params.subRecord.id }).update({
+          metadata: JSON.stringify(meta),
+          updated_at: now
+        });
+
+        await trx('billing_audit_events').insert({
+          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+          customer_id: params.subRecord.customer_id,
+          event_type: 'SUBSCRIPTION_PARTIALLY_REFUNDED',
+          actor_type: 'gateway_webhook',
+          actor_id: norm.refundId,
+          payload: JSON.stringify({
+            subscriptionId: params.subRecord.id,
+            refundId: norm.refundId,
+            refundAmount: norm.refundAmountMajor,
+            refundAmountMinorUnits: norm.refundAmountMinor,
+            cumulativeRefundedMinorUnits: newCumulativeMinor,
+            totalAmountMinor: totalSettledMinor,
+            currency: subCurrency,
+            gateway: params.gateway
+          }),
+          created_at: now
+        });
+      } else {
+        meta.refunded = true;
+        await trx('subscriptions').where({ id: params.subRecord.id }).update({
+          status: 'refunded',
+          metadata: JSON.stringify(meta),
+          updated_at: now
+        });
+
+        await trx('billing_audit_events').insert({
+          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+          customer_id: params.subRecord.customer_id,
+          event_type: 'SUBSCRIPTION_REFUNDED',
+          actor_type: 'gateway_webhook',
+          actor_id: norm.refundId,
+          payload: JSON.stringify({
+            subscriptionId: params.subRecord.id,
+            refundId: norm.refundId,
+            amount: norm.refundAmountMajor,
+            refundAmountMinorUnits: norm.refundAmountMinor,
+            cumulativeRefundedMinorUnits: newCumulativeMinor,
+            totalAmountMinor: totalSettledMinor,
+            currency: subCurrency,
+            gateway: params.gateway
+          }),
+          created_at: now
+        });
+      }
+
+      creditNoteResult = await this.issueDurableCreditNote({
+        trx,
+        subRecord: params.subRecord,
+        refundEntity: { id: norm.refundId, payment_id: norm.paymentId, order_id: norm.orderId },
+        refundAmount: norm.refundAmountMajor,
+        refundAmountMinorUnits: norm.refundAmountMinor,
+        isPartialRefund,
+        gateway: params.gateway,
+        now
+      });
+
+      if (params.debugHookBeforeCommit) {
+        await params.debugHookBeforeCommit({
+          refundId: norm.refundId,
+          creditNoteNumber: creditNoteResult?.creditNoteNumber
+        });
+      }
+    };
+
+    try {
+      if (params.trx) {
+        await executeRefund(params.trx);
+      } else if (hasTransaction) {
+        await (dbClient as Knex).transaction(async (trx) => {
+          await executeRefund(trx);
+        });
+      } else {
+        await executeRefund(dbClient);
+      }
+    } catch (refundErr: any) {
+      await this.recordCreditNotePendingReconciliationOutOfBand({
+        customerId: params.subRecord.customer_id,
+        subscriptionId: params.subRecord.id,
+        refundId: norm.refundId,
+        refundAmount: norm.refundAmountMajor,
+        gateway: params.gateway,
+        error: refundErr?.message || String(refundErr),
+        now
+      });
+      throw refundErr;
+    }
+  }
+
+  /**
+   * Maps a relational billing_invoices database row to an InvoiceRecord.
+   */
+  public mapBillingInvoiceRow(row: any): InvoiceRecord {
+    return {
+      invoiceNumber: row.invoice_number,
+      date: new Date(Number(row.created_at) || Date.now()).toISOString().split('T')[0],
+      plan: row.plan_tier === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
+      currency: (row.currency || 'INR').toUpperCase(),
+      totalAmount: Number(row.total_amount) || 0,
+      taxableBase: Number(row.taxable_base) || 0,
+      gstAmount: Number(row.gst_amount) || 0,
+      cgstAmount: row.cgst_amount !== null && row.cgst_amount !== undefined ? Number(row.cgst_amount) : undefined,
+      sgstAmount: row.sgst_amount !== null && row.sgst_amount !== undefined ? Number(row.sgst_amount) : undefined,
+      igstAmount: row.igst_amount !== null && row.igst_amount !== undefined ? Number(row.igst_amount) : undefined,
+      sacCode: row.sac_code || '998431',
+      supplierName: row.supplier_name || 'Virexa AI Ventures Private Limited',
+      supplierGstin: row.supplier_gstin || undefined,
+      taxComplianceStatus: row.tax_compliance_status || 'COMPLIANT',
+      placeOfSupply: row.place_of_supply || 'UNKNOWN',
+      status: row.status || 'Paid',
+      pdfDownloadAvailable: Boolean(row.pdf_download_available)
+    };
+  }
+
+  /**
+   * Reconciles unissued invoices from TAX_INVOICE_PENDING_RECONCILIATION events.
+   */
+  async reconcilePendingInvoices(limit: number = 50): Promise<{ reconciled: number; failed: number }> {
+    const dbClient = this.getDb();
+    let pendingEvents: any[] = [];
+    try {
+      const q: any = dbClient('billing_audit_events').where({ event_type: 'TAX_INVOICE_PENDING_RECONCILIATION' });
+      if (typeof q.select === 'function') {
+        pendingEvents = (await q.select('*')) || [];
+      } else {
+        pendingEvents = (await q) || [];
+      }
+    } catch {
+      return { reconciled: 0, failed: 0 };
+    }
+
+    let reconciled = 0;
+    let failed = 0;
+
+    for (const ev of (pendingEvents || []).slice(0, limit)) {
+      try {
+        const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+        if (!p?.purchaseId) continue;
+
+        const sub = await dbClient('subscriptions').where({ id: p.purchaseId }).first();
+        if (!sub) { failed++; continue; }
+
+        const cust = await dbClient('billing_customers').where({ id: ev.customer_id }).first();
+        const principalId = cust ? (cust as any).principal_id : ev.customer_id;
+
+        const inv = await this.issueDurableInvoice({
+          trx: dbClient,
+          customerId: ev.customer_id,
+          principalId,
+          purchaseRecord: sub,
+          planTier: (sub as any).plan_id,
+          gateway: p.gateway || 'razorpay',
+          actualPaymentId: p.paymentId,
+          gatewayOrderId: p.gatewayOrderId,
+          cycleNumber: p.cycleNumber || 1,
+          now: Date.now()
+        });
+
+        if (inv) {
+          reconciled++;
+        } else {
+          failed++;
+        }
+      } catch {
+        failed++;
+      }
+    }
+
+    return { reconciled, failed };
+  }
+
+  /**
+   * Generates GST-compliant, sequential tax invoices for reconciled subscription payments.
+   * Fail-closed on missing or mismatched principal accounts.
+   */
+  async getInvoices(principalId: string): Promise<InvoiceRecord[]> {
+    try {
+      let customerId: string | null = null;
+      if (this.customDbClient) {
+        const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
+        customerId = existingCust ? (existingCust as any).id : null;
+      } else {
+        const customer = await commercialBillingService.getOrCreateCustomer(principalId).catch(() => null);
+        customerId = customer?.id || null;
+      }
+
+      // Fail-closed on unauthorized or missing customer
+      if (!customerId) return [];
+
+      const dbClient = this.getDb();
+
+      // Check relational billing_invoices table first if available
+      try {
+        const hasInvTable = typeof (dbClient as any).schema?.hasTable === 'function'
+          ? await (dbClient as any).schema.hasTable('billing_invoices')
+          : false;
+        if (hasInvTable) {
+          let invQuery: any = (dbClient as any)('billing_invoices').where({ customer_id: customerId });
+          if (typeof invQuery.orderBy === 'function') {
+            invQuery = invQuery.orderBy('created_at', 'desc');
+          }
+          const invRows = typeof invQuery.select === 'function' ? await invQuery.select('*') : (await invQuery || []);
+          if (Array.isArray(invRows) && invRows.length > 0) {
+            const cnByInvNumber = new Map<string, any>();
+            const cnBySubId = new Map<string, any>();
+            try {
+              const hasCnTable = typeof (dbClient as any).schema?.hasTable === 'function'
+                ? await (dbClient as any).schema.hasTable('billing_credit_notes')
+                : false;
+              if (hasCnTable) {
+                let cnQuery: any = (dbClient as any)('billing_credit_notes').where({ customer_id: customerId });
+                const cnRows = typeof cnQuery.select === 'function' ? await cnQuery.select('*') : (await cnQuery || []);
+                for (const cn of (cnRows || [])) {
+                  if (cn.original_invoice_number) cnByInvNumber.set(cn.original_invoice_number, cn);
+                  if (cn.subscription_id) cnBySubId.set(cn.subscription_id, cn);
+                }
+              }
+            } catch {}
+
+            return invRows.map((r: any) => {
+              const linkedCn = cnByInvNumber.get(r.invoice_number) || cnBySubId.get(r.subscription_id);
+              const mapped = this.mapBillingInvoiceRow(r);
+              if (linkedCn) {
+                mapped.status = linkedCn.is_partial_refund ? 'Partially Refunded' : 'Refunded';
+                mapped.creditNoteNumber = linkedCn.credit_note_number;
+                mapped.refundAmount = Number(linkedCn.refund_amount) || 0;
+              }
+              return mapped;
+            });
+          }
+        }
+      } catch {}
+
+      // Check durable issued invoices in billing_audit_events first
+      let invoiceAuditEvents: any[] = [];
+      try {
+        let auditQuery: any = dbClient('billing_audit_events').where({
+          customer_id: customerId,
+          event_type: 'TAX_INVOICE_ISSUED'
+        });
+        if (typeof auditQuery.orderBy === 'function') {
+          auditQuery = auditQuery.orderBy('created_at', 'desc');
+        }
+        if (typeof auditQuery.select === 'function') {
+          invoiceAuditEvents = (await auditQuery.select('*')) || [];
+        } else {
+          invoiceAuditEvents = (await auditQuery) || [];
+        }
+      } catch {}
+
+      // Check pending reconciliation audit events
+      let pendingAuditEvents: any[] = [];
+      try {
+        let pendingQuery: any = dbClient('billing_audit_events').where({
+          customer_id: customerId,
+          event_type: 'TAX_INVOICE_PENDING_RECONCILIATION'
+        });
+        if (typeof pendingQuery.select === 'function') {
+          pendingAuditEvents = (await pendingQuery.select('*')) || [];
+        } else {
+          pendingAuditEvents = (await pendingQuery) || [];
+        }
+      } catch {}
+
+      // Credit notes
+      let creditNoteEvents: any[] = [];
+      try {
+        const cnQuery: any = dbClient('billing_audit_events').where({
+          customer_id: customerId,
+          event_type: 'CREDIT_NOTE_ISSUED'
+        });
+        if (typeof cnQuery.select === 'function') {
+          creditNoteEvents = (await cnQuery.select('*')) || [];
+        } else {
+          creditNoteEvents = (await cnQuery) || [];
+        }
+      } catch {}
+
+      const creditNotesByInvoice = new Map<string, any>();
+      for (const cnEv of creditNoteEvents || []) {
+        try {
+          const cnPayload = typeof cnEv.payload === 'string' ? JSON.parse(cnEv.payload) : cnEv.payload;
+          if (cnPayload?.originalInvoiceNumber) {
+            creditNotesByInvoice.set(cnPayload.originalInvoiceNumber, cnPayload);
+          }
+          if (cnPayload?.subscriptionId) {
+            creditNotesByInvoice.set(`sub_${cnPayload.subscriptionId}`, cnPayload);
+          }
+        } catch {}
+      }
+
+      const invoices: InvoiceRecord[] = [];
+      const issuedSubscriptionCycles = new Set<string>();
+
+      // Sort descending by created_at
+      invoiceAuditEvents.sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
+
+      for (const ev of invoiceAuditEvents || []) {
+        try {
+          const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
+          if (p?.subscriptionId) {
+            issuedSubscriptionCycles.add(`${p.subscriptionId}_${p.cycleNumber || 1}`);
+          }
+          const linkedCn = creditNotesByInvoice.get(p.invoiceNumber) || (p.subscriptionId ? creditNotesByInvoice.get(`sub_${p.subscriptionId}`) : null);
+
+          let status = p.status || 'Paid';
+          if (linkedCn) {
+            status = linkedCn.isPartialRefund ? 'Partially Refunded' : 'Refunded';
+          }
+
+          invoices.push({
+            invoiceNumber: p.invoiceNumber || ev.actor_id,
+            date: p.date || new Date(Number(ev.created_at) || Date.now()).toISOString().split('T')[0],
+            plan: p.plan || 'AIRA Subscription',
+            currency: (p.currency || 'INR').toUpperCase(),
+            totalAmount: Number(p.totalAmount) || 0,
+            taxableBase: Number(p.taxableBase) || 0,
+            gstAmount: Number(p.gstAmount) || 0,
+            cgstAmount: p.cgstAmount !== undefined ? Number(p.cgstAmount) : undefined,
+            sgstAmount: p.sgstAmount !== undefined ? Number(p.sgstAmount) : undefined,
+            igstAmount: p.igstAmount !== undefined ? Number(p.igstAmount) : undefined,
+            sacCode: p.sacCode || '998431',
+            supplierName: p.supplierName || 'Virexa AI Ventures Private Limited',
+            supplierGstin: p.supplierGstin || process.env.AIRA_SUPPLIER_GSTIN || undefined,
+            taxComplianceStatus: p.taxComplianceStatus || 'COMPLIANT',
+            placeOfSupply: p.placeOfSupply || 'UNKNOWN',
+            status,
+            pdfDownloadAvailable: false,
+            creditNoteNumber: linkedCn?.creditNoteNumber,
+            refundAmount: linkedCn?.refundAmount ? Number(linkedCn.refundAmount) : undefined,
+            refundAmountMinorUnits: linkedCn?.refundAmountMinorUnits ? Number(linkedCn.refundAmountMinorUnits) : undefined
+          });
+        } catch {}
+      }
+
+      // Add truthful entry for any pending reconciliation events not yet fulfilled
+      for (const pev of pendingAuditEvents || []) {
+        try {
+          const pp = typeof pev.payload === 'string' ? JSON.parse(pev.payload) : pev.payload;
+          const key = `${pp.purchaseId}_${pp.cycleNumber || 1}`;
+          if (!issuedSubscriptionCycles.has(key)) {
+            invoices.push({
+              invoiceNumber: 'INV-PENDING-RECONCILIATION',
+              date: new Date(Number(pev.created_at) || Date.now()).toISOString().split('T')[0],
+              plan: pp.planTier === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
+              currency: 'INR',
+              totalAmount: Math.round(((Number(pp.amount) || 0) / 100) * 100) / 100,
+              taxableBase: 0,
+              gstAmount: 0,
+              sacCode: '998431',
+              supplierName: 'Virexa AI Ventures Private Limited',
+              taxComplianceStatus: 'PROVISIONAL_PENDING_RECONCILIATION' as any,
+              placeOfSupply: 'UNKNOWN',
+              status: 'Pending Reconciliation',
+              pdfDownloadAvailable: false
+            });
+          }
+        } catch {}
+      }
+
+      if (invoices.length > 0) {
+        return invoices;
+      }
+
+      // Fallback: Query subscriptions table for legacy / mock rows without audit events
+      let subs: SubscriptionRow[] = [];
+      const query = dbClient('subscriptions').where({ customer_id: customerId });
+      if (typeof query.orderBy === 'function') {
+        subs = await query.orderBy('created_at', 'desc');
+      } else if (typeof query.first === 'function') {
+        const firstRow = await query.first();
+        subs = firstRow ? [firstRow as any] : [];
+      } else if (typeof query.select === 'function') {
+        subs = await query.select('*');
+      }
+
+      const paidSubs = (subs || []).filter(s => s && s.customer_id === customerId && (s.status === 'active' || s.status === 'cancelled' || s.status === 'refunded'));
+
+      return paidSubs.map((sub, index) => {
+        let meta: any = {};
+        try {
+          meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+        } catch {}
+
+        const taxResult = taxDeterminationService.determineTax({
+          amountMinorUnits: Number(sub.amount_minor_units) || 0,
+          currency: sub.currency,
+          customerCountry: meta.customerCountry || meta.country,
+          customerState: meta.customerState || meta.billingState || meta.state,
+          placeOfSupply: meta.placeOfSupply,
+          lutNumber: meta.lutNumber || process.env.AIRA_LUT_NUMBER,
+          lutAvailable: meta.lutAvailable !== undefined ? meta.lutAvailable : (process.env.AIRA_LUT_AVAILABLE ? process.env.AIRA_LUT_AVAILABLE === 'true' : undefined),
+          supplierGstin: process.env.AIRA_SUPPLIER_GSTIN,
+          supplierGstinVerified: process.env.AIRA_SUPPLIER_GSTIN_VERIFIED ? process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true' : undefined
+        });
+
+        const dateStr = new Date(Number(sub.created_at) || Date.now()).toISOString().split('T')[0];
+        const invoiceNumber = `INV-2026-LEGACY-${String(index + 1).padStart(4, '0')}`;
+        const planName = COMMERCIAL_PLANS[sub.plan_id as PlanTier]?.name || (sub.plan_id === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
+
+        return {
+          invoiceNumber,
+          date: dateStr,
+          plan: planName,
+          currency: (sub.currency || 'INR').toUpperCase(),
+          totalAmount: taxResult.totalAmount,
+          taxableBase: taxResult.taxableBase,
+          gstAmount: taxResult.gstAmount,
+          cgstAmount: taxResult.cgstAmount,
+          sgstAmount: taxResult.sgstAmount,
+          igstAmount: taxResult.igstAmount,
+          sacCode: taxResult.sacCode,
+          supplierName: taxResult.supplierName,
+          supplierGstin: taxResult.supplierGstin,
+          taxComplianceStatus: taxResult.taxComplianceStatus as any,
+          placeOfSupply: taxResult.placeOfSupply,
+          status: sub.status === 'refunded' ? 'Refunded' : 'Paid',
+          pdfDownloadAvailable: false
+        };
+      });
+    } catch {
+      return [];
+    }
   }
 }
 

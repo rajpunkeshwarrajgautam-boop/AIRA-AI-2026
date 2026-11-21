@@ -94,11 +94,12 @@ export const EXPECTED_MIGRATIONS = Object.freeze([
   '029_authoritative_approval_resumption_targets.ts',
   '030_principal_workspace_authority.ts',
   '031_autonomous_agent_tasks.ts',
-  '032_reconcile_workflow_run_artifacts.ts'
+  '032_reconcile_workflow_run_artifacts.ts',
+  '033_billing_invoice_sequences.ts'
 ]);
 
 // ============================================================================
-// 2. Authoritative Table Catalog (48 Total Tables: 46 Application + 2 Knex)
+// 2. Authoritative Table Catalog (50 Total Tables: 48 Application + 2 Knex)
 // ============================================================================
 export const EXPECTED_TABLES = Object.freeze([
   'agents',
@@ -147,6 +148,8 @@ export const EXPECTED_TABLES = Object.freeze([
   'principal_workspace_authorities',
   'autonomous_agent_tasks',
   'durable_browser_sessions',
+  'billing_invoices',
+  'billing_credit_notes',
   'knex_migrations',
   'knex_migrations_lock'
 ]);
@@ -813,7 +816,7 @@ export async function runDisposableRestoreRehearsal(
   console.log(`  ✓ All ${offlineResult.diskMigrationsCount} migration files verified against the explicit catalog.\n`);
 
   console.log('[STEP 2/5] Parsing migration definitions for table catalog & schema structures...');
-  console.log(`  ✓ ${offlineResult.totalDiscoveredTables} tables discovered and verified against catalog (46 application + 2 knex metadata).`);
+  console.log(`  ✓ ${offlineResult.totalDiscoveredTables} tables discovered and verified against catalog (${offlineResult.totalDiscoveredTables - 2} application + 2 knex metadata).`);
   console.log(`  ✓ ${offlineResult.foreignKeyDefinitionsCount} foreign key constraint definitions cataloged across migrations.`);
   console.log(`  ✓ ${offlineResult.indexDefinitionsCount} index definitions cataloged across migrations.\n`);
 
@@ -848,7 +851,7 @@ export async function runDisposableRestoreRehearsal(
   console.log(`  - Mode:                OFFLINE CONTRACT AUDIT (Host lacks pg_dump / disposable DB)`);
   console.log(`  - Timestamp:           ${report.timestamp}`);
   console.log(`  - Migrations Verified: ${report.totalMigrationsVerified} / ${EXPECTED_MIGRATIONS.length} (PASS)`);
-  console.log(`  - Tables Audited:      ${report.totalTablesAudited} / 48 (PASS)`);
+  console.log(`  - Tables Audited:      ${report.totalTablesAudited} / ${EXPECTED_TABLES.length} (PASS)`);
   console.log(`  - Foreign Key Parity:  PASS (${report.foreignKeysVerified} definitions in AST)`);
   console.log(`  - Index Parity:        PASS (${report.indexesVerified} definitions in AST)`);
   console.log(`  - Deploy Verification: PASS (Core Tables: 11/11, Tool Call Columns: 11/11)`);

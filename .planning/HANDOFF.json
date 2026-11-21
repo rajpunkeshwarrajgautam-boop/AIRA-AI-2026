@@ -1,90 +1,44 @@
 {
-  "version": "1.0",
-  "timestamp": "2026-11-20T00:34:19+05:30",
-  "phase": "PR-193-MAINT",
-  "phase_name": "post-production-maintenance-security-concurrency-certification",
-  "phase_dir": ".planning",
-  "plan": 1,
-  "task": 6,
-  "total_tasks": 7,
-  "status": "paused",
-  "completed_tasks": [
-    {
-      "id": 1,
-      "name": "Analyze Express middleware order in apps/api/src/index.ts (mounting /api/announcements before line 570 createPrincipalMiddleware)",
-      "status": "done",
-      "commit": "ee552fc"
+  "schema": "handoff/v2",
+  "updated_at": "2026-11-21T08:31:48.266Z",
+  "phase": "GATE-3-LOCAL-INTEGRATION-REHEARSAL",
+  "integrated_sources": {
+    "staging_commit": "6499bfb5b8e6e8a508afebd5232afc04e8519f03",
+    "staging_pr": 193,
+    "candidate_commit": "29b66870c36fa57bf9bbb63f71b9953e0d8be0f3",
+    "candidate_pr": 196
+  },
+  "pr": {
+    "number": 196,
+    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/196",
+    "branch": "feat/cashfree-razorpay-subscriptions-20261120",
+    "target": "prod-release",
+    "state": "OPEN",
+    "is_draft": false
+  },
+  "certified_sha": "0ba41ee692001f6923f17ef14dd60060cb2a8b7e",
+  "previous_production_sha": "f429d90a1f4322a0d362956fb9e55a38cb3b5508",
+  "ci": {
+    "run_id": "44875214096",
+    "gates": {
+      "fast_ci": "SUCCESS",
+      "payment_durability_pg18": "SUCCESS",
+      "semantic_search_ci": "SUCCESS",
+      "disposable_pg16_cert": "SUCCESS",
+      "main_pr_certification": "SUCCESS",
+      "gitguardian": "SUCCESS",
+      "vercel_preview": "SUCCESS"
     },
-    {
-      "id": 2,
-      "name": "Remediate guest-session isolation and memory bounding in apps/api/src/account-routes.ts (BoundedGuestSessionStore max 500, ignore x-session-id/IP, local_only for cookieless)",
-      "status": "done",
-      "commit": "ee552fc"
-    },
-    {
-      "id": 3,
-      "name": "Implement PostgreSQL transactional advisory locking pg_advisory_xact_lock and forUpdate on memory_records with fail-closed 503 PERSISTENCE_UNAVAILABLE",
-      "status": "done",
-      "commit": "ee552fc"
-    },
-    {
-      "id": 4,
-      "name": "Implement anti-spoofing rejection for x-user-id header and body userId/principalId with HTTP 403 FORBIDDEN_OWNERSHIP_SPOOF",
-      "status": "done",
-      "commit": "ee552fc"
-    },
-    {
-      "id": 5,
-      "name": "Implement frontend pending sync queue, offline sync, and union-merge hydration upon auth state change in src/utils/announcements.ts and src/App.tsx",
-      "status": "done",
-      "commit": "ee552fc"
-    },
-    {
-      "id": 6,
-      "name": "Author test/announcements-routes.test.ts (9/9) and test/announcements-durability-postgres.test.ts (9/9), verify local suites (remediations 53/53, release-auth 52/52, secrets 0, runtime 8/8), commit ee552fc, push to PR #193, and verify all 7 GitHub CI workflows pass",
-      "status": "done",
-      "commit": "ee552fc"
-    }
-  ],
-  "remaining_tasks": [
-    {
-      "id": 7,
-      "name": "Perform repository owner review of draft PR #193, merge PR #193 into staging, and run post-merge smoke verification on https://staging.virexaaiventures.com",
-      "status": "not_started"
-    }
-  ],
-  "blockers": [],
-  "async_jobs": [],
-  "human_actions_pending": [
-    {
-      "action": "Repository owner / trusted operator review and merge PR #193 into staging",
-      "context": "All automated checks and CI gates have passed. Merging into staging deploys the maintenance fixes to staging.virexaaiventures.com.",
-      "blocking": false
-    }
-  ],
-  "decisions": [
-    {
-      "decision": "Cryptographically verified session as sole guest authority",
-      "rationale": "Client-supplied x-session-id header and req.ip are spoofable and violate cross-guest isolation. Unverified guests use local_only storage in browser localStorage.",
-      "phase": "PR-193-MAINT"
-    },
-    {
-      "decision": "PostgreSQL transaction-scoped advisory locks with hashtext(announcements:userId)",
-      "rationale": "Prevents read-modify-write lost updates during concurrent requests while isolating lock scopes per user with zero cross-account contention.",
-      "phase": "PR-193-MAINT"
-    },
-    {
-      "decision": "Fail-closed HTTP 503 PERSISTENCE_UNAVAILABLE on database exception",
-      "rationale": "Eliminated silent in-memory fallback on database errors to prevent masking outages and returning false 200 HTTP successes.",
-      "phase": "PR-193-MAINT"
-    },
-    {
-      "decision": "Preserve existing memory_records table with 0 database schema migrations",
-      "rationale": "Maintains zero DDL change invariant and preserves instant rollback capability.",
-      "phase": "PR-193-MAINT"
-    }
-  ],
-  "uncommitted_files": [],
-  "next_action": "Run /gsd-resume-work to resume, review PR #193 on GitHub, and merge into staging branch when authorized.",
-  "context_notes": "PR #193 on fix/post-production-maintenance-20261119 targeting staging is fully certified at commit ee552fc503b50b39e0248cc0a0dc606416fdd543. Production (prod-release) remains strict NO-GO."
+    "all_mandatory_green": true
+  },
+  "staging_maintenance": {
+    "pr193_sha": "ee552fc503b50b39e0248cc0a0dc606416fdd543",
+    "verified_guest_isolation": true,
+    "advisory_concurrency": true,
+    "session_pruning_guard": true
+  },
+  "release_verdict": "GATE_3_LOCAL_INTEGRATION_REHEARSED",
+  "commercial_billing": "NO_GO_UNTIL_KYC",
+  "aira_commercial_billing_enabled": false,
+  "status": "rehearsal_complete_pending_gate3_auth"
 }
