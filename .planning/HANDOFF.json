@@ -1,7 +1,7 @@
 {
   "schema": "handoff/v2",
-  "updated_at": "2026-11-21T16:06:00.000Z",
-  "phase": "GATE-4-STAGING-SANDBOX-REHEARSAL-IMPLEMENTATION",
+  "updated_at": "2026-11-21T16:41:00.000Z",
+  "phase": "GATE-4-STAGING-SANDBOX-REHEARSAL-REMEDIATION",
   "staging_baseline": {
     "commit": "11fd44f7cb4e88ea54677df43d476a5c3e0d79bb",
     "pr": 197,
@@ -17,7 +17,7 @@
     "target": "staging",
     "state": "OPEN",
     "is_draft": true,
-    "commit_sha": "b5aa86b46ea957f156361362979a16da52937e5d"
+    "commit_sha": "211eb6688601517f1b1de91fd5a3ced313faffa5"
   },
   "candidate_pr_production": {
     "number": 196,
@@ -29,13 +29,16 @@
     "status": "STRICT_HOLD"
   },
   "verification": {
-    "rehearsal_security_tests": "24_PASS_0_FAIL",
+    "rehearsal_security_tests": "35_PASS_0_FAIL",
     "recurring_subscriptions_tests": "25_PASS_0_FAIL",
     "remediations_tests": "53_PASS_0_FAIL",
     "invoice_concurrency_tests": "35_PASS_0_FAIL",
     "entitlements_integration_tests": "20_PASS_0_FAIL",
     "billing_subscription_readiness_tests": "9_PASS_0_FAIL",
-    "typecheck": "SUCCESS_0_ERRORS"
+    "commercial_payment_webhooks_tests": "4_PASS_0_FAIL_1_SKIP",
+    "total_automated_pass": "181_PASS_0_FAIL_1_SKIP",
+    "typecheck": "SUCCESS_0_ERRORS",
+    "production_build": "SUCCESS"
   },
   "release_verdict": "GATE_4_BLOCKED_PENDING_EXTERNAL_SANDBOX",
   "commercial_billing": "STRICT_HOLD",
