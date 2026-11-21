@@ -8,6 +8,10 @@ import {
 } from '../../../../packages/contracts/src/commercial.js';
 import { commercialBillingService } from './commercial-billing-service.js';
 import { taxDeterminationService, TaxDeterminationResult } from './tax-determination.js';
+import {
+  isStagingSandboxRehearsalActive,
+  assertStagingSandboxRehearsalAllowed
+} from './staging-sandbox-rehearsal-guard.js';
 
 export interface WebhookVerificationResult {
   valid: boolean;
@@ -302,14 +306,27 @@ export function assertCommercialFulfillmentAllowed(eventType: string, gateway: s
   const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
   const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
   const isIsolatedTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true') && !isProduction && !isStaging;
+  const rehearsalGateway: 'razorpay' | 'cashfree' | undefined = (gateway === 'razorpay' || gateway === 'cashfree') ? gateway : undefined;
 
   if (isProduction || isStaging) {
     if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+      if (isStaging && isStagingSandboxRehearsalActive()) {
+        const principalId = payload?.notes?.principal_id || payload?.data?.subscription_notes?.principal_id || payload?.subscription_notes?.principal_id;
+        assertStagingSandboxRehearsalAllowed({
+          gateway: rehearsalGateway,
+          principal: principalId ? { userId: principalId } : null
+        });
+        return; // Rehearsal fulfillment permitted for authenticated sandbox webhook
+      }
       const envName = isProduction ? 'production' : 'staging';
       throw new Error(`BILLING_UNAVAILABLE: Commercial billing fulfillment is currently disabled in ${envName}. Paid entitlements cannot be granted.`);
     }
   } else {
     if (!isIsolatedTest && process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
+      if (isStagingSandboxRehearsalActive()) {
+        assertStagingSandboxRehearsalAllowed({ gateway: rehearsalGateway });
+        return;
+      }
       throw new Error('BILLING_UNAVAILABLE: Paid fulfillment requires verified commercial billing activation or isolated test harness.');
     }
   }
@@ -390,6 +407,63 @@ export class PaymentGatewayService {
 
     this.memoryCreditNoteCounter++;
     return `CN-${year}-${String(this.memoryCreditNoteCounter).padStart(4, '0')}`;
+  }
+
+  /**
+   * Audit PostgreSQL invoice sequence allocation against recorded invoices.
+   * Identifies uncommitted draft sequence gaps caused by aborted transactions,
+   * satisfying statutory GST audit and cancellation ledger requirements (CGST Rule 46(b)).
+   */
+  async auditInvoiceSequenceGaps(trx?: any, year: number = 2026): Promise<{
+    currentSeq: number;
+    recordedInvoicesCount: number;
+    voidOrMissing: string[];
+    isGapless: boolean;
+  }> {
+    const isPg = trx && typeof trx.raw === 'function';
+    if (!isPg) {
+      return {
+        currentSeq: this.memoryInvoiceCounter,
+        recordedInvoicesCount: this.memoryInvoiceCounter,
+        voidOrMissing: [],
+        isGapless: true
+      };
+    }
+
+    try {
+      const seqRes = await trx.raw("SELECT last_value, is_called FROM billing_invoice_number_seq");
+      const row = seqRes?.rows?.[0] || seqRes?.[0];
+      if (!row || !row.is_called) {
+        return { currentSeq: 0, recordedInvoicesCount: 0, voidOrMissing: [], isGapless: true };
+      }
+      const currentSeq = Number(row.last_value);
+      const invoicesRes = await trx.raw("SELECT invoice_number FROM billing_invoices WHERE invoice_number LIKE ?", [`INV-${year}-%`]);
+      const rows = invoicesRes?.rows || invoicesRes || [];
+      const presentNumbers = new Set<number>();
+      for (const r of rows) {
+        const numStr = (r.invoice_number || '').split('-').pop();
+        if (numStr) {
+          const n = parseInt(numStr, 10);
+          if (!isNaN(n)) presentNumbers.add(n);
+        }
+      }
+
+      const voidOrMissing: string[] = [];
+      for (let i = 1; i <= currentSeq; i++) {
+        if (!presentNumbers.has(i)) {
+          voidOrMissing.push(`INV-${year}-${String(i).padStart(4, '0')}`);
+        }
+      }
+
+      return {
+        currentSeq,
+        recordedInvoicesCount: presentNumbers.size,
+        voidOrMissing,
+        isGapless: voidOrMissing.length === 0
+      };
+    } catch {
+      return { currentSeq: 0, recordedInvoicesCount: 0, voidOrMissing: [], isGapless: true };
+    }
   }
 
   setDbClient(client: Knex | PaymentDbClient | null): void {
@@ -1549,18 +1623,27 @@ export class PaymentGatewayService {
     principalId: string,
     planTier: PlanTier,
     currency: CurrencyCode = 'INR',
-    requestedGateway?: 'razorpay' | 'cashfree'
+    requestedGateway?: 'razorpay' | 'cashfree',
+    principalContext?: { userId: string; email?: string; isSynthetic?: boolean }
   ): Promise<CheckoutSessionResult> {
     const plan = COMMERCIAL_PLANS[planTier];
     if (!plan || planTier === 'free' || planTier === 'guest') {
       throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
     }
 
+    const isRehearsal = isStagingSandboxRehearsalActive();
     if (process.env.AIRA_COMMERCIAL_BILLING_ENABLED !== 'true') {
-      throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
+      if (isRehearsal) {
+        assertStagingSandboxRehearsalAllowed({
+          gateway: requestedGateway || 'razorpay',
+          principal: principalContext || { userId: principalId }
+        });
+      } else {
+        throw new Error('BILLING_UNAVAILABLE: Live checkout has not been approved or integrated.');
+      }
     }
 
-    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
     let price: { id: string; amountMinorUnits: number; currency: CurrencyCode } | undefined;
 
     if (!isSandbox) {
@@ -1744,6 +1827,7 @@ export class PaymentGatewayService {
         priceId: price.id,
         reconciliationStatus: 'AWAITING_PAYMENT',
         isSandbox,
+        rehearsal: isRehearsal,
         createdAt: now
       }),
       created_at: now,
@@ -2707,12 +2791,12 @@ export class PaymentGatewayService {
               sac_code: invoiceRecord.sacCode,
               supplier_name: invoiceRecord.supplierName,
               supplier_gstin: invoiceRecord.supplierGstin ?? null,
-              tax_compliance_status: invoiceRecord.taxComplianceStatus,
+              tax_compliance_status: isStagingSandboxRehearsalActive() ? 'SANDBOX_REHEARSAL' : invoiceRecord.taxComplianceStatus,
               place_of_supply: invoiceRecord.placeOfSupply,
               status: invoiceRecord.status,
               gateway: params.gateway,
               pdf_download_available: invoiceRecord.pdfDownloadAvailable,
-              metadata: JSON.stringify({}),
+              metadata: JSON.stringify(isStagingSandboxRehearsalActive() ? { is_sandbox: true, rehearsal: true } : {}),
               created_at: params.now,
               updated_at: params.now
             });

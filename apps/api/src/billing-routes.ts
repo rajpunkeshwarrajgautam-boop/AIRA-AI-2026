@@ -3,6 +3,7 @@ import { commercialBillingService } from './billing/commercial-billing-service.j
 import { paymentGatewayService, isTerminalError } from './billing/payment-gateway-service.js';
 import { productionReadinessService } from './billing/production-readiness.js';
 import { COMMERCIAL_PLANS } from '../../../packages/contracts/src/commercial.js';
+import { isStagingSandboxRehearsalActive } from './billing/staging-sandbox-rehearsal-guard.js';
 
 export function createBillingRoutes(): Router {
   const router = Router();
@@ -12,10 +13,11 @@ export function createBillingRoutes(): Router {
    */
   router.get('/plans', (_req: Request, res: Response) => {
     const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
-    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    const isRehearsal = isStagingSandboxRehearsalActive();
+    const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
     const billingStatus = isCheckoutAvailable
       ? 'active'
-      : (isSandbox ? 'sandbox' : 'checkout_disabled');
+      : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
     res.json({
       plans: Object.values(COMMERCIAL_PLANS).map(plan => ({
@@ -24,7 +26,7 @@ export function createBillingRoutes(): Router {
       })),
       topupPacks: [],
       billingStatus,
-      checkoutAvailable: isCheckoutAvailable,
+      checkoutAvailable: isCheckoutAvailable || isRehearsal,
       featuresCertified: true
     });
   });
@@ -39,14 +41,15 @@ export function createBillingRoutes(): Router {
     try {
       const entitlements = await commercialBillingService.getEntitlements(principal.userId);
       const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
-      const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+      const isRehearsal = isStagingSandboxRehearsalActive();
+      const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
       const billingStatus = isCheckoutAvailable
         ? 'active'
-        : (isSandbox ? 'sandbox' : 'checkout_disabled');
+        : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
       res.json({
         ...entitlements,
-        checkoutAvailable: isCheckoutAvailable,
+        checkoutAvailable: isCheckoutAvailable || isRehearsal,
         billingStatus,
         featuresCertified: true
       });
@@ -65,10 +68,11 @@ export function createBillingRoutes(): Router {
     try {
       const entitlements = await commercialBillingService.getEntitlements(principal.userId);
       const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
-      const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+      const isRehearsal = isStagingSandboxRehearsalActive();
+      const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
       const billingStatus = isCheckoutAvailable
         ? 'active'
-        : (isSandbox ? 'sandbox' : 'checkout_disabled');
+        : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
       res.json({
         principalId: principal.userId,
@@ -84,7 +88,7 @@ export function createBillingRoutes(): Router {
         monthlyUnitLimit: entitlements.monthlyStandardChatUnitsLimit,
         reasoningBoostsUsed: entitlements.reasoningBoostsLimit - entitlements.reasoningBoostsRemaining,
         reasoningBoostLimit: entitlements.reasoningBoostsLimit,
-        checkoutAvailable: isCheckoutAvailable,
+        checkoutAvailable: isCheckoutAvailable || isRehearsal,
         billingStatus,
         featuresCertified: true
       });
@@ -125,12 +129,19 @@ export function createBillingRoutes(): Router {
         principal.userId,
         planId,
         currency === 'USD' ? 'USD' : 'INR',
-        gateway
+        gateway,
+        principal
       );
       res.json(checkout);
     } catch (err: any) {
-      res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 500)
-        .json({ error: err?.message?.startsWith('BILLING_UNAVAILABLE') ? 'BILLING_UNAVAILABLE' : 'CHECKOUT_FAILED', message: err.message });
+      const isRehearsalDenied = err?.message?.startsWith('REHEARSAL_') || err?.message?.includes('SECURITY_VIOLATION');
+      res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : (isRehearsalDenied ? 403 : 500))
+        .json({
+          error: err?.message?.startsWith('BILLING_UNAVAILABLE')
+            ? 'BILLING_UNAVAILABLE'
+            : (isRehearsalDenied ? 'REHEARSAL_REJECTED' : 'CHECKOUT_FAILED'),
+          message: err.message
+        });
     }
   });
 
