@@ -1905,59 +1905,80 @@ export class PaymentGatewayService {
     }
 
     const now = Date.now();
+    const database = this.getDb();
+    const hasTransaction = typeof (database as any).transaction === 'function';
 
-    // Authoritative purchase record binding in database:
-    // Binds authenticated principal, customer ID, gateway order, plan, price, amount, and currency
-    await this.getDb()('subscriptions').insert({
-      id: purchaseId,
-      customer_id: customerId,
-      plan_id: planTier,
-      price_id: price.id,
-      status: 'pending',
-      gateway,
-      gateway_subscription_id: gatewayOrderId,
-      currency,
-      amount_minor_units: price.amountMinorUnits,
-      current_period_start: now,
-      current_period_end: now,
-      cancel_at_period_end: false,
-      metadata: JSON.stringify({
-        principalId,
-        customerId,
-        orderId: gatewayOrderId,
-        purchaseId,
-        planTier,
-        currency,
-        amount: price.amountMinorUnits,
-        priceId: price.id,
-        reconciliationStatus: 'AWAITING_PAYMENT',
-        isSandbox,
-        rehearsal: isRehearsal,
-        createdAt: now
-      }),
-      created_at: now,
-      updated_at: now
-    });
+    const persistCheckoutRecords = async (clientOrTrx: any) => {
+      // In rehearsal mode, verify live database session identity directly on the connection/transaction performing the write
+      if (isRehearsal) {
+        await assertStagingSandboxRehearsalAllowedAsync({
+          gateway: requestedGateway || 'razorpay',
+          principal: principalContext || { userId: principalId },
+          clientOrTrx
+        });
+      }
 
-    await this.getDb()('billing_audit_events').insert({
-      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-      customer_id: customerId,
-      event_type: 'CHECKOUT_ORDER_CREATED',
-      actor_type: 'principal',
-      actor_id: principalId,
-      payload: JSON.stringify({
-        purchaseId,
-        orderId: gatewayOrderId,
-        principalId,
-        planTier,
-        currency,
-        amount: price.amountMinorUnits,
-        priceId: price.id,
+      // Authoritative purchase record binding in database:
+      // Binds authenticated principal, customer ID, gateway order, plan, price, amount, and currency
+      await clientOrTrx('subscriptions').insert({
+        id: purchaseId,
+        customer_id: customerId,
+        plan_id: planTier,
+        price_id: price.id,
+        status: 'pending',
         gateway,
-        status: 'PENDING_PAYMENT'
-      }),
-      created_at: now
-    });
+        gateway_subscription_id: gatewayOrderId,
+        currency,
+        amount_minor_units: price.amountMinorUnits,
+        current_period_start: now,
+        current_period_end: now,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId,
+          customerId,
+          orderId: gatewayOrderId,
+          purchaseId,
+          planTier,
+          currency,
+          amount: price.amountMinorUnits,
+          priceId: price.id,
+          reconciliationStatus: 'AWAITING_PAYMENT',
+          isSandbox,
+          rehearsal: isRehearsal,
+          createdAt: now
+        }),
+        created_at: now,
+        updated_at: now
+      });
+
+      await clientOrTrx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: customerId,
+        event_type: 'CHECKOUT_ORDER_CREATED',
+        actor_type: 'principal',
+        actor_id: principalId,
+        payload: JSON.stringify({
+          purchaseId,
+          orderId: gatewayOrderId,
+          principalId,
+          planTier,
+          currency,
+          amount: price.amountMinorUnits,
+          priceId: price.id,
+          gateway,
+          status: 'PENDING_PAYMENT'
+        }),
+        created_at: now
+      });
+    };
+
+    if (hasTransaction) {
+      await (database as Knex).transaction(async (trx) => {
+        await persistCheckoutRecords(trx);
+      });
+    } else {
+      await persistCheckoutRecords(database);
+    }
 
     return {
       purchaseId,

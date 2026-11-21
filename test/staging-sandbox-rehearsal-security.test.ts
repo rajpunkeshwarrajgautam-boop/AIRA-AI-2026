@@ -48,7 +48,7 @@ import {
 describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
   const origEnv = { ...process.env };
 
-  const validStagingDbUrl = `postgresql://aira_staging_user:secret@${AUTHORIZED_STAGING_NEON_ENDPOINT}.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
+  const validStagingDbUrl = `postgresql://aira_staging_user@${AUTHORIZED_STAGING_NEON_ENDPOINT}.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
 
   beforeEach(() => {
     process.env = { ...origEnv };
@@ -259,7 +259,7 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
     });
 
     it('panics and aborts if connected database is Production Neon (old-sky-50952395)', () => {
-      const prodDbUrl = `postgresql://user:pass@${PRODUCTION_NEON_ENDPOINT_ID}.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
+      const prodDbUrl = `postgresql://aira_prod_test@${PRODUCTION_NEON_ENDPOINT_ID}.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
       assert.throws(
         () => validateStagingDatabaseIdentity({ databaseUrl: prodDbUrl }),
         /CRITICAL_SECURITY_VIOLATION: Connected database is PRODUCTION/
@@ -267,7 +267,7 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
     });
 
     it('panics and aborts if connected database is Commercial PR #92 branch', () => {
-      const pr92Url = `postgresql://user:pass@ep-ancient-sound-b3drtnp5.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
+      const pr92Url = `postgresql://aira_pr92_test@ep-ancient-sound-b3drtnp5.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`;
       assert.throws(
         () => validateStagingDatabaseIdentity({ databaseUrl: pr92Url }),
         /CRITICAL_SECURITY_VIOLATION: Connected database is Commercial PR #92 branch/
@@ -557,6 +557,76 @@ describe('Staging Sandbox Rehearsal Security & Isolation Matrix', () => {
         );
       } finally {
         paymentGatewayService.setDbClient(null);
+      }
+    });
+
+    it('verifies live session identity on the exact transaction connection during checkout record insertion', async () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.RAZORPAY_KEY_ID = 'rzp_test_key123';
+      process.env.DATABASE_URL = validStagingDbUrl;
+
+      let rawCallsOnTrx = 0;
+      const subscriptions: any[] = [];
+      const auditEvents: any[] = [];
+
+      const mockTrx = ((table: string) => ({
+        insert: async (data: any) => {
+          if (table === 'subscriptions') subscriptions.push(data);
+          if (table === 'billing_audit_events') auditEvents.push(data);
+          return [1];
+        }
+      })) as any;
+      mockTrx.raw = async () => {
+        rawCallsOnTrx++;
+        return {
+          rows: [{
+            db_name: 'neondb',
+            neon_project_id: AUTHORIZED_STAGING_NEON_PROJECT_ID,
+            neon_branch_id: AUTHORIZED_STAGING_NEON_BRANCH,
+            neon_endpoint_id: AUTHORIZED_STAGING_NEON_ENDPOINT
+          }]
+        };
+      };
+
+      const mockDb = ((table: string) => ({
+        where: () => ({ first: async () => null }),
+        insert: async () => [1]
+      })) as any;
+      mockDb.raw = async () => ({
+        rows: [{
+          db_name: 'neondb',
+          neon_project_id: AUTHORIZED_STAGING_NEON_PROJECT_ID,
+          neon_branch_id: AUTHORIZED_STAGING_NEON_BRANCH,
+          neon_endpoint_id: AUTHORIZED_STAGING_NEON_ENDPOINT
+        }]
+      });
+      mockDb.transaction = async (cb: (trx: any) => Promise<any>) => {
+        return await cb(mockTrx);
+      };
+
+      paymentGatewayService.setDbClient(mockDb);
+      paymentGatewayService.setGatewayTransport(async () => ({
+        gatewayOrderId: 'sub_rzp_mock_pooled',
+        shortUrl: 'https://rzp.io/i/pooled'
+      }));
+
+      try {
+        const result = await paymentGatewayService.createSubscriptionCheckout(
+          'usr_synth_plus_2026',
+          'plus',
+          'INR',
+          'razorpay',
+          { userId: 'usr_synth_plus_2026', isSynthetic: true }
+        );
+
+        assert.equal(result.orderId, 'sub_rzp_mock_pooled');
+        assert.equal(subscriptions.length, 1);
+        assert.equal(auditEvents.length, 1);
+        assert.ok(rawCallsOnTrx >= 1, 'Live session verification must execute on the exact transaction connection');
+      } finally {
+        paymentGatewayService.setDbClient(null);
+        paymentGatewayService.setGatewayTransport(null);
       }
     });
   });
