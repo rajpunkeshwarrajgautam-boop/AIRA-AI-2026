@@ -57,7 +57,7 @@ export class ProductionReadinessService {
     const timestampStr = new Date().toISOString();
 
     const hasLiveRazorpay = Boolean(process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_'));
-    const hasWebhookSecret = Boolean(process.env.RAZORPAY_WEBHOOK_SECRET || process.env.CASHFREE_WEBHOOK_SECRET);
+    const hasWebhookSecret = Boolean(process.env.RAZORPAY_WEBHOOK_SECRET || process.env.CASHFREE_WEBHOOK_SECRET || process.env.CASHFREE_SECRET_KEY);
     const hasSupplierGstin = Boolean(process.env.AIRA_SUPPLIER_GSTIN && process.env.AIRA_SUPPLIER_GSTIN.trim().length === 15);
     const hasSupplierGstinVerified = Boolean(hasSupplierGstin && process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true');
     const hasFinanceTaxSignOff = process.env.AIRA_FINANCE_TAX_SIGNOFF === 'true';
