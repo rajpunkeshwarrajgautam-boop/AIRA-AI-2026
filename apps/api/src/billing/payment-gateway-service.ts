@@ -294,12 +294,24 @@ export const SAFE_RECONCILIATION_EVENTS = new Set([
 
 export function assertCommercialFulfillmentAllowed(eventType: string, gateway: string, payload: any): void {
   // 1. Safe reconciliation (cancellations, halts, refunds) is always permitted
-  if (SAFE_RECONCILIATION_EVENTS.has(eventType)) {
+  const rawStatus = (
+    payload?.data?.subscription_details?.subscription_status ||
+    payload?.data?.subscription?.subscription_status ||
+    payload?.data?.subscription?.status ||
+    payload?.data?.subscription_details?.status ||
+    payload?.subscription?.status ||
+    ''
+  ).toUpperCase();
+
+  const isSafeStatusChange = (eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') &&
+    ['CANCELLED', 'HALTED', 'PAUSED', 'EXPIRED', 'ON_HOLD', 'TERMINATED', 'FAILED'].includes(rawStatus);
+
+  if (SAFE_RECONCILIATION_EVENTS.has(eventType) || isSafeStatusChange) {
     return;
   }
 
   // 2. Paid fulfillment requires strict kill switch enforcement
-  const isPaidFulfillment = PAID_FULFILLMENT_EVENTS.has(eventType);
+  const isPaidFulfillment = PAID_FULFILLMENT_EVENTS.has(eventType) || eventType === 'SUBSCRIPTION_STATUS_CHANGED';
   if (!isPaidFulfillment) {
     // Unrecognized / unsupported event attempting activation: fail-closed
     throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Unsupported or unverified webhook event class '${eventType}'. Refusing fulfillment.`);
@@ -345,7 +357,7 @@ export class PaymentGatewayService {
 
   constructor() {
     this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
-    this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || '';
+    this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || process.env.CASHFREE_SECRET_KEY || '';
   }
 
   /**
@@ -686,9 +698,10 @@ export class PaymentGatewayService {
 
   /**
    * Cryptographically verify Cashfree Webhook HMAC-SHA256 signature using raw body and timestamp.
+   * Signs over `${timestamp}${rawBody}` using Cashfree API Secret Key (or legacy CASHFREE_WEBHOOK_SECRET).
    */
   verifyCashfreeWebhook(rawBody: string, signature: string, timestamp: string, secretOverride?: string): WebhookVerificationResult {
-    const secret = secretOverride || this.cashfreeSecret || process.env.CASHFREE_WEBHOOK_SECRET;
+    const secret = secretOverride || this.cashfreeSecret || process.env.CASHFREE_WEBHOOK_SECRET || process.env.CASHFREE_SECRET_KEY;
     if (!secret || !signature || !rawBody || !timestamp) {
       return { valid: false, error: 'Missing webhook secret, signature, body, or timestamp.' };
     }
@@ -732,18 +745,111 @@ export class PaymentGatewayService {
   }
 
   /**
+   * Resolves a deterministic, collision-resistant event identifier for Cashfree webhook events.
+   *
+   * Deduplication Hierarchy:
+   * 1. Header-level delivery identifier (e.g. x-idempotency-key, x-idempotency-header, idempotency-key, x-webhook-event-id)
+   * 2. Explicit payload body event token (event_id, data.event_id, id)
+   * 3. Granular entity-level semantic discriminators:
+   *    - Payment notifications: evt_cf_pay_${eventType}_${paymentId}_${paymentStatus}
+   *    - Refund notifications: evt_cf_ref_${eventType}_${refundId}
+   *    - Subscription status notifications: evt_cf_sub_${eventType}_${subId}_${rawStatus}${cycle ? `_c${cycle}` : ''}${eventTime ? `_${eventTime}` : ''}
+   *    - Order-level notifications: evt_cf_ord_${eventType}_${orderId}_${orderStatus}
+   *    - Subscription generic notifications: evt_cf_sub_${eventType}_${subId}${cycle ? `_c${cycle}` : ''}
+   * 4. Deterministic hash fallback on canonical rawBody (stable across identical delivery retries)
+   */
+  resolveCashfreeWebhookEventId(
+    payload: any,
+    rawBody: string,
+    options?: { idempotencyHeader?: string; eventIdHeader?: string }
+  ): string {
+    const eventType = payload.type || payload.event || 'cashfree.webhook';
+
+    // 1. Authoritative request header token (x-idempotency-key / x-idempotency-header / x-event-id)
+    const headerToken = options?.idempotencyHeader || options?.eventIdHeader;
+    if (headerToken && typeof headerToken === 'string' && headerToken.trim()) {
+      return headerToken.trim();
+    }
+
+    // 2. Explicit payload body event token
+    const payloadEventId = payload.event_id || payload.id || payload.data?.event_id;
+    if (payloadEventId && typeof payloadEventId === 'string' && payloadEventId.trim()) {
+      return payloadEventId.trim();
+    }
+
+    // 3. Entity-specific granular discriminators
+    const paymentEntity = payload.data?.payment || payload.payment;
+    const paymentId = paymentEntity?.cf_payment_id || paymentEntity?.payment_id || paymentEntity?.id;
+
+    const refundEntity = payload.data?.refund || payload.refund;
+    const refundId = refundEntity?.cf_refund_id || refundEntity?.refund_id || refundEntity?.id;
+
+    const subEntity = payload.data?.subscription_details || payload.data?.subscription || payload.subscription;
+    const subId = subEntity?.cf_subscription_id || subEntity?.subscription_id || subEntity?.id;
+    const rawSubStatus = (
+      subEntity?.subscription_status ||
+      subEntity?.status ||
+      payload.data?.subscription_details?.subscription_status ||
+      payload.data?.subscription_details?.status ||
+      payload.data?.subscription?.subscription_status ||
+      payload.data?.subscription?.status ||
+      payload.subscription?.status ||
+      ''
+    ).toUpperCase();
+
+    const orderEntity = payload.data?.order || payload.order;
+    const orderId = orderEntity?.order_id || orderEntity?.id || payload.order_id;
+    const orderStatus = (orderEntity?.order_status || orderEntity?.status || '').toUpperCase();
+
+    const eventTime = payload.event_time || payload.data?.event_time || subEntity?.event_time;
+    const cycle = subEntity?.current_cycle !== undefined ? subEntity.current_cycle : (subEntity?.paid_count !== undefined ? subEntity.paid_count : undefined);
+
+    if (paymentId) {
+      // Payment attempt discriminator takes precedence over order_id
+      const payStatus = (paymentEntity?.payment_status || paymentEntity?.status || '').toUpperCase();
+      return `evt_cf_pay_${eventType}_${paymentId}${payStatus ? `_${payStatus}` : ''}`;
+    }
+
+    if (refundId) {
+      return `evt_cf_ref_${eventType}_${refundId}`;
+    }
+
+    if (subId && (
+      eventType === 'SUBSCRIPTION_STATUS_CHANGED' ||
+      eventType === 'SUBSCRIPTION_STATUS_CHANGE' ||
+      eventType.startsWith('SUBSCRIPTION_')
+    )) {
+      return `evt_cf_sub_${eventType}_${subId}${rawSubStatus ? `_${rawSubStatus}` : ''}${cycle !== undefined ? `_c${cycle}` : ''}${eventTime ? `_${eventTime}` : ''}`;
+    }
+
+    if (orderId) {
+      return `evt_cf_ord_${eventType}_${orderId}${orderStatus ? `_${orderStatus}` : ''}`;
+    }
+
+    if (subId) {
+      return `evt_cf_sub_${eventType}_${subId}${cycle !== undefined ? `_c${cycle}` : ''}`;
+    }
+
+    // 4. Stable deterministic fallback for identical retries
+    return `evt_cf_h_${crypto.createHash('sha256').update(rawBody).digest('hex').slice(0, 32)}`;
+  }
+
+  /**
    * Process Cashfree Webhook Event idempotently with durable lifecycle and atomic state transitions.
    */
-  async processCashfreeWebhook(rawBody: string, signature: string, timestamp: string): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
+  async processCashfreeWebhook(
+    rawBody: string,
+    signature: string,
+    timestamp: string,
+    options?: { idempotencyHeader?: string; eventIdHeader?: string }
+  ): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
     const verification = this.verifyCashfreeWebhook(rawBody, signature, timestamp);
     if (!verification.valid) {
       throw new Error(`FORBIDDEN_WEBHOOK: ${verification.error}`);
     }
 
     const payload = JSON.parse(rawBody);
-    const cfEventId = payload.event_id || payload.data?.order?.order_id || payload.data?.payment?.cf_payment_id || payload.id;
-    const deterministicFallback = `evt_cf_${crypto.createHash('sha256').update(`${timestamp}_${rawBody}`).digest('hex').slice(0, 32)}`;
-    const eventId = cfEventId || deterministicFallback;
+    const eventId = this.resolveCashfreeWebhookEventId(payload, rawBody, options);
     const eventType = payload.type || payload.event || 'cashfree.webhook';
 
     return await this.executeWebhookTransaction('cashfree', eventId, eventType, rawBody, payload);
@@ -970,6 +1076,34 @@ export class PaymentGatewayService {
     // Re-verify commercial fulfillment policy within handler
     assertCommercialFulfillmentAllowed(eventType, gateway, payload);
 
+    // Validate subscription status for status change webhooks
+    if (eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') {
+      const rawStatus = (
+        payload?.data?.subscription_details?.subscription_status ||
+        payload?.data?.subscription_details?.status ||
+        payload?.data?.subscription?.subscription_status ||
+        payload?.data?.subscription?.status ||
+        payload?.subscription?.status ||
+        ''
+      ).toUpperCase();
+
+      const VALID_SUBSCRIPTION_STATUSES = new Set([
+        'INITIALIZED',
+        'BANK_APPROVAL_PENDING',
+        'ACTIVE',
+        'ON_HOLD',
+        'PAUSED',
+        'HALTED',
+        'CANCELLED',
+        'COMPLETED',
+        'EXPIRED'
+      ]);
+
+      if (!VALID_SUBSCRIPTION_STATUSES.has(rawStatus)) {
+        throw new TerminalRejectionError(`UNSUPPORTED_SUBSCRIPTION_STATUS: Received invalid or unsupported subscription status '${rawStatus}'.`);
+      }
+    }
+
     if (
       eventType === 'subscription.charged' ||
       eventType === 'subscription.activated' ||
@@ -982,10 +1116,18 @@ export class PaymentGatewayService {
       eventType === 'SUBSCRIPTION_PAYMENT_SUCCESS' ||
       eventType === 'SUBSCRIPTION_ACTIVATED' ||
       eventType === 'SUBSCRIPTION_CHARGED' ||
-      (eventType === 'SUBSCRIPTION_STATUS_CHANGE' && (payload.data?.subscription?.subscription_status === 'ACTIVE' || payload.data?.subscription?.status === 'ACTIVE')) ||
+      ((eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') && !(
+        payload.data?.subscription_details?.subscription_status === 'CANCELLED' ||
+        payload.data?.subscription_details?.subscription_status === 'HALTED' ||
+        payload.data?.subscription?.subscription_status === 'CANCELLED' ||
+        payload.data?.subscription?.subscription_status === 'HALTED' ||
+        payload.data?.subscription?.status === 'CANCELLED' ||
+        payload.data?.subscription?.status === 'HALTED'
+      )) ||
       (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type !== 'credit_topup')
     ) {
-      const subEntity = payload.payload?.subscription?.entity || payload.payload?.invoice?.entity || payload.subscription || payload.data?.subscription || {};
+      const subEntity = payload.data?.subscription_details || payload.payload?.subscription?.entity || payload.payload?.invoice?.entity || payload.subscription || payload.data?.subscription || {};
+      const planEntity = payload.data?.plan_details || payload.plan || {};
       const invoiceEntity = payload.payload?.invoice?.entity || payload.invoice || {};
       const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
       const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
@@ -999,6 +1141,7 @@ export class PaymentGatewayService {
       const cycleNumber = subEntity.paid_count !== undefined ? Number(subEntity.paid_count)
         : subEntity.current_cycle !== undefined ? Number(subEntity.current_cycle)
         : payload.data?.subscription?.current_cycle !== undefined ? Number(payload.data?.subscription?.current_cycle)
+        : payload.data?.subscription_details?.current_cycle !== undefined ? Number(payload.data?.subscription_details?.current_cycle)
         : undefined;
 
       const explicitPeriodStart = subEntity.current_start ? Number(subEntity.current_start) * 1000
@@ -1008,6 +1151,9 @@ export class PaymentGatewayService {
 
       const gatewayOrderId = subEntity.id ||
         subEntity.subscription_id ||
+        subEntity.cf_subscription_id ||
+        payload.data?.subscription_details?.subscription_id ||
+        payload.data?.subscription_details?.cf_subscription_id ||
         payload.data?.subscription?.subscription_id ||
         invoiceEntity.subscription_id ||
         invoiceEntity.order_id ||
@@ -1054,6 +1200,55 @@ export class PaymentGatewayService {
         throw new TerminalRejectionError(`INVALID_STATE_TRANSITION: Cannot activate or renew cancelled subscription ${purchaseRecord.id}.`);
       }
 
+      const hasPaymentEvidence = Boolean(
+        actualPaymentId &&
+        (paymentEntity.payment_status === 'SUCCESS' || paymentEntity.status === 'captured' || paymentEntity.status === 'paid')
+      );
+
+      // Handle status-only notification (e.g. SUBSCRIPTION_STATUS_CHANGED with ACTIVE / BANK_APPROVAL_PENDING without payment evidence)
+      if ((eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') && !hasPaymentEvidence) {
+        const rawStatus = (
+          subEntity.subscription_status ||
+          subEntity.status ||
+          payload.data?.subscription_details?.subscription_status ||
+          payload.data?.subscription?.subscription_status ||
+          'UNKNOWN'
+        ).toUpperCase();
+
+        let existingMeta: any = {};
+        try {
+          existingMeta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
+        } catch {}
+
+        await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+          metadata: JSON.stringify({
+            ...existingMeta,
+            gateway_subscription_status: rawStatus,
+            status_recorded_at: now
+          }),
+          updated_at: now
+        });
+
+        await trx('billing_audit_events').insert({
+          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+          customer_id: purchaseRecord.account_id || purchaseRecord.customer_id,
+          event_type: 'SUBSCRIPTION_STATUS_RECORDED',
+          actor_type: 'system',
+          actor_id: purchaseRecord.id,
+          payload: JSON.stringify({
+            subscriptionId: purchaseRecord.id,
+            gatewaySubscriptionId: gatewayOrderId,
+            gatewayStatus: rawStatus,
+            eventType,
+            gateway,
+            note: 'Status-only notification recorded. No entitlements granted or invoice issued without payment confirmation.'
+          }),
+          created_at: now
+        });
+
+        return; // Acknowledged status-only update, return early without entitlement mutation or invoice
+      }
+
       // Validate payment state
       if (paymentEntity.status && paymentEntity.status !== 'captured' && paymentEntity.status !== 'paid') {
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Razorpay payment status is '${paymentEntity.status}', expected 'captured' or 'paid'.`);
@@ -1066,7 +1261,17 @@ export class PaymentGatewayService {
       }
 
       // 1. Currency verification (strict uppercase match)
-      const receivedCurrency = (subEntity.currency || invoiceEntity.currency || paymentEntity.currency || orderEntity.currency || '').toUpperCase();
+      const receivedCurrency = (
+        subEntity.currency ||
+        subEntity.plan_currency ||
+        planEntity.plan_currency ||
+        invoiceEntity.currency ||
+        paymentEntity.currency ||
+        paymentEntity.payment_currency ||
+        orderEntity.currency ||
+        orderEntity.order_currency ||
+        ''
+      ).toUpperCase();
       if (!receivedCurrency || receivedCurrency !== purchaseRecord.currency.toUpperCase()) {
         throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Currency mismatch. Expected ${purchaseRecord.currency}, received ${receivedCurrency}`);
       }
@@ -1076,8 +1281,9 @@ export class PaymentGatewayService {
         : invoiceEntity.amount_paid !== undefined ? Number(invoiceEntity.amount_paid)
         : invoiceEntity.amount !== undefined ? Number(invoiceEntity.amount)
         : paymentEntity.amount !== undefined ? Number(paymentEntity.amount)
-        : orderEntity.amount !== undefined ? Number(orderEntity.amount)
-        : (orderEntity.order_amount !== undefined ? Math.round(Number(orderEntity.order_amount) * 100) : null);
+        : (paymentEntity.payment_amount !== undefined ? Math.round(Number(paymentEntity.payment_amount) * 100)
+        : (orderEntity.amount !== undefined ? Number(orderEntity.amount)
+        : (orderEntity.order_amount !== undefined ? Math.round(Number(orderEntity.order_amount) * 100) : null)));
 
       if (receivedAmount === null || receivedAmount <= 0 || !Number.isInteger(receivedAmount)) {
         throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Received invalid or non-integer minor-unit payment amount: ${receivedAmount}`);
@@ -1454,43 +1660,72 @@ export class PaymentGatewayService {
       eventType === 'subscription.halted' ||
       eventType === 'SUBSCRIPTION_CANCELLED' ||
       eventType === 'SUBSCRIPTION_HALTED' ||
-      (eventType === 'SUBSCRIPTION_STATUS_CHANGE' && (payload.data?.subscription?.subscription_status === 'CANCELLED' || payload.data?.subscription?.subscription_status === 'HALTED' || payload.data?.subscription?.status === 'CANCELLED' || payload.data?.subscription?.status === 'HALTED'))
+      ((eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') && (
+        payload.data?.subscription_details?.subscription_status === 'CANCELLED' ||
+        payload.data?.subscription_details?.subscription_status === 'HALTED' ||
+        payload.data?.subscription?.subscription_status === 'CANCELLED' ||
+        payload.data?.subscription?.subscription_status === 'HALTED' ||
+        payload.data?.subscription?.status === 'CANCELLED' ||
+        payload.data?.subscription?.status === 'HALTED' ||
+        payload.subscription?.status === 'CANCELLED' ||
+        payload.subscription?.status === 'HALTED'
+      ))
     ) {
-      const subEntity = payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
-      const gatewaySubId = subEntity.id || payload.data?.subscription?.subscription_id;
-      if (gatewaySubId) {
-        const existingSub = await trx('subscriptions').where({ gateway_subscription_id: gatewaySubId }).first();
-        if (existingSub) {
-          let meta: any = {};
-          try {
-            meta = typeof existingSub.metadata === 'string' ? JSON.parse(existingSub.metadata) : (existingSub.metadata || {});
-          } catch {}
-          meta.cancellation_status = 'CANCELLATION_CONFIRMED';
-          meta.cancelled_at = now;
+      const subEntity = payload.data?.subscription_details || payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
+      const gatewaySubId = subEntity.id ||
+        subEntity.subscription_id ||
+        subEntity.cf_subscription_id ||
+        payload.data?.subscription_details?.subscription_id ||
+        payload.data?.subscription_details?.cf_subscription_id ||
+        payload.data?.subscription?.subscription_id;
 
-          await trx('subscriptions').where({ id: existingSub.id }).update({
-            status: 'cancelled',
-            cancelled_at: now,
-            cancel_at_period_end: false,
-            metadata: JSON.stringify(meta),
-            updated_at: now
-          });
-
-          await trx('billing_audit_events').insert({
-            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-            customer_id: existingSub.customer_id,
-            event_type: 'SUBSCRIPTION_CANCELLED',
-            actor_type: 'gateway_webhook',
-            actor_id: gatewaySubId,
-            payload: JSON.stringify({
-              subscriptionId: existingSub.id,
-              cancellation_status: 'CANCELLATION_CONFIRMED',
-              cancelled_at: now
-            }),
-            created_at: now
-          });
-        }
+      if (!gatewaySubId) {
+        throw new TerminalRejectionError('BILLING_RECONCILIATION_FAILED: Missing subscription identifier in cancellation webhook.');
       }
+
+      let existingSub = await trx('subscriptions').where({ gateway_subscription_id: gatewaySubId }).first();
+      if (!existingSub) {
+        existingSub = await trx('subscriptions').where({ id: gatewaySubId }).first();
+      }
+
+      if (!existingSub) {
+        const isProduction = isProductionRuntime();
+        const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
+        if (!isProduction && !isStaging && (gatewaySubId.startsWith('ord_test_') || gatewaySubId.startsWith('test_'))) {
+          return;
+        }
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No authoritative subscription record found for cancellation ${gatewaySubId}.`);
+      }
+
+      let meta: any = {};
+      try {
+        meta = typeof existingSub.metadata === 'string' ? JSON.parse(existingSub.metadata) : (existingSub.metadata || {});
+      } catch {}
+      meta.cancellation_status = 'CANCELLATION_CONFIRMED';
+      meta.cancelled_at = now;
+
+      await trx('subscriptions').where({ id: existingSub.id }).update({
+        status: 'cancelled',
+        cancelled_at: now,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify(meta),
+        updated_at: now
+      });
+
+      await trx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: existingSub.customer_id,
+        event_type: 'SUBSCRIPTION_CANCELLED',
+        actor_type: 'gateway_webhook',
+        actor_id: gatewaySubId,
+        payload: JSON.stringify({
+          subscriptionId: existingSub.id,
+          cancellation_status: 'CANCELLATION_CONFIRMED',
+          cancelled_at: now
+        }),
+        created_at: now
+      });
+
       return;
     }
 

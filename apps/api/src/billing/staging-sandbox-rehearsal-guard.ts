@@ -349,12 +349,12 @@ export function validateTestGatewayCredentials(
 
     if (!isLocalFixture) {
       const secretKey = (process.env.CASHFREE_SECRET_KEY || '').trim();
-      const webhookSecret = (process.env.CASHFREE_WEBHOOK_SECRET || '').trim();
+      const webhookSecret = (process.env.CASHFREE_WEBHOOK_SECRET || secretKey || '').trim();
       if (!secretKey || secretKey.includes('mock')) {
         throw new Error('SECURITY_VIOLATION: Valid CASHFREE_SECRET_KEY is required in deployed rehearsal.');
       }
       if (!webhookSecret || webhookSecret.includes('mock')) {
-        throw new Error('SECURITY_VIOLATION: Valid CASHFREE_WEBHOOK_SECRET is required in deployed rehearsal.');
+        throw new Error('SECURITY_VIOLATION: Valid CASHFREE_WEBHOOK_SECRET or CASHFREE_SECRET_KEY is required in deployed rehearsal.');
       }
     }
   }

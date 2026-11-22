@@ -1,24 +1,24 @@
 {
   "schema": "handoff/v2",
-  "updated_at": "2026-11-21T17:31:00.000Z",
-  "phase": "GATE-4-STAGING-SANDBOX-REHEARSAL-REMEDIATION-REVISION-3",
+  "updated_at": "2026-11-22T13:52:00.000Z",
+  "phase": "GATE-4-CASHFREE-V2025-WEBHOOK-COMPATIBILITY-CERTIFICATION",
   "staging_baseline": {
-    "commit": "11fd44f7cb4e88ea54677df43d476a5c3e0d79bb",
-    "pr": 197,
+    "commit": "2f3d32f58c9c81672811a9fd9d60064e1352beca",
+    "pr": 198,
     "status": "MERGED",
-    "vercel_deployment_id": "dpl_28YF2qiNiEWP8vDFPapE1qPnkhnY",
+    "vercel_deployment_id": "dpl_9omA8NHbFC9hJLUJHFUNStdvBzYe",
     "host": "https://staging.virexaaiventures.com",
     "migration_033": "APPLIED"
   },
-  "rehearsal_pr": {
-    "number": 198,
-    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/198",
-    "branch": "feat/staging-sandbox-rehearsal-20261121",
+  "compatibility_pr": {
+    "number": 199,
+    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/199",
+    "branch": "fix/gate4-cashfree-2025-webhook-compatibility",
     "target": "staging",
     "state": "OPEN",
     "is_draft": true,
-    "commit_sha": "74ac08e07938dd5493acf24e2b7cf7a7cbfe9866",
-    "revision": "3.0"
+    "head_sha": "acbba0fcb8757e77fb55cbbf9a81882ab434407a",
+    "vercel_preview_url": "https://aira-ai-2026-git-fix-gate4-cashf-6fc3fe-rajpunkeshwarrajgautam-boops-projects.vercel.app"
   },
   "candidate_pr_production": {
     "number": 196,
@@ -30,19 +30,24 @@
     "status": "STRICT_HOLD"
   },
   "verification": {
-    "rehearsal_security_tests": "54_PASS_0_FAIL",
+    "cashfree_v2025_compatibility_tests": "27_PASS_0_FAIL",
+    "rehearsal_security_tests": "55_PASS_0_FAIL",
     "recurring_subscriptions_tests": "25_PASS_0_FAIL",
-    "remediations_tests": "53_PASS_0_FAIL",
-    "invoice_concurrency_tests": "35_PASS_0_FAIL",
-    "entitlements_integration_tests": "20_PASS_0_FAIL",
-    "billing_subscription_readiness_tests": "9_PASS_0_FAIL",
-    "commercial_payment_webhooks_tests": "4_PASS_0_FAIL_1_SKIP",
-    "total_automated_pass": "200_PASS_0_FAIL_1_SKIP",
+    "remediations_tests": "15_PASS_0_FAIL",
+    "github_actions_ci": {
+      "fast_ci": "PASS",
+      "main_pr_certification": "PASS",
+      "payment_durability_postgres_18": "PASS",
+      "postgres_16_isolated_regression": "PASS",
+      "semantic_search_ci": "PASS",
+      "gitguardian_security_checks": "PASS",
+      "vercel_preview_deployment": "PASS"
+    },
     "typecheck": "SUCCESS_0_ERRORS",
     "production_build": "SUCCESS"
   },
   "release_verdict": "GATE_4_BLOCKED_PENDING_EXTERNAL_SANDBOX",
   "commercial_billing": "STRICT_HOLD",
   "aira_commercial_billing_enabled": false,
-  "aira_staging_sandbox_rehearsal_enabled": "IMPLEMENTED_ISOLATED"
+  "aira_staging_sandbox_rehearsal_enabled": false
 }

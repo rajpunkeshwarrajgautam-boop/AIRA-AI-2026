@@ -547,12 +547,24 @@ app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) =>
 app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) => {
   const signature = (req.headers['x-webhook-signature'] || req.headers['x-cashfree-signature']) as string;
   const timestamp = (req.headers['x-webhook-timestamp'] || req.headers['x-cashfree-timestamp']) as string;
+  const idempotencyHeader = (
+    req.headers['x-idempotency-key'] ||
+    req.headers['x-idempotency-header'] ||
+    req.headers['idempotency-key'] ||
+    req.headers['x-webhook-event-id'] ||
+    req.headers['x-event-id']
+  ) as string | undefined;
   const rawBody = typeof (req as any).rawBody === 'string'
     ? (req as any).rawBody
     : JSON.stringify(req.body);
 
   try {
-    const result = await paymentGatewayService.processCashfreeWebhook(rawBody, signature, timestamp);
+    const result = await paymentGatewayService.processCashfreeWebhook(
+      rawBody,
+      signature,
+      timestamp,
+      idempotencyHeader ? { idempotencyHeader } : undefined
+    );
     res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[CashfreeWebhookError]', err.message);
