@@ -1,24 +1,36 @@
 {
   "schema": "handoff/v2",
-  "updated_at": "2026-11-22T13:52:00.000Z",
-  "phase": "GATE-4-CASHFREE-V2025-WEBHOOK-COMPATIBILITY-CERTIFICATION",
+  "updated_at": "2026-11-22T16:20:00.000Z",
+  "phase": "GATE-4-GENUINE-STAGING-ACCOUNT-REHEARSAL-PLAN",
   "staging_baseline": {
-    "commit": "2f3d32f58c9c81672811a9fd9d60064e1352beca",
-    "pr": 198,
+    "commit": "06aa2d2f7fff7a7e4077226544e9855fb0d4a6c5",
+    "pr": 199,
     "status": "MERGED",
-    "vercel_deployment_id": "dpl_9omA8NHbFC9hJLUJHFUNStdvBzYe",
+    "vercel_deployment_id": "dpl_Bs5DEQzNM7QRqfY4KFVDz8yp2ygZ",
     "host": "https://staging.virexaaiventures.com",
-    "migration_033": "APPLIED"
+    "staging_neon_branch": "br-snowy-bonus-b32thjlz",
+    "staging_neon_endpoint": "ep-twilight-cherry-b3iz2oqv"
   },
-  "compatibility_pr": {
-    "number": 199,
-    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/199",
-    "branch": "fix/gate4-cashfree-2025-webhook-compatibility",
-    "target": "staging",
-    "state": "OPEN",
-    "is_draft": true,
-    "head_sha": "acbba0fcb8757e77fb55cbbf9a81882ab434407a",
-    "vercel_preview_url": "https://aira-ai-2026-git-fix-gate4-cashf-6fc3fe-rajpunkeshwarrajgautam-boops-projects.vercel.app"
+  "verified_investigation_findings": {
+    "post_api_auth_sign_up": {
+      "verdict": "NO_GO",
+      "reason": "Falls back to forbidden PR #92 endpoint ep-ancient-sound-b3drtnp5 on br-green-snow-b3dsci5u because NEON_AUTH_BASE_URL is unconfigured on staging. Directly violates database isolation rules."
+    },
+    "supported_genuine_auth_path": {
+      "path": "Direct OAuth (Google / GitHub)",
+      "routes": [
+        "GET /api/auth/oauth/google/start",
+        "GET /api/auth/oauth/google/callback",
+        "GET /api/auth/oauth/github/start",
+        "GET /api/auth/oauth/github/callback"
+      ],
+      "token_mode": "First-party HS256 JWT signed with AIRA_SESSION_SECRET",
+      "neon_auth_bypass": "VERIFIED (directOAuthService.resolveOrCreateUser completely bypasses Neon Auth and getAuthBaseUrl)"
+    },
+    "account_billing_route_verification": {
+      "endpoint_reality": "GET /api/account/billing does NOT exist (HTTP 404). Valid profile route is GET /api/account/profile.",
+      "customer_initialization": "Direct OAuth automatically invokes commercialBillingService.getOrCreateCustomer during resolveOrCreateUser. Calling GET /api/account/profile or GET /api/billing/summary idempotently accesses or creates customer and credit records across 4 tables: billing_customers, credit_accounts, credit_grants, credit_transactions."
+    }
   },
   "candidate_pr_production": {
     "number": 196,
@@ -29,25 +41,6 @@
     "state": "OPEN",
     "status": "STRICT_HOLD"
   },
-  "verification": {
-    "cashfree_v2025_compatibility_tests": "27_PASS_0_FAIL",
-    "rehearsal_security_tests": "55_PASS_0_FAIL",
-    "recurring_subscriptions_tests": "25_PASS_0_FAIL",
-    "remediations_tests": "15_PASS_0_FAIL",
-    "github_actions_ci": {
-      "fast_ci": "PASS",
-      "main_pr_certification": "PASS",
-      "payment_durability_postgres_18": "PASS",
-      "postgres_16_isolated_regression": "PASS",
-      "semantic_search_ci": "PASS",
-      "gitguardian_security_checks": "PASS",
-      "vercel_preview_deployment": "PASS"
-    },
-    "typecheck": "SUCCESS_0_ERRORS",
-    "production_build": "SUCCESS"
-  },
-  "release_verdict": "GATE_4_BLOCKED_PENDING_EXTERNAL_SANDBOX",
-  "commercial_billing": "STRICT_HOLD",
-  "aira_commercial_billing_enabled": false,
-  "aira_staging_sandbox_rehearsal_enabled": false
+  "release_verdict": "POST_AUTH_SIGNUP_NO_GO_DIRECT_OAUTH_PATH_VERIFIED",
+  "commercial_billing": "STRICT_HOLD"
 }
