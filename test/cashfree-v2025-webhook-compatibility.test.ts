@@ -1123,4 +1123,441 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
     assert.equal(sub.status, 'active');
     assert.ok(tables.billing_invoices.length >= 1);
   });
+
+  // =========================================================================
+  // 7. EVENT-ID COLLISION RESOLUTION & TARGETED REGRESSION GATES
+  // =========================================================================
+  it('Scenario 21: Sequence of ACTIVE -> CANCELLED for same subscription without payload event_id transitions cleanly', async () => {
+    const { dbClient, tables } = createMockDb();
+    const service = new PaymentGatewayService();
+    service.setDbClient(dbClient);
+
+    const now = Date.now();
+    const gatewaySubId = 'sub_cf_seq_test_01';
+    const purchaseId = 'pur_cf_seq_test_01';
+
+    tables.subscriptions.push({
+      id: purchaseId,
+      customer_id: 'cust_seq_01',
+      principal_id: 'usr_seq_01',
+      account_id: 'cust_seq_01',
+      plan_id: 'plus',
+      status: 'pending',
+      gateway: 'cashfree',
+      gateway_subscription_id: gatewaySubId,
+      currency: 'INR',
+      amount_minor_units: 39900,
+      current_period_start: now,
+      current_period_end: now,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({ principalId: 'usr_seq_01', planTier: 'plus', customerState: '07' }),
+      created_at: now,
+      updated_at: now
+    });
+
+    // 1. First webhook: ACTIVE status
+    const payloadActive = {
+      type: 'SUBSCRIPTION_STATUS_CHANGED',
+      event_time: '2026-11-22T10:00:00Z',
+      data: {
+        subscription_details: {
+          subscription_id: gatewaySubId,
+          cf_subscription_id: 'cf_sub_internal_seq_01',
+          subscription_status: 'ACTIVE'
+        }
+      }
+    };
+    const ts1 = '1729355000';
+    const rawBody1 = JSON.stringify(payloadActive);
+    const sig1 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts1}${rawBody1}`).digest('base64');
+
+    const res1 = await service.processCashfreeWebhook(rawBody1, sig1, ts1);
+    assert.equal(res1.status, 'PROCESSED');
+    assert.equal(res1.duplicate, false);
+
+    const subAfterActive = tables.subscriptions.find(s => s.id === purchaseId);
+    assert.equal(subAfterActive.status, 'pending');
+
+    // 2. Second webhook: CANCELLED status on same subscription ID without payload event_id
+    const payloadCancel = {
+      type: 'SUBSCRIPTION_STATUS_CHANGED',
+      event_time: '2026-11-22T10:15:00Z',
+      data: {
+        subscription_details: {
+          subscription_id: gatewaySubId,
+          cf_subscription_id: 'cf_sub_internal_seq_01',
+          subscription_status: 'CANCELLED'
+        }
+      }
+    };
+    const ts2 = '1729356000';
+    const rawBody2 = JSON.stringify(payloadCancel);
+    const sig2 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts2}${rawBody2}`).digest('base64');
+
+    const res2 = await service.processCashfreeWebhook(rawBody2, sig2, ts2);
+    assert.equal(res2.status, 'PROCESSED', 'Expected CANCELLED event not to be dropped as duplicate');
+    assert.equal(res2.duplicate, false);
+
+    const subAfterCancel = tables.subscriptions.find(s => s.id === purchaseId);
+    assert.equal(subAfterCancel.status, 'cancelled');
+
+    const auditCancel = tables.billing_audit_events.find(e => e.event_type === 'SUBSCRIPTION_CANCELLED');
+    assert.ok(auditCancel, 'Expected SUBSCRIPTION_CANCELLED audit event');
+  });
+
+  it('Scenario 22: Duplicate retry of subscription status transition returns ALREADY_PROCESSED', async () => {
+    const { dbClient, tables } = createMockDb();
+    const service = new PaymentGatewayService();
+    service.setDbClient(dbClient);
+
+    const now = Date.now();
+    const gatewaySubId = 'sub_cf_retry_sub_01';
+    const purchaseId = 'pur_cf_retry_sub_01';
+
+    tables.subscriptions.push({
+      id: purchaseId,
+      customer_id: 'cust_retry_01',
+      principal_id: 'usr_retry_01',
+      account_id: 'cust_retry_01',
+      plan_id: 'plus',
+      status: 'active',
+      gateway: 'cashfree',
+      gateway_subscription_id: gatewaySubId,
+      currency: 'INR',
+      amount_minor_units: 39900,
+      current_period_start: now,
+      current_period_end: now + 30 * 86400000,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({ principalId: 'usr_retry_01', planTier: 'plus', customerState: '07' }),
+      created_at: now,
+      updated_at: now
+    });
+
+    const payload = {
+      type: 'SUBSCRIPTION_STATUS_CHANGED',
+      event_time: '2026-11-22T10:00:00Z',
+      data: {
+        subscription_details: {
+          subscription_id: gatewaySubId,
+          subscription_status: 'CANCELLED'
+        }
+      }
+    };
+    const ts = '1729355000';
+    const rawBody = JSON.stringify(payload);
+    const sig = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts}${rawBody}`).digest('base64');
+
+    const res1 = await service.processCashfreeWebhook(rawBody, sig, ts);
+    assert.equal(res1.status, 'PROCESSED');
+    assert.equal(res1.duplicate, false);
+
+    const res2 = await service.processCashfreeWebhook(rawBody, sig, ts);
+    assert.equal(res2.status, 'ALREADY_PROCESSED');
+    assert.equal(res2.duplicate, true);
+    assert.equal(res2.eventId, res1.eventId);
+  });
+
+  it('Scenario 23: Separate payment notifications for same order (failed attempt -> retry success) are not dropped', async () => {
+    const { dbClient, tables } = createMockDb();
+    const service = new PaymentGatewayService();
+    service.setDbClient(dbClient);
+
+    const now = Date.now();
+    const orderId = 'ord_cf_multi_pay_01';
+    const purchaseId = 'pur_cf_multi_pay_01';
+    const customerId = 'cust_multi_pay_01';
+    const principalId = 'usr_multi_pay_01';
+
+    tables.billing_customers.push({ id: customerId, principal_id: principalId });
+    tables.subscriptions.push({
+      id: purchaseId,
+      customer_id: customerId,
+      principal_id: principalId,
+      account_id: customerId,
+      plan_id: 'plus',
+      status: 'pending',
+      gateway: 'cashfree',
+      gateway_subscription_id: orderId,
+      currency: 'INR',
+      amount_minor_units: 39900,
+      current_period_start: now,
+      current_period_end: now,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '07' }),
+      created_at: now,
+      updated_at: now
+    });
+
+    // 1. Webhook 1: Failed payment attempt
+    const payloadFail = {
+      type: 'PAYMENT_FAILED_WEBHOOK',
+      data: {
+        order: {
+          order_id: orderId,
+          order_amount: 399.00,
+          order_currency: 'INR'
+        },
+        payment: {
+          cf_payment_id: 'cf_pay_attempt_fail_01',
+          payment_status: 'FAILED',
+          payment_amount: 399.00,
+          payment_currency: 'INR'
+        }
+      }
+    };
+    const ts1 = '1729355000';
+    const body1 = JSON.stringify(payloadFail);
+    const sig1 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts1}${body1}`).digest('base64');
+
+    const res1 = await service.processCashfreeWebhook(body1, sig1, ts1);
+    assert.equal(res1.status, 'PROCESSED');
+    assert.equal(res1.duplicate, false);
+
+    const subAfterFail = tables.subscriptions.find(s => s.id === purchaseId);
+    assert.equal(subAfterFail.status, 'pending');
+
+    // 2. Webhook 2: Customer retries payment and succeeds (different cf_payment_id, same order_id)
+    const payloadSuccess = {
+      type: 'PAYMENT_SUCCESS_WEBHOOK',
+      data: {
+        order: {
+          order_id: orderId,
+          order_amount: 399.00,
+          order_currency: 'INR'
+        },
+        payment: {
+          cf_payment_id: 'cf_pay_attempt_succ_02',
+          payment_status: 'SUCCESS',
+          payment_amount: 399.00,
+          payment_currency: 'INR'
+        }
+      }
+    };
+    const ts2 = '1729356000';
+    const body2 = JSON.stringify(payloadSuccess);
+    const sig2 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts2}${body2}`).digest('base64');
+
+    const res2 = await service.processCashfreeWebhook(body2, sig2, ts2);
+    assert.equal(res2.status, 'PROCESSED', 'Expected successful payment not to be dropped as duplicate of failed payment');
+    assert.equal(res2.duplicate, false);
+
+    const subAfterSucc = tables.subscriptions.find(s => s.id === purchaseId);
+    assert.equal(subAfterSucc.status, 'active');
+    assert.ok(tables.billing_invoices.length >= 1);
+  });
+
+  it('Scenario 24: Duplicate retry of payment notification returns ALREADY_PROCESSED and preserves single invoice', async () => {
+    const { dbClient, tables } = createMockDb();
+    const service = new PaymentGatewayService();
+    service.setDbClient(dbClient);
+
+    const now = Date.now();
+    const orderId = 'ord_cf_retry_pay_01';
+    const purchaseId = 'pur_cf_retry_pay_01';
+    const customerId = 'cust_retry_pay_01';
+    const principalId = 'usr_retry_pay_01';
+
+    tables.billing_customers.push({ id: customerId, principal_id: principalId });
+    tables.subscriptions.push({
+      id: purchaseId,
+      customer_id: customerId,
+      principal_id: principalId,
+      account_id: customerId,
+      plan_id: 'plus',
+      status: 'pending',
+      gateway: 'cashfree',
+      gateway_subscription_id: orderId,
+      currency: 'INR',
+      amount_minor_units: 39900,
+      current_period_start: now,
+      current_period_end: now,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '07' }),
+      created_at: now,
+      updated_at: now
+    });
+
+    const payload = {
+      type: 'PAYMENT_SUCCESS_WEBHOOK',
+      data: {
+        order: { order_id: orderId, order_amount: 399.00, order_currency: 'INR' },
+        payment: { cf_payment_id: 'cf_pay_dup_01', payment_status: 'SUCCESS', payment_amount: 399.00, payment_currency: 'INR' }
+      }
+    };
+    const ts = '1729355000';
+    const rawBody = JSON.stringify(payload);
+    const sig = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts}${rawBody}`).digest('base64');
+
+    const res1 = await service.processCashfreeWebhook(rawBody, sig, ts);
+    assert.equal(res1.status, 'PROCESSED');
+    assert.equal(res1.duplicate, false);
+    assert.equal(tables.billing_invoices.length, 1);
+
+    // Identical delivery retry
+    const res2 = await service.processCashfreeWebhook(rawBody, sig, ts);
+    assert.equal(res2.status, 'ALREADY_PROCESSED');
+    assert.equal(res2.duplicate, true);
+    assert.equal(res2.eventId, res1.eventId);
+    assert.equal(tables.billing_invoices.length, 1);
+  });
+
+  it('Scenario 25: Provider request header event identifier (x-idempotency-key) is authoritative for deduplication', async () => {
+    const { dbClient, tables } = createMockDb();
+    const service = new PaymentGatewayService();
+    service.setDbClient(dbClient);
+
+    const now = Date.now();
+    const orderId = 'ord_cf_hdr_test_01';
+    const purchaseId = 'pur_cf_hdr_test_01';
+    const customerId = 'cust_hdr_01';
+    const principalId = 'usr_hdr_01';
+    const idempotencyHeader = 'cf_idem_hdr_key_alpha_123';
+
+    tables.billing_customers.push({ id: customerId, principal_id: principalId });
+    tables.subscriptions.push({
+      id: purchaseId,
+      customer_id: customerId,
+      principal_id: principalId,
+      account_id: customerId,
+      plan_id: 'plus',
+      status: 'pending',
+      gateway: 'cashfree',
+      gateway_subscription_id: orderId,
+      currency: 'INR',
+      amount_minor_units: 39900,
+      current_period_start: now,
+      current_period_end: now,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '07' }),
+      created_at: now,
+      updated_at: now
+    });
+
+    const payload = {
+      type: 'PAYMENT_SUCCESS_WEBHOOK',
+      data: {
+        order: { order_id: orderId, order_amount: 399.00, order_currency: 'INR' },
+        payment: { cf_payment_id: 'cf_pay_hdr_01', payment_status: 'SUCCESS', payment_amount: 399.00, payment_currency: 'INR' }
+      }
+    };
+    const ts = '1729355000';
+    const rawBody = JSON.stringify(payload);
+    const sig = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts}${rawBody}`).digest('base64');
+
+    const res1 = await service.processCashfreeWebhook(rawBody, sig, ts, { idempotencyHeader });
+    assert.equal(res1.status, 'PROCESSED');
+    assert.equal(res1.eventId, idempotencyHeader);
+
+    const res2 = await service.processCashfreeWebhook(rawBody, sig, ts, { idempotencyHeader });
+    assert.equal(res2.status, 'ALREADY_PROCESSED');
+    assert.equal(res2.duplicate, true);
+    assert.equal(res2.eventId, idempotencyHeader);
+  });
+
+  it('Scenario 26: Deterministic hash fallback for payload without specific entity identifiers remains stable across retries', async () => {
+    const { dbClient, tables } = createMockDb();
+    const service = new PaymentGatewayService();
+    service.setDbClient(dbClient);
+
+    const payload = {
+      type: 'PAYMENT_FAILED_WEBHOOK',
+      data: {
+        note: 'Generic payment failure event with no order or payment identifiers'
+      }
+    };
+    const ts = '1729355000';
+    const rawBody = JSON.stringify(payload);
+    const sig = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts}${rawBody}`).digest('base64');
+
+    const res1 = await service.processCashfreeWebhook(rawBody, sig, ts);
+    assert.equal(res1.status, 'PROCESSED');
+    assert.ok(res1.eventId.startsWith('evt_cf_h_'));
+
+    const res2 = await service.processCashfreeWebhook(rawBody, sig, ts);
+    assert.equal(res2.status, 'ALREADY_PROCESSED');
+    assert.equal(res2.duplicate, true);
+    assert.equal(res2.eventId, res1.eventId);
+  });
+
+  it('Scenario 27: Cross-category payment delivery with distinct lifecycle notifications preserves invoice and credit integrity', async () => {
+    const { dbClient, tables } = createMockDb();
+    const service = new PaymentGatewayService();
+    service.setDbClient(dbClient);
+
+    const now = Date.now();
+    const gatewaySubId = 'sub_cf_cross_cat_live_01';
+    const purchaseId = 'pur_cf_cross_cat_live_01';
+    const sharedPaymentId = 'cf_pay_cross_live_101';
+
+    tables.billing_customers.push({ id: 'cust_cross_live', principal_id: 'usr_cross_live' });
+    tables.subscriptions.push({
+      id: purchaseId,
+      customer_id: 'cust_cross_live',
+      principal_id: 'usr_cross_live',
+      account_id: 'cust_cross_live',
+      plan_id: 'plus',
+      status: 'pending',
+      gateway: 'cashfree',
+      gateway_subscription_id: gatewaySubId,
+      currency: 'INR',
+      amount_minor_units: 39900,
+      current_period_start: now,
+      current_period_end: now,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({ principalId: 'usr_cross_live', customerId: 'cust_cross_live', planTier: 'plus', customerState: '07' }),
+      created_at: now,
+      updated_at: now
+    });
+
+    // Webhook 1: Cashfree Subscriptions notification (no event_id, uses entityDiscriminator)
+    const payloadSub = {
+      type: 'SUBSCRIPTION_PAYMENT_SUCCESS',
+      data: {
+        subscription_details: {
+          subscription_id: gatewaySubId,
+          current_cycle: 1
+        },
+        payment: {
+          cf_payment_id: sharedPaymentId,
+          payment_status: 'SUCCESS',
+          payment_amount: 399.00,
+          payment_currency: 'INR'
+        }
+      }
+    };
+    const ts1 = '1729355000';
+    const body1 = JSON.stringify(payloadSub);
+    const sig1 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts1}${body1}`).digest('base64');
+
+    const res1 = await service.processCashfreeWebhook(body1, sig1, ts1);
+    assert.equal(res1.status, 'PROCESSED');
+    assert.equal(tables.billing_invoices.length, 1);
+
+    // Webhook 2: Cashfree Payment Gateway notification (no event_id, separate eventType but shared payment ID)
+    const payloadPG = {
+      type: 'PAYMENT_SUCCESS_WEBHOOK',
+      data: {
+        order: {
+          order_id: gatewaySubId,
+          order_amount: 399.00,
+          order_currency: 'INR'
+        },
+        payment: {
+          cf_payment_id: sharedPaymentId,
+          payment_status: 'SUCCESS',
+          payment_amount: 399.00,
+          payment_currency: 'INR'
+        }
+      }
+    };
+    const ts2 = '1729355001';
+    const body2 = JSON.stringify(payloadPG);
+    const sig2 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts2}${body2}`).digest('base64');
+
+    const res2 = await service.processCashfreeWebhook(body2, sig2, ts2);
+    // Transport allows distinct eventType delivery, but business idempotency suppresses duplicate invoice
+    assert.equal(res2.status, 'PROCESSED');
+    assert.notEqual(res1.eventId, res2.eventId);
+    assert.equal(tables.billing_invoices.length, 1, 'Invoice count must strictly remain 1');
+  });
 });

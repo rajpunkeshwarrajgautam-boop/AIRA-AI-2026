@@ -745,24 +745,111 @@ export class PaymentGatewayService {
   }
 
   /**
+   * Resolves a deterministic, collision-resistant event identifier for Cashfree webhook events.
+   *
+   * Deduplication Hierarchy:
+   * 1. Header-level delivery identifier (e.g. x-idempotency-key, x-idempotency-header, idempotency-key, x-webhook-event-id)
+   * 2. Explicit payload body event token (event_id, data.event_id, id)
+   * 3. Granular entity-level semantic discriminators:
+   *    - Payment notifications: evt_cf_pay_${eventType}_${paymentId}_${paymentStatus}
+   *    - Refund notifications: evt_cf_ref_${eventType}_${refundId}
+   *    - Subscription status notifications: evt_cf_sub_${eventType}_${subId}_${rawStatus}${cycle ? `_c${cycle}` : ''}${eventTime ? `_${eventTime}` : ''}
+   *    - Order-level notifications: evt_cf_ord_${eventType}_${orderId}_${orderStatus}
+   *    - Subscription generic notifications: evt_cf_sub_${eventType}_${subId}${cycle ? `_c${cycle}` : ''}
+   * 4. Deterministic hash fallback on canonical rawBody (stable across identical delivery retries)
+   */
+  resolveCashfreeWebhookEventId(
+    payload: any,
+    rawBody: string,
+    options?: { idempotencyHeader?: string; eventIdHeader?: string }
+  ): string {
+    const eventType = payload.type || payload.event || 'cashfree.webhook';
+
+    // 1. Authoritative request header token (x-idempotency-key / x-idempotency-header / x-event-id)
+    const headerToken = options?.idempotencyHeader || options?.eventIdHeader;
+    if (headerToken && typeof headerToken === 'string' && headerToken.trim()) {
+      return headerToken.trim();
+    }
+
+    // 2. Explicit payload body event token
+    const payloadEventId = payload.event_id || payload.id || payload.data?.event_id;
+    if (payloadEventId && typeof payloadEventId === 'string' && payloadEventId.trim()) {
+      return payloadEventId.trim();
+    }
+
+    // 3. Entity-specific granular discriminators
+    const paymentEntity = payload.data?.payment || payload.payment;
+    const paymentId = paymentEntity?.cf_payment_id || paymentEntity?.payment_id || paymentEntity?.id;
+
+    const refundEntity = payload.data?.refund || payload.refund;
+    const refundId = refundEntity?.cf_refund_id || refundEntity?.refund_id || refundEntity?.id;
+
+    const subEntity = payload.data?.subscription_details || payload.data?.subscription || payload.subscription;
+    const subId = subEntity?.cf_subscription_id || subEntity?.subscription_id || subEntity?.id;
+    const rawSubStatus = (
+      subEntity?.subscription_status ||
+      subEntity?.status ||
+      payload.data?.subscription_details?.subscription_status ||
+      payload.data?.subscription_details?.status ||
+      payload.data?.subscription?.subscription_status ||
+      payload.data?.subscription?.status ||
+      payload.subscription?.status ||
+      ''
+    ).toUpperCase();
+
+    const orderEntity = payload.data?.order || payload.order;
+    const orderId = orderEntity?.order_id || orderEntity?.id || payload.order_id;
+    const orderStatus = (orderEntity?.order_status || orderEntity?.status || '').toUpperCase();
+
+    const eventTime = payload.event_time || payload.data?.event_time || subEntity?.event_time;
+    const cycle = subEntity?.current_cycle !== undefined ? subEntity.current_cycle : (subEntity?.paid_count !== undefined ? subEntity.paid_count : undefined);
+
+    if (paymentId) {
+      // Payment attempt discriminator takes precedence over order_id
+      const payStatus = (paymentEntity?.payment_status || paymentEntity?.status || '').toUpperCase();
+      return `evt_cf_pay_${eventType}_${paymentId}${payStatus ? `_${payStatus}` : ''}`;
+    }
+
+    if (refundId) {
+      return `evt_cf_ref_${eventType}_${refundId}`;
+    }
+
+    if (subId && (
+      eventType === 'SUBSCRIPTION_STATUS_CHANGED' ||
+      eventType === 'SUBSCRIPTION_STATUS_CHANGE' ||
+      eventType.startsWith('SUBSCRIPTION_')
+    )) {
+      return `evt_cf_sub_${eventType}_${subId}${rawSubStatus ? `_${rawSubStatus}` : ''}${cycle !== undefined ? `_c${cycle}` : ''}${eventTime ? `_${eventTime}` : ''}`;
+    }
+
+    if (orderId) {
+      return `evt_cf_ord_${eventType}_${orderId}${orderStatus ? `_${orderStatus}` : ''}`;
+    }
+
+    if (subId) {
+      return `evt_cf_sub_${eventType}_${subId}${cycle !== undefined ? `_c${cycle}` : ''}`;
+    }
+
+    // 4. Stable deterministic fallback for identical retries
+    return `evt_cf_h_${crypto.createHash('sha256').update(rawBody).digest('hex').slice(0, 32)}`;
+  }
+
+  /**
    * Process Cashfree Webhook Event idempotently with durable lifecycle and atomic state transitions.
    */
-  async processCashfreeWebhook(rawBody: string, signature: string, timestamp: string): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
+  async processCashfreeWebhook(
+    rawBody: string,
+    signature: string,
+    timestamp: string,
+    options?: { idempotencyHeader?: string; eventIdHeader?: string }
+  ): Promise<{ status: string; eventId: string; duplicate?: boolean }> {
     const verification = this.verifyCashfreeWebhook(rawBody, signature, timestamp);
     if (!verification.valid) {
       throw new Error(`FORBIDDEN_WEBHOOK: ${verification.error}`);
     }
 
     const payload = JSON.parse(rawBody);
-    const cfEventId = payload.event_id ||
-      payload.data?.order?.order_id ||
-      payload.data?.payment?.cf_payment_id ||
-      payload.data?.subscription_details?.cf_subscription_id ||
-      payload.data?.subscription_details?.subscription_id ||
-      payload.data?.subscription?.subscription_id ||
-      payload.id;
-    const deterministicFallback = `evt_cf_${crypto.createHash('sha256').update(`${timestamp}_${rawBody}`).digest('hex').slice(0, 32)}`;
-    const eventId = cfEventId || deterministicFallback;
+    const eventId = this.resolveCashfreeWebhookEventId(payload, rawBody, options);
     const eventType = payload.type || payload.event || 'cashfree.webhook';
 
     return await this.executeWebhookTransaction('cashfree', eventId, eventType, rawBody, payload);

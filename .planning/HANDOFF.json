@@ -30,7 +30,7 @@
     "status": "STRICT_HOLD"
   },
   "verification": {
-    "cashfree_v2025_compatibility_tests": "20_PASS_0_FAIL",
+    "cashfree_v2025_compatibility_tests": "27_PASS_0_FAIL",
     "rehearsal_security_tests": "55_PASS_0_FAIL",
     "recurring_subscriptions_tests": "25_PASS_0_FAIL",
     "remediations_tests": "15_PASS_0_FAIL",
