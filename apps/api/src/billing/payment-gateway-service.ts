@@ -2123,39 +2123,11 @@ export class PaymentGatewayService {
             }
           }
         } catch {
-          // Fall through to error or order creation
+          // Fall through to error
         }
 
         if (!rzpSubRes.ok) {
-          // If recurring subscription is still not supported (e.g. e-mandate registration requirements in test mode),
-          // fallback to creating a standard Razorpay order via /v1/orders
-          const rzpOrderRes = await fetch('https://api.razorpay.com/v1/orders', {
-            method: 'POST',
-            headers: {
-              'Authorization': authHeader,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              amount: price.amountMinorUnits,
-              currency: currency,
-              receipt: purchaseId,
-              notes: {
-                principal_id: principalId,
-                customer_id: customerId,
-                plan_tier: planTier,
-                purchase_id: purchaseId
-              }
-            })
-          });
-
-          if (rzpOrderRes.ok) {
-            const orderData: any = await rzpOrderRes.json();
-            gatewayOrderId = orderData.id;
-            gatewayCheckoutUrl = undefined;
-          } else {
-            const orderErr = await rzpOrderRes.text();
-            throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Razorpay returned status ${rzpSubRes.status}: ${errText} (Order fallback failed: ${orderErr})`);
-          }
+          throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Razorpay monthly recurring subscription creation failed (HTTP ${rzpSubRes.status}): ${errText}`);
         } else {
           const rzpData: any = await rzpSubRes.json();
           gatewayOrderId = rzpData.id;
@@ -2207,42 +2179,7 @@ export class PaymentGatewayService {
 
       if (!cfSubRes.ok) {
         const errText = await cfSubRes.text();
-        // Fallback to standard Cashfree PG Orders API if subscriptions API returns an error in sandbox
-        const cfOrderUrl = (isSandbox || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST'))
-          ? 'https://sandbox.cashfree.com/pg/orders'
-          : 'https://api.cashfree.com/pg/orders';
-
-        const cfOrderRes = await fetch(cfOrderUrl, {
-          method: 'POST',
-          headers: {
-            'x-client-id': process.env.CASHFREE_APP_ID,
-            'x-client-secret': process.env.CASHFREE_SECRET_KEY,
-            'x-api-version': '2023-08-01',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            order_id: purchaseId,
-            order_amount: price.amountMinorUnits / 100,
-            order_currency: currency,
-            customer_details: {
-              customer_id: customerId,
-              customer_email: `${principalId}@aira.internal`,
-              customer_phone: '9999999999'
-            },
-            order_meta: {
-              return_url: `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://staging.virexaaiventures.com'}/?order_id={order_id}`
-            },
-            order_note: `AIRA ${planTier.toUpperCase()} Subscription`
-          })
-        });
-
-        if (cfOrderRes.ok) {
-          const cfOrderData: any = await cfOrderRes.json();
-          gatewayOrderId = cfOrderData.order_id || purchaseId;
-          gatewayCheckoutUrl = cfOrderData.payment_link || (cfOrderData.payments && cfOrderData.payments.url);
-        } else {
-          throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Cashfree subscription creation returned status ${cfSubRes.status}: ${errText}`);
-        }
+        throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Cashfree monthly recurring subscription creation failed (HTTP ${cfSubRes.status}): ${errText}`);
       } else {
         const cfData: any = await cfSubRes.json();
         gatewayOrderId = cfData.subscription_id || cfData.sub_id || purchaseId;

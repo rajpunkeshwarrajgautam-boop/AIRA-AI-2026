@@ -107,12 +107,28 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               subscription_id: isSub ? data.orderId : undefined,
               order_id: !isSub ? data.orderId : undefined,
               name: 'AIRA AI',
-              description: `AIRA ${tier.toUpperCase()} Subscription (Sandbox Rehearsal)`,
+              description: `AIRA ${tier.toUpperCase()} Monthly Subscription`,
               amount: data.amount,
               currency: data.currency,
               handler: function (response: any) {
-                setCheckoutNotice(`Payment accepted! ID: ${response.razorpay_payment_id || response.razorpay_subscription_id || data.orderId}`);
-                setTimeout(() => { window.location.reload(); }, 1500);
+                const paymentRef = response.razorpay_payment_id || response.razorpay_subscription_id || data.orderId;
+                setCheckoutNotice(`Payment authorized (Ref: ${paymentRef}). Awaiting authoritative webhook confirmation...`);
+                setTimeout(async () => {
+                  try {
+                    const verifyRes = await authenticatedApiFetch('/api/billing/entitlements');
+                    if (verifyRes.ok) {
+                      const ent = await verifyRes.json();
+                      if (ent.plan === tier) {
+                        setCheckoutNotice(`Subscription active: Welcome to AIRA ${tier.toUpperCase()}!`);
+                        setTimeout(() => { window.location.reload(); }, 1200);
+                        return;
+                      }
+                    }
+                  } catch {
+                    // fall through
+                  }
+                  window.location.reload();
+                }, 2000);
               },
               modal: {
                 ondismiss: function () {
