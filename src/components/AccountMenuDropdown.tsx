@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { NeonUser } from '../lib/neonAuth';
-import { neonAuth } from '../lib/neonAuth';
+import { neonAuth, authenticatedApiFetch } from '../lib/neonAuth';
 import { parseBillingSummary } from '../lib/accountBillingTruth';
 import type { AppSettings } from '../types';
 
@@ -168,11 +168,7 @@ export const AccountMenuDropdown: React.FC<AccountMenuDropdownProps> = ({
     let cancelled = false;
     setIsBillingLoading(true);
 
-    fetch('/api/billing/summary', {
-      headers: { Accept: 'application/json' },
-      credentials: 'include',
-      cache: 'no-store'
-    })
+    authenticatedApiFetch('/api/billing/summary')
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (cancelled) return;

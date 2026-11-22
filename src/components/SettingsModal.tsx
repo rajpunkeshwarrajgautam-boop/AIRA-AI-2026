@@ -799,11 +799,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              if (onTriggerUpgrade) {
-                                onTriggerUpgrade(activePlanId === 'free' ? 'free_to_plus_model' : 'plus_to_pro_tool');
-                              } else if (onOpenPricing) {
+                              if (onOpenPricing) {
                                 onClose();
                                 onOpenPricing();
+                              } else if (onTriggerUpgrade) {
+                                onTriggerUpgrade(activePlanId === 'free' ? 'free_to_plus_model' : 'plus_to_pro_tool');
                               }
                             }}
                             className="px-3.5 py-2 rounded-xl bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-xs font-bold transition-colors motion-reduce:transition-none shadow-sm flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
@@ -1039,11 +1039,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (onTriggerUpgrade) {
-                                      onTriggerUpgrade(tierKey === 'pro' ? 'plus_to_pro_tool' : 'free_to_plus_model');
-                                    } else if (onOpenPricing) {
+                                    if (onOpenPricing) {
                                       onClose();
                                       onOpenPricing();
+                                    } else if (onTriggerUpgrade) {
+                                      onTriggerUpgrade(tierKey === 'pro' ? 'plus_to_pro_tool' : 'free_to_plus_model');
                                     }
                                   }}
                                   className="w-full py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-bold transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Check, Shield, Zap, CreditCard, ChevronRight, HelpCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { COMMERCIAL_PLANS, PlanTier, CurrencyCode } from '../types/commercial-types';
+import { authenticatedApiFetch } from '../lib/neonAuth';
 
 interface PricingModalProps {
   isOpen: boolean;
@@ -17,6 +18,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   onSelectPlan
 }) => {
   const [currency, setCurrency] = useState<CurrencyCode>('INR');
+  const [gateway, setGateway] = useState<'razorpay' | 'cashfree'>('razorpay');
   const [loadingPlan, setLoadingPlan] = useState<PlanTier | null>(null);
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
   const [checkoutAvailable, setCheckoutAvailable] = useState<boolean>(false);
@@ -59,18 +61,71 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       if (onSelectPlan) {
         onSelectPlan(tier, currency);
       } else {
-        const res = await fetch('/api/billing/checkout/subscription', {
+        const targetGateway = currency === 'USD' ? 'razorpay' : gateway;
+        const res = await authenticatedApiFetch('/api/billing/checkout/subscription', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ planId: tier, currency })
+          body: JSON.stringify({ planId: tier, currency, gateway: targetGateway })
         });
-        const data = await res.json();
-        if (data.checkoutUrl) {
-          setCheckoutNotice(`Sandbox Checkout initiated for ${tier.toUpperCase()} (${data.currency} ${data.amount / 100}). Gateway order ID: ${data.orderId}`);
-        } else {
-          setCheckoutNotice(data.error || 'Checkout initialization ready.');
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (res.status === 401) {
+            setCheckoutNotice('Authentication required. Please sign in to upgrade.');
+          } else if (res.status === 403) {
+            setCheckoutNotice(data.message || 'Access restricted: only authorized test principals can initiate sandbox checkout.');
+          } else if (res.status === 503) {
+            setCheckoutNotice(data.message || 'Online checkout is currently offline.');
+          } else {
+            setCheckoutNotice(data.message || data.error || `Checkout failed (HTTP ${res.status}).`);
+          }
+          return;
         }
+
+        if (data.checkoutUrl) {
+          setCheckoutNotice(`Launching ${data.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay'} Checkout...`);
+          window.location.assign(data.checkoutUrl);
+          return;
+        }
+
+        if (data.gateway === 'razorpay' && data.keyId && data.orderId) {
+          setCheckoutNotice('Opening Razorpay Checkout...');
+          const loadRazorpayScript = () => new Promise<boolean>((resolve) => {
+            if ((window as any).Razorpay) return resolve(true);
+            const script = document.createElement('script');
+            script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+            script.onload = () => resolve(true);
+            script.onerror = () => resolve(false);
+            document.body.appendChild(script);
+          });
+
+          const loaded = await loadRazorpayScript();
+          if (loaded && (window as any).Razorpay) {
+            const isSub = typeof data.orderId === 'string' && data.orderId.startsWith('sub_');
+            const rzp = new (window as any).Razorpay({
+              key: data.keyId,
+              subscription_id: isSub ? data.orderId : undefined,
+              order_id: !isSub ? data.orderId : undefined,
+              name: 'AIRA AI',
+              description: `AIRA ${tier.toUpperCase()} Subscription (Sandbox Rehearsal)`,
+              amount: data.amount,
+              currency: data.currency,
+              handler: function (response: any) {
+                setCheckoutNotice(`Payment accepted! ID: ${response.razorpay_payment_id || response.razorpay_subscription_id || data.orderId}`);
+                setTimeout(() => { window.location.reload(); }, 1500);
+              },
+              modal: {
+                ondismiss: function () {
+                  setLoadingPlan(null);
+                }
+              }
+            });
+            rzp.open();
+            return;
+          }
+        }
+
+        setCheckoutNotice(`Checkout initiated for ${tier.toUpperCase()} (${data.currency} ${(data.amount / 100).toFixed(2)}). Order ID: ${data.orderId}`);
       }
     } catch (err: any) {
       setCheckoutNotice(err.message || 'Checkout failed');
@@ -102,6 +157,28 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Gateway Switcher */}
+            {currency === 'INR' && (
+              <div className="flex items-center p-1 bg-stone-900 rounded-xl border border-white/10" title="Select payment gateway">
+                <button
+                  type="button"
+                  onClick={() => setGateway('razorpay')}
+                  aria-pressed={gateway === 'razorpay'}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${gateway === 'razorpay' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'}`}
+                >
+                  Razorpay
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGateway('cashfree')}
+                  aria-pressed={gateway === 'cashfree'}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${gateway === 'cashfree' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'}`}
+                >
+                  Cashfree
+                </button>
+              </div>
+            )}
+
             {/* Currency Switcher */}
             <div className="flex items-center p-1 bg-stone-900 rounded-xl border border-white/10">
               <button

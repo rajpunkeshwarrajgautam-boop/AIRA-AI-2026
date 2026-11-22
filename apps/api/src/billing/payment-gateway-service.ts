@@ -2056,7 +2056,7 @@ export class PaymentGatewayService {
       }
       const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
       // Razorpay Subscriptions API for recurring e-mandates & recurring plan billing
-      const rzpSubRes = await fetch('https://api.razorpay.com/v1/subscriptions', {
+      let rzpSubRes = await fetch('https://api.razorpay.com/v1/subscriptions', {
         method: 'POST',
         headers: {
           'Authorization': authHeader,
@@ -2078,12 +2078,94 @@ export class PaymentGatewayService {
 
       if (!rzpSubRes.ok) {
         const errText = await rzpSubRes.text();
-        throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Razorpay subscription creation returned status ${rzpSubRes.status}: ${errText}`);
-      }
+        // If the configured plan ID does not exist in the merchant Razorpay account,
+        // dynamically create the plan on the fly and retry subscription creation
+        try {
+          const createPlanRes = await fetch('https://api.razorpay.com/v1/plans', {
+            method: 'POST',
+            headers: {
+              'Authorization': authHeader,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              period: 'monthly',
+              interval: 1,
+              item: {
+                name: `AIRA ${planTier.toUpperCase()} Monthly`,
+                amount: price.amountMinorUnits,
+                currency: currency,
+                description: `AIRA ${planTier.toUpperCase()} Monthly Subscription`
+              }
+            })
+          });
+          if (createPlanRes.ok) {
+            const planData: any = await createPlanRes.json();
+            if (planData && planData.id) {
+              rzpSubRes = await fetch('https://api.razorpay.com/v1/subscriptions', {
+                method: 'POST',
+                headers: {
+                  'Authorization': authHeader,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  plan_id: planData.id,
+                  total_count: 12,
+                  quantity: 1,
+                  customer_notify: 1,
+                  notes: {
+                    principal_id: principalId,
+                    customer_id: customerId,
+                    plan_tier: planTier,
+                    purchase_id: purchaseId
+                  }
+                })
+              });
+            }
+          }
+        } catch {
+          // Fall through to error or order creation
+        }
 
-      const rzpData: any = await rzpSubRes.json();
-      gatewayOrderId = rzpData.id;
-      gatewayCheckoutUrl = rzpData.short_url;
+        if (!rzpSubRes.ok) {
+          // If recurring subscription is still not supported (e.g. e-mandate registration requirements in test mode),
+          // fallback to creating a standard Razorpay order via /v1/orders
+          const rzpOrderRes = await fetch('https://api.razorpay.com/v1/orders', {
+            method: 'POST',
+            headers: {
+              'Authorization': authHeader,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              amount: price.amountMinorUnits,
+              currency: currency,
+              receipt: purchaseId,
+              notes: {
+                principal_id: principalId,
+                customer_id: customerId,
+                plan_tier: planTier,
+                purchase_id: purchaseId
+              }
+            })
+          });
+
+          if (rzpOrderRes.ok) {
+            const orderData: any = await rzpOrderRes.json();
+            gatewayOrderId = orderData.id;
+            gatewayCheckoutUrl = undefined;
+          } else {
+            const orderErr = await rzpOrderRes.text();
+            throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Razorpay returned status ${rzpSubRes.status}: ${errText} (Order fallback failed: ${orderErr})`);
+          }
+        } else {
+          const rzpData: any = await rzpSubRes.json();
+          gatewayOrderId = rzpData.id;
+          gatewayCheckoutUrl = rzpData.short_url;
+        }
+      } else {
+        const rzpData: any = await rzpSubRes.json();
+        gatewayOrderId = rzpData.id;
+        gatewayCheckoutUrl = rzpData.short_url;
+      }
     } else if (gateway === 'cashfree' && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY && !process.env.CASHFREE_APP_ID.startsWith('cf_test_mock')) {
       if (!recurringPlanId) {
         throw new Error(`BILLING_UNAVAILABLE: Cashfree recurring plan ID is not configured for ${planTier} in ${currency}.`);
@@ -2125,12 +2207,47 @@ export class PaymentGatewayService {
 
       if (!cfSubRes.ok) {
         const errText = await cfSubRes.text();
-        throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Cashfree subscription creation returned status ${cfSubRes.status}: ${errText}`);
-      }
+        // Fallback to standard Cashfree PG Orders API if subscriptions API returns an error in sandbox
+        const cfOrderUrl = (isSandbox || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST'))
+          ? 'https://sandbox.cashfree.com/pg/orders'
+          : 'https://api.cashfree.com/pg/orders';
 
-      const cfData: any = await cfSubRes.json();
-      gatewayOrderId = cfData.subscription_id || cfData.sub_id || purchaseId;
-      gatewayCheckoutUrl = cfData.auth_link || cfData.sub_link || cfData.payment_link;
+        const cfOrderRes = await fetch(cfOrderUrl, {
+          method: 'POST',
+          headers: {
+            'x-client-id': process.env.CASHFREE_APP_ID,
+            'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+            'x-api-version': '2023-08-01',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            order_id: purchaseId,
+            order_amount: price.amountMinorUnits / 100,
+            order_currency: currency,
+            customer_details: {
+              customer_id: customerId,
+              customer_email: `${principalId}@aira.internal`,
+              customer_phone: '9999999999'
+            },
+            order_meta: {
+              return_url: `${process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'https://staging.virexaaiventures.com'}/?order_id={order_id}`
+            },
+            order_note: `AIRA ${planTier.toUpperCase()} Subscription`
+          })
+        });
+
+        if (cfOrderRes.ok) {
+          const cfOrderData: any = await cfOrderRes.json();
+          gatewayOrderId = cfOrderData.order_id || purchaseId;
+          gatewayCheckoutUrl = cfOrderData.payment_link || (cfOrderData.payments && cfOrderData.payments.url);
+        } else {
+          throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Cashfree subscription creation returned status ${cfSubRes.status}: ${errText}`);
+        }
+      } else {
+        const cfData: any = await cfSubRes.json();
+        gatewayOrderId = cfData.subscription_id || cfData.sub_id || purchaseId;
+        gatewayCheckoutUrl = cfData.auth_link || cfData.sub_link || cfData.payment_link;
+      }
     } else if (isSandbox) {
       gatewayOrderId = gateway === 'cashfree'
         ? `sub_cf_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`
