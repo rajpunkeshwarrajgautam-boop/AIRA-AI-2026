@@ -272,8 +272,7 @@ export const PAID_FULFILLMENT_EVENTS = new Set([
   'SUBSCRIPTION_PAYMENT_SUCCESS',
   'SUBSCRIPTION_ACTIVATED',
   'SUBSCRIPTION_CHARGED',
-  'SUBSCRIPTION_STATUS_CHANGE',
-  'SUBSCRIPTION_STATUS_CHANGED'
+  'SUBSCRIPTION_STATUS_CHANGE'
 ]);
 
 export const SAFE_RECONCILIATION_EVENTS = new Set([
@@ -289,52 +288,30 @@ export const SAFE_RECONCILIATION_EVENTS = new Set([
   // Cashfree
   'SUBSCRIPTION_CANCELLED',
   'SUBSCRIPTION_HALTED',
-  'SUBSCRIPTION_STATUS_CHANGE',
-  'SUBSCRIPTION_STATUS_CHANGED',
   'PAYMENT_FAILED_WEBHOOK',
   'REFUND_SUCCESS'
 ]);
 
 export function assertCommercialFulfillmentAllowed(eventType: string, gateway: string, payload: any): void {
   // 1. Safe reconciliation (cancellations, halts, refunds) is always permitted
-  if (SAFE_RECONCILIATION_EVENTS.has(eventType)) {
-    // If it is a subscription status change event, check whether it is a safe cancellation/halt or status-only event vs a paid fulfillment event
-    if (eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') {
-      const rawStatus = (
-        payload?.data?.subscription_details?.subscription_status ||
-        payload?.data?.subscription?.subscription_status ||
-        payload?.data?.subscription?.status ||
-        payload?.data?.subscription_details?.status ||
-        payload?.subscription?.status ||
-        ''
-      ).toUpperCase();
+  const rawStatus = (
+    payload?.data?.subscription_details?.subscription_status ||
+    payload?.data?.subscription?.subscription_status ||
+    payload?.data?.subscription?.status ||
+    payload?.data?.subscription_details?.status ||
+    payload?.subscription?.status ||
+    ''
+  ).toUpperCase();
 
-      // Cancellations, halts, pauses, terminations are purely safe reconciliation
-      if (['CANCELLED', 'HALTED', 'PAUSED', 'EXPIRED', 'ON_HOLD', 'TERMINATED', 'FAILED'].includes(rawStatus)) {
-        return;
-      }
+  const isSafeStatusChange = (eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') &&
+    ['CANCELLED', 'HALTED', 'PAUSED', 'EXPIRED', 'ON_HOLD', 'TERMINATED', 'FAILED'].includes(rawStatus);
 
-      // Check for payment evidence: if payment evidence is present with payment_status SUCCESS, it is attempting paid fulfillment
-      const payment = payload?.data?.payment || payload?.payment;
-      const hasPaymentEvidence = Boolean(
-        payment &&
-        (payment.cf_payment_id || payment.payment_id || payment.id) &&
-        payment.payment_status === 'SUCCESS'
-      );
-
-      if (!hasPaymentEvidence) {
-        // Status-only notification (e.g. mandate authorized, pre-debit notice) without payment:
-        // Permitted without commercial billing activation because NO paid entitlement is granted.
-        return;
-      }
-      // Has payment evidence: fall through to commercial fulfillment check below
-    } else {
-      return;
-    }
+  if (SAFE_RECONCILIATION_EVENTS.has(eventType) || isSafeStatusChange) {
+    return;
   }
 
   // 2. Paid fulfillment requires strict kill switch enforcement
-  const isPaidFulfillment = PAID_FULFILLMENT_EVENTS.has(eventType);
+  const isPaidFulfillment = PAID_FULFILLMENT_EVENTS.has(eventType) || eventType === 'SUBSCRIPTION_STATUS_CHANGED';
   if (!isPaidFulfillment) {
     // Unrecognized / unsupported event attempting activation: fail-closed
     throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Unsupported or unverified webhook event class '${eventType}'. Refusing fulfillment.`);
