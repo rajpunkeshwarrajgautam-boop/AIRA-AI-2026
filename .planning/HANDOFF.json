@@ -1,35 +1,45 @@
 {
   "schema": "handoff/v2",
-  "updated_at": "2026-11-22T16:20:00.000Z",
-  "phase": "GATE-4-GENUINE-STAGING-ACCOUNT-REHEARSAL-PLAN",
+  "updated_at": "2026-11-23T05:15:00.000Z",
+  "phase": "GATE-4-FINAL-COMPLETION-PAYMENT-CERTIFICATION",
   "staging_baseline": {
     "commit": "06aa2d2f7fff7a7e4077226544e9855fb0d4a6c5",
-    "pr": 199,
-    "status": "MERGED",
-    "vercel_deployment_id": "dpl_Bs5DEQzNM7QRqfY4KFVDz8yp2ygZ",
+    "pr": 200,
+    "status": "OPEN",
+    "head_sha": "3f5a9afccf1a1872441de0cfb4c91ab19436b549",
+    "code_sha": "c8627143eb8a3e9336535bcdf511d27274b8e5ba",
+    "vercel_deployment_id": "dpl_4ouJFFgxn8um9z9bojKErVqaR8jp",
     "host": "https://staging.virexaaiventures.com",
     "staging_neon_branch": "br-snowy-bonus-b32thjlz",
     "staging_neon_endpoint": "ep-twilight-cherry-b3iz2oqv"
   },
   "verified_investigation_findings": {
-    "post_api_auth_sign_up": {
-      "verdict": "NO_GO",
-      "reason": "Falls back to forbidden PR #92 endpoint ep-ancient-sound-b3drtnp5 on br-green-snow-b3dsci5u because NEON_AUTH_BASE_URL is unconfigured on staging. Directly violates database isolation rules."
+    "pr_200_certification": {
+      "verdict": "CERTIFIED",
+      "ci_run_id": "45062355898",
+      "fast_ci": "PASS",
+      "pg18_durability": "PASS",
+      "pg16_regression": "PASS",
+      "semantic_search_ci": "PASS",
+      "main_pr_certification": "PASS",
+      "gitguardian": "PASS",
+      "local_tests": "115/115 PASS",
+      "typecheck": "PASS",
+      "build": "PASS"
     },
-    "supported_genuine_auth_path": {
-      "path": "Direct OAuth (Google / GitHub)",
-      "routes": [
-        "GET /api/auth/oauth/google/start",
-        "GET /api/auth/oauth/google/callback",
-        "GET /api/auth/oauth/github/start",
-        "GET /api/auth/oauth/github/callback"
-      ],
-      "token_mode": "First-party HS256 JWT signed with AIRA_SESSION_SECRET",
-      "neon_auth_bypass": "VERIFIED (directOAuthService.resolveOrCreateUser completely bypasses Neon Auth and getAuthBaseUrl)"
+    "browser_verification": {
+      "deployment": "https://aira-ai-2026-flgv7y4po-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+      "subagent_id": "aad88c64-026d-4f4c-85ae-8982e9e82cfd",
+      "pricing_modal_direct_open": "PASS",
+      "circular_navigation_eliminated": "PASS",
+      "currency_toggle_usd_inr": "PASS",
+      "gateway_toggle_razorpay_cashfree": "PASS",
+      "checkout_disabled_honest_state": "PASS"
     },
-    "account_billing_route_verification": {
-      "endpoint_reality": "GET /api/account/billing does NOT exist (HTTP 404). Valid profile route is GET /api/account/profile.",
-      "customer_initialization": "Direct OAuth automatically invokes commercialBillingService.getOrCreateCustomer during resolveOrCreateUser. Calling GET /api/account/profile or GET /api/billing/summary idempotently accesses or creates customer and credit records across 4 tables: billing_customers, credit_accounts, credit_grants, credit_transactions."
+    "staging_isolation": {
+      "commercial_billing": "DISABLED",
+      "sandbox_rehearsal": "DISABLED",
+      "authorized_test_principal": "neon_user_fc6f9c72-6ebb-4fd2-960a-5a8779e59cb7"
     }
   },
   "candidate_pr_production": {
@@ -41,6 +51,6 @@
     "state": "OPEN",
     "status": "STRICT_HOLD"
   },
-  "release_verdict": "POST_AUTH_SIGNUP_NO_GO_DIRECT_OAUTH_PATH_VERIFIED",
+  "gate_4_verdict": "OPEN_AWAITING_PR200_STAGING_MERGE",
   "commercial_billing": "STRICT_HOLD"
 }
