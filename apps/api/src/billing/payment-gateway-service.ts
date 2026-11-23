@@ -1126,7 +1126,7 @@ export class PaymentGatewayService {
       )) ||
       (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type !== 'credit_topup')
     ) {
-      const subEntity = payload.data?.subscription_details || payload.payload?.subscription?.entity || payload.payload?.invoice?.entity || payload.subscription || payload.data?.subscription || {};
+      const subEntity = payload.data?.subscription_details || payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
       const planEntity = payload.data?.plan_details || payload.plan || {};
       const invoiceEntity = payload.payload?.invoice?.entity || payload.invoice || {};
       const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
@@ -1142,58 +1142,187 @@ export class PaymentGatewayService {
         : subEntity.current_cycle !== undefined ? Number(subEntity.current_cycle)
         : payload.data?.subscription?.current_cycle !== undefined ? Number(payload.data?.subscription?.current_cycle)
         : payload.data?.subscription_details?.current_cycle !== undefined ? Number(payload.data?.subscription_details?.current_cycle)
-        : undefined;
+        : (invoiceEntity.billing_cycle !== undefined ? Number(invoiceEntity.billing_cycle) : undefined);
 
       const explicitPeriodStart = subEntity.current_start ? Number(subEntity.current_start) * 1000
         : (invoiceEntity.billing_start ? Number(invoiceEntity.billing_start) * 1000 : undefined);
       const explicitPeriodEnd = subEntity.current_end ? Number(subEntity.current_end) * 1000
         : (invoiceEntity.billing_end ? Number(invoiceEntity.billing_end) * 1000 : undefined);
 
-      const gatewayOrderId = subEntity.id ||
-        subEntity.subscription_id ||
-        subEntity.cf_subscription_id ||
+      // Deterministic Identity Resolution Hierarchy:
+      // Priority 1: Explicit validated subscription ID (must not be an invoice_* or order_* identifier)
+      let resolvedSubscriptionId: string | undefined;
+      const subCandidate = (
+        payload.payload?.subscription?.entity?.id ||
+        invoiceEntity.subscription_id ||
+        paymentEntity.subscription_id ||
         payload.data?.subscription_details?.subscription_id ||
         payload.data?.subscription_details?.cf_subscription_id ||
         payload.data?.subscription?.subscription_id ||
-        invoiceEntity.subscription_id ||
-        invoiceEntity.order_id ||
-        invoiceEntity.id ||
-        paymentEntity.order_id ||
+        subEntity.subscription_id ||
+        subEntity.cf_subscription_id ||
+        (subEntity.id && typeof subEntity.id === 'string' && subEntity.id.startsWith('sub_') ? subEntity.id : undefined)
+      );
+
+      if (subCandidate && typeof subCandidate === 'string') {
+        const trimmed = subCandidate.trim();
+        if (!trimmed.startsWith('inv_') && !trimmed.startsWith('invoice_') && !trimmed.startsWith('order_')) {
+          resolvedSubscriptionId = trimmed;
+        }
+      }
+
+      // Priority 2: Verified purchase_id from metadata notes (pur_*)
+      const notesPurchaseId = (
+        subEntity.notes?.purchase_id ||
+        invoiceEntity.notes?.purchase_id ||
+        paymentEntity.notes?.purchase_id ||
+        orderEntity.notes?.purchase_id
+      );
+
+      // Priority 3: Fallback direct one-time order ID (only if NOT an invoice or subscription)
+      const rawOrderId = (
         orderEntity.id ||
         orderEntity.order_id ||
-        paymentEntity.subscription_id ||
-        subEntity.notes?.purchase_id ||
-        paymentEntity.notes?.purchase_id ||
+        paymentEntity.order_id ||
+        invoiceEntity.order_id ||
         subEntity.notes?.order_id ||
-        paymentEntity.notes?.order_id;
+        paymentEntity.notes?.order_id
+      );
+      const orderCandidate = (
+        typeof rawOrderId === 'string' &&
+        !rawOrderId.startsWith('inv_') &&
+        !rawOrderId.startsWith('invoice_') &&
+        !rawOrderId.startsWith('sub_')
+          ? rawOrderId.trim()
+          : undefined
+      );
 
-      if (!gatewayOrderId) {
-        throw new TerminalRejectionError('BILLING_RECONCILIATION_FAILED: Missing gateway order/subscription identifier in webhook payload.');
-      }
+      let purchaseRecord: any = null;
 
-      // Query authoritative pre-existing purchase record with row-level lock
-      let purchaseQuery = trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId });
-      if (typeof purchaseQuery.forUpdate === 'function') {
-        purchaseQuery = purchaseQuery.forUpdate();
-      }
-      let purchaseRecord = await purchaseQuery.first();
+      // Lookup Step A: Query by explicit validated subscription ID
+      if (resolvedSubscriptionId) {
+        let q = trx('subscriptions').where({ gateway_subscription_id: resolvedSubscriptionId });
+        if (typeof q.forUpdate === 'function') q = q.forUpdate();
+        purchaseRecord = await q.first();
 
-      if (!purchaseRecord) {
-        let fallbackQuery = trx('subscriptions').where({ id: gatewayOrderId });
-        if (typeof fallbackQuery.forUpdate === 'function') {
-          fallbackQuery = fallbackQuery.forUpdate();
+        if (!purchaseRecord) {
+          let qFallback = trx('subscriptions').where({ id: resolvedSubscriptionId });
+          if (typeof qFallback.forUpdate === 'function') qFallback = qFallback.forUpdate();
+          purchaseRecord = await qFallback.first();
         }
-        purchaseRecord = await fallbackQuery.first();
+      }
+
+      // Lookup Step B: Query by verified notes purchase_id
+      if (!purchaseRecord && notesPurchaseId && typeof notesPurchaseId === 'string' && notesPurchaseId.startsWith('pur_')) {
+        let q = trx('subscriptions').where({ id: notesPurchaseId });
+        if (typeof q.forUpdate === 'function') q = q.forUpdate();
+        purchaseRecord = await q.first();
+      }
+
+      // Lookup Step C: Authoritative payment ID mapping with cross-customer and ambiguity validation
+      if (!purchaseRecord && actualPaymentId) {
+        // C.1 Check unique billing_event_id in billing_invoices
+        try {
+          if (trx.schema && typeof trx.schema.hasTable === 'function' ? await trx.schema.hasTable('billing_invoices') : true) {
+            const invoiceByPayment = await trx('billing_invoices')
+              .where({ billing_event_id: actualPaymentId })
+              .first();
+            if (invoiceByPayment?.subscription_id) {
+              let q = trx('subscriptions').where({ id: invoiceByPayment.subscription_id });
+              if (typeof q.forUpdate === 'function') q = q.forUpdate();
+              const candidateSub = await q.first();
+
+              if (candidateSub) {
+                if (invoiceByPayment.customer_id && candidateSub.customer_id && invoiceByPayment.customer_id !== candidateSub.customer_id) {
+                  throw new TerminalRejectionError(`CROSS_CUSTOMER_CORRELATION_DETECTED: Invoice customer '${invoiceByPayment.customer_id}' does not match purchase customer '${candidateSub.customer_id}'.`);
+                }
+                purchaseRecord = candidateSub;
+              }
+            }
+          }
+        } catch (e: any) {
+          if (e instanceof TerminalRejectionError) throw e;
+        }
+
+        // C.2 Check unique metadata payment record in subscriptions
+        if (!purchaseRecord) {
+          try {
+            let subsQuery = trx('subscriptions');
+            if (typeof subsQuery.select === 'function') {
+              const allSubs = await subsQuery.select('*');
+              if (Array.isArray(allSubs)) {
+                const matching = allSubs.filter((s: any) => {
+                  try {
+                    const m = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {});
+                    return m.lastPaymentId === actualPaymentId || m.initialPaymentId === actualPaymentId;
+                  } catch { return false; }
+                });
+                if (matching.length === 1) {
+                  purchaseRecord = matching[0];
+                } else if (matching.length > 1) {
+                  throw new TerminalRejectionError(`AMBIGUOUS_CORRELATION: Multiple subscription records matched payment ID ${actualPaymentId}. Refusing correlation.`);
+                }
+              }
+            }
+          } catch (e: any) {
+            if (e instanceof TerminalRejectionError) throw e;
+          }
+        }
+      }
+
+      // Lookup Step D: Cross-event correlation for companion child events via payment_gateway_events
+      if (!purchaseRecord && (paymentEntity.invoice_id || invoiceEntity.id)) {
+        const invId = paymentEntity.invoice_id || invoiceEntity.id;
+        if (typeof invId === 'string' && (invId.startsWith('inv_') || invId.startsWith('invoice_'))) {
+          try {
+            let evQuery = trx('payment_gateway_events');
+            if (typeof evQuery.select === 'function') {
+              const allEvents = await evQuery.select('*');
+              if (Array.isArray(allEvents)) {
+                const related = allEvents.find((e: any) => {
+                  try {
+                    const p = typeof e.payload === 'string' ? JSON.parse(e.payload) : (e.payload || {});
+                    return p?.payload?.invoice?.entity?.id === invId && p?.payload?.invoice?.entity?.subscription_id;
+                  } catch { return false; }
+                });
+                const parentSubId = (typeof related?.payload === 'string' ? JSON.parse(related.payload) : related?.payload)?.payload?.invoice?.entity?.subscription_id;
+                if (parentSubId && typeof parentSubId === 'string' && !parentSubId.startsWith('inv_') && !parentSubId.startsWith('order_')) {
+                  let q = trx('subscriptions').where({ gateway_subscription_id: parentSubId });
+                  if (typeof q.forUpdate === 'function') q = q.forUpdate();
+                  purchaseRecord = await q.first();
+                }
+              }
+            }
+          } catch (e: any) {
+            if (e instanceof TerminalRejectionError) throw e;
+          }
+        }
+      }
+
+      // Lookup Step E: Direct one-time order ID lookup (if not a subscription)
+      if (!purchaseRecord && orderCandidate) {
+        let q = trx('subscriptions').where({ gateway_subscription_id: orderCandidate });
+        if (typeof q.forUpdate === 'function') q = q.forUpdate();
+        purchaseRecord = await q.first();
+
+        if (!purchaseRecord) {
+          let qFallback = trx('subscriptions').where({ id: orderCandidate });
+          if (typeof qFallback.forUpdate === 'function') qFallback = qFallback.forUpdate();
+          purchaseRecord = await qFallback.first();
+        }
       }
 
       if (!purchaseRecord) {
+        const identifierHint = resolvedSubscriptionId || notesPurchaseId || orderCandidate || actualPaymentId || 'UNKNOWN';
         const isProduction = isProductionRuntime();
         const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
-        if (!isProduction && !isStaging && (gatewayOrderId.startsWith('ord_test_') || gatewayOrderId.startsWith('test_'))) {
+        if (!isProduction && !isStaging && (identifierHint.startsWith('ord_test_') || identifierHint.startsWith('test_'))) {
           return; // Acknowledged test webhook event in isolated test environment without entitlement mutation
         }
-        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No authoritative purchase record found for transaction ${gatewayOrderId}. Refusing fulfillment.`);
+        throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No authoritative purchase record found for transaction ${identifierHint}. Refusing fulfillment.`);
       }
+
+      const gatewayOrderId = purchaseRecord.gateway_subscription_id || purchaseRecord.id;
 
       // Validate state transition: never reactivate a cancelled subscription without a new checkout order
       if (purchaseRecord.status === 'cancelled') {
@@ -1205,8 +1334,13 @@ export class PaymentGatewayService {
         (paymentEntity.payment_status === 'SUCCESS' || paymentEntity.status === 'captured' || paymentEntity.status === 'paid')
       );
 
-      // Handle status-only notification (e.g. SUBSCRIPTION_STATUS_CHANGED with ACTIVE / BANK_APPROVAL_PENDING without payment evidence)
-      if ((eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') && !hasPaymentEvidence) {
+      // Handle status-only notification:
+      // Cashfree: SUBSCRIPTION_STATUS_CHANGE / SUBSCRIPTION_STATUS_CHANGED without payment evidence.
+      // Razorpay: subscription.activated without payment evidence.
+      if (
+        ((eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') && !hasPaymentEvidence) ||
+        (eventType === 'subscription.activated' && !hasPaymentEvidence)
+      ) {
         const rawStatus = (
           subEntity.subscription_status ||
           subEntity.status ||
@@ -1345,6 +1479,24 @@ export class PaymentGatewayService {
           .where({ principal_id: principalId, operation_id: fulfillmentOpId })
           .first();
         if (existingOp && existingOp.status === 'COMPLETED') {
+          try {
+            await trx('billing_audit_events').insert({
+              id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+              customer_id: purchaseRecord.account_id || purchaseRecord.customer_id,
+              event_type: 'COMPANION_EVENT_ACKNOWLEDGED',
+              actor_type: 'system',
+              actor_id: purchaseRecord.id,
+              payload: JSON.stringify({
+                subscriptionId: purchaseRecord.id,
+                gatewaySubscriptionId: purchaseRecord.gateway_subscription_id,
+                actualPaymentId,
+                eventType,
+                gateway,
+                note: 'Companion billing event acknowledged and reconciled idempotently against completed operation.'
+              }),
+              created_at: now
+            });
+          } catch {}
           return;
         }
       } catch {}
@@ -1353,11 +1505,47 @@ export class PaymentGatewayService {
       if (purchaseRecord.status === 'active') {
         // Fast duplicate check against previously recorded payment ID
         if (actualPaymentId && (actualPaymentId === meta.lastPaymentId || actualPaymentId === meta.initialPaymentId)) {
+          try {
+            await trx('billing_audit_events').insert({
+              id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+              customer_id: purchaseRecord.account_id || purchaseRecord.customer_id,
+              event_type: 'COMPANION_EVENT_ACKNOWLEDGED',
+              actor_type: 'system',
+              actor_id: purchaseRecord.id,
+              payload: JSON.stringify({
+                subscriptionId: purchaseRecord.id,
+                gatewaySubscriptionId: purchaseRecord.gateway_subscription_id,
+                actualPaymentId,
+                eventType,
+                gateway,
+                note: 'Companion billing event acknowledged and reconciled idempotently against existing payment.'
+              }),
+              created_at: now
+            });
+          } catch {}
           return;
         }
 
         // Fast duplicate check against previously fulfilled cycle number
         if (cycleNumber !== undefined && cycleNumber <= (meta.fulfilledCycle || 1)) {
+          try {
+            await trx('billing_audit_events').insert({
+              id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+              customer_id: purchaseRecord.account_id || purchaseRecord.customer_id,
+              event_type: 'COMPANION_EVENT_ACKNOWLEDGED',
+              actor_type: 'system',
+              actor_id: purchaseRecord.id,
+              payload: JSON.stringify({
+                subscriptionId: purchaseRecord.id,
+                gatewaySubscriptionId: purchaseRecord.gateway_subscription_id,
+                cycleNumber,
+                eventType,
+                gateway,
+                note: 'Already fulfilled cycle acknowledged idempotently.'
+              }),
+              created_at: now
+            });
+          } catch {}
           return;
         }
 
