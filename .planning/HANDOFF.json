@@ -1,24 +1,46 @@
 {
   "schema": "handoff/v2",
-  "updated_at": "2026-11-22T13:52:00.000Z",
-  "phase": "GATE-4-CASHFREE-V2025-WEBHOOK-COMPATIBILITY-CERTIFICATION",
+  "updated_at": "2026-11-23T05:15:00.000Z",
+  "phase": "GATE-4-FINAL-COMPLETION-PAYMENT-CERTIFICATION",
   "staging_baseline": {
-    "commit": "2f3d32f58c9c81672811a9fd9d60064e1352beca",
-    "pr": 198,
-    "status": "MERGED",
-    "vercel_deployment_id": "dpl_9omA8NHbFC9hJLUJHFUNStdvBzYe",
+    "commit": "06aa2d2f7fff7a7e4077226544e9855fb0d4a6c5",
+    "pr": 200,
+    "status": "OPEN",
+    "head_sha": "3f5a9afccf1a1872441de0cfb4c91ab19436b549",
+    "code_sha": "c8627143eb8a3e9336535bcdf511d27274b8e5ba",
+    "vercel_deployment_id": "dpl_4ouJFFgxn8um9z9bojKErVqaR8jp",
     "host": "https://staging.virexaaiventures.com",
-    "migration_033": "APPLIED"
+    "staging_neon_branch": "br-snowy-bonus-b32thjlz",
+    "staging_neon_endpoint": "ep-twilight-cherry-b3iz2oqv"
   },
-  "compatibility_pr": {
-    "number": 199,
-    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/199",
-    "branch": "fix/gate4-cashfree-2025-webhook-compatibility",
-    "target": "staging",
-    "state": "OPEN",
-    "is_draft": true,
-    "head_sha": "acbba0fcb8757e77fb55cbbf9a81882ab434407a",
-    "vercel_preview_url": "https://aira-ai-2026-git-fix-gate4-cashf-6fc3fe-rajpunkeshwarrajgautam-boops-projects.vercel.app"
+  "verified_investigation_findings": {
+    "pr_200_certification": {
+      "verdict": "CERTIFIED",
+      "ci_run_id": "45062355898",
+      "fast_ci": "PASS",
+      "pg18_durability": "PASS",
+      "pg16_regression": "PASS",
+      "semantic_search_ci": "PASS",
+      "main_pr_certification": "PASS",
+      "gitguardian": "PASS",
+      "local_tests": "115/115 PASS",
+      "typecheck": "PASS",
+      "build": "PASS"
+    },
+    "browser_verification": {
+      "deployment": "https://aira-ai-2026-flgv7y4po-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+      "subagent_id": "aad88c64-026d-4f4c-85ae-8982e9e82cfd",
+      "pricing_modal_direct_open": "PASS",
+      "circular_navigation_eliminated": "PASS",
+      "currency_toggle_usd_inr": "PASS",
+      "gateway_toggle_razorpay_cashfree": "PASS",
+      "checkout_disabled_honest_state": "PASS"
+    },
+    "staging_isolation": {
+      "commercial_billing": "DISABLED",
+      "sandbox_rehearsal": "DISABLED",
+      "authorized_test_principal": "neon_user_fc6f9c72-6ebb-4fd2-960a-5a8779e59cb7"
+    }
   },
   "candidate_pr_production": {
     "number": 196,
@@ -29,25 +51,6 @@
     "state": "OPEN",
     "status": "STRICT_HOLD"
   },
-  "verification": {
-    "cashfree_v2025_compatibility_tests": "27_PASS_0_FAIL",
-    "rehearsal_security_tests": "55_PASS_0_FAIL",
-    "recurring_subscriptions_tests": "25_PASS_0_FAIL",
-    "remediations_tests": "15_PASS_0_FAIL",
-    "github_actions_ci": {
-      "fast_ci": "PASS",
-      "main_pr_certification": "PASS",
-      "payment_durability_postgres_18": "PASS",
-      "postgres_16_isolated_regression": "PASS",
-      "semantic_search_ci": "PASS",
-      "gitguardian_security_checks": "PASS",
-      "vercel_preview_deployment": "PASS"
-    },
-    "typecheck": "SUCCESS_0_ERRORS",
-    "production_build": "SUCCESS"
-  },
-  "release_verdict": "GATE_4_BLOCKED_PENDING_EXTERNAL_SANDBOX",
-  "commercial_billing": "STRICT_HOLD",
-  "aira_commercial_billing_enabled": false,
-  "aira_staging_sandbox_rehearsal_enabled": false
+  "gate_4_verdict": "OPEN_AWAITING_PR200_STAGING_MERGE",
+  "commercial_billing": "STRICT_HOLD"
 }

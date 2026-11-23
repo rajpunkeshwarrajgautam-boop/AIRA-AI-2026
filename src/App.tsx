@@ -258,6 +258,14 @@ function App() {
         const targetTab = tabParam && validTabs.includes(tabParam.toLowerCase()) ? tabParam.toLowerCase() : 'general';
         handleOpenSettings(targetTab);
       }
+
+      const orderIdParam = url.searchParams.get('order_id') || url.searchParams.get('sub_id');
+      if (orderIdParam) {
+        setToastMessage(`Payment authorization submitted (${orderIdParam}). Syncing subscription state...`);
+        url.searchParams.delete('order_id');
+        url.searchParams.delete('sub_id');
+        window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : '') + url.hash);
+      }
     } catch {
       // ignore URL parsing errors
     }
