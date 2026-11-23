@@ -2280,6 +2280,17 @@ export class PaymentGatewayService {
       customerId = customer.id;
     }
 
+    // Authoritative email hierarchy: Server-side authenticated identity strictly takes precedence.
+    // A client-supplied email must not silently override the authenticated account's verified email.
+    const authoritativeEmail = (principalContext as any)?.email || (existingCustRecord as any)?.email;
+    if (authoritativeEmail && contactDetails?.email) {
+      if (contactDetails.email.trim().toLowerCase() !== authoritativeEmail.trim().toLowerCase()) {
+        throw new Error('VALIDATION_ERROR: Client-supplied email does not match authenticated account email. Forged email addresses are not permitted.');
+      }
+    }
+    const customerEmail = authoritativeEmail || contactDetails?.email || `${principalId}@aira.internal`;
+    const customerName = (principalContext as any)?.name || (existingCustRecord as any)?.name || contactDetails?.name || 'AIRA Subscriber';
+
     const purchaseId = `pur_${crypto.randomUUID().replace(/-/g, '')}`;
 
     let gatewayOrderId: string;
@@ -2302,8 +2313,8 @@ export class PaymentGatewayService {
         action: 'create_subscription',
         contactDetails: {
           phone: normalizedPhone,
-          email: contactDetails?.email || (principalContext as any)?.email || (existingCustRecord as any)?.email,
-          name: contactDetails?.name || (principalContext as any)?.name || (existingCustRecord as any)?.name
+          email: customerEmail,
+          name: customerName
         }
       });
       gatewayOrderId = res.gatewayOrderId;
@@ -2407,9 +2418,6 @@ export class PaymentGatewayService {
         ? 'https://sandbox.cashfree.com/pg/subscriptions'
         : 'https://api.cashfree.com/pg/subscriptions';
 
-      const customerEmail = contactDetails?.email || (principalContext as any)?.email || (existingCustRecord as any)?.email || `${principalId}@aira.internal`;
-      const customerName = contactDetails?.name || (principalContext as any)?.name || (existingCustRecord as any)?.name || 'AIRA Subscriber';
-
       const cfSubRes = await fetch(cfBaseUrl, {
         method: 'POST',
         headers: {
@@ -2496,7 +2504,7 @@ export class PaymentGatewayService {
           planTier,
           currency,
           customerPhone: normalizedPhone,
-          customerEmail: contactDetails?.email || (principalContext as any)?.email,
+          customerEmail: customerEmail,
           amount: price.amountMinorUnits,
           priceId: price.id,
           reconciliationStatus: 'AWAITING_PAYMENT',

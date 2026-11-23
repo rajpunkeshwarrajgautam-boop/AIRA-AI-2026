@@ -127,6 +127,18 @@ export function createBillingRoutes(): Router {
     const resolvedGateway = currency === 'USD' ? 'razorpay' : (gateway || 'razorpay');
     const rawPhone = customerPhone || customerDetails?.phone;
 
+    // Security: Client-supplied email must not forge or override authenticated account email
+    const principalEmail = (principal as any)?.email;
+    const clientEmail = customerDetails?.email;
+    if (clientEmail && principalEmail) {
+      if (clientEmail.trim().toLowerCase() !== principalEmail.trim().toLowerCase()) {
+        return res.status(400).json({
+          error: 'VALIDATION_ERROR',
+          message: 'Client-supplied email does not match authenticated account email. Forged email addresses are not permitted.'
+        });
+      }
+    }
+
     if (resolvedGateway === 'cashfree') {
       const phoneValidation = validateAndNormalizeIndianPhone(rawPhone);
       if (!phoneValidation.isValid) {
@@ -146,8 +158,8 @@ export function createBillingRoutes(): Router {
         principal,
         {
           phone: rawPhone,
-          email: customerDetails?.email || (principal as any).email,
-          name: customerDetails?.name || (principal as any).name
+          email: principalEmail || clientEmail,
+          name: (principal as any)?.name || customerDetails?.name
         }
       );
       res.json(checkout);

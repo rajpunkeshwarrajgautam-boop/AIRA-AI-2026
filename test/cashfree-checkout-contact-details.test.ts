@@ -604,4 +604,168 @@ describe('Cashfree Subscription Checkout Contact Details & Phone Validation Suit
       }
     });
   });
+
+  // =========================================================================
+  // 5. AUTHORITATIVE IDENTITY & ANTI-SPOOFING SECURITY
+  // =========================================================================
+  describe('5. Authoritative Identity & Anti-Spoofing Security', () => {
+    const testPrincipal = 'neon_user_3aea147c-fc80-4ad4-9df8-df2f5c07c91a';
+
+    function setupTestApp(authenticatedPrincipal?: { userId: string; email?: string } | null) {
+      const app = express();
+      app.use(express.json());
+      app.use((req: any, _res, next) => {
+        if (authenticatedPrincipal) {
+          req.principal = authenticatedPrincipal;
+        }
+        next();
+      });
+      app.use('/api/billing', createBillingRoutes());
+      return app;
+    }
+
+    it('strictly rejects forged client-supplied email when authenticated principal has verified email', async () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.CASHFREE_APP_ID = 'TEST1234567890';
+      process.env.CASHFREE_SECRET_KEY = 'cf_sec_test_val';
+      process.env.CASHFREE_ENV = 'TEST';
+      process.env.DATABASE_URL = validStagingDbUrl;
+      enrollSyntheticTestPrincipalForTesting(testPrincipal);
+
+      const { mockDb, tables } = createMockDb();
+      paymentGatewayService.setDbClient(mockDb);
+
+      let gatewayCalled = false;
+      paymentGatewayService.setGatewayTransport(async () => {
+        gatewayCalled = true;
+        return { gatewayOrderId: 'sub_spoofed', shortUrl: 'https://sandbox.cashfree.com/sub/fake' };
+      });
+
+      await assert.rejects(
+        async () => {
+          await paymentGatewayService.createSubscriptionCheckout(
+            testPrincipal,
+            'pro',
+            'INR',
+            'cashfree',
+            { userId: testPrincipal, email: 'antigravitypower490@gmail.com' },
+            {
+              phone: '9876543210',
+              email: 'forged_victim@example.com' // Forged client email mismatching principal
+            }
+          );
+        },
+        /VALIDATION_ERROR: Client-supplied email does not match authenticated account email/
+      );
+
+      assert.strictEqual(gatewayCalled, false, 'External gateway must not be called when email is forged');
+      assert.strictEqual(tables.subscriptions.length, 0, 'No subscription record must be created on forged email');
+      assert.strictEqual(tables.billing_audit_events.length, 0, 'No audit event should be logged for rejected checkout');
+    });
+
+    it('strictly rejects forged client-supplied email at HTTP route admission (returns 400 VALIDATION_ERROR)', async () => {
+      const app = setupTestApp({ userId: testPrincipal, email: 'antigravitypower490@gmail.com' });
+      const server = http.createServer(app);
+      await new Promise<void>(resolve => server.listen(0, resolve));
+      const port = (server.address() as any).port;
+
+      try {
+        const res = await fetch(`http://127.0.0.1:${port}/api/billing/checkout/subscription`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Connection: 'close' },
+          body: JSON.stringify({
+            planId: 'pro',
+            currency: 'INR',
+            gateway: 'cashfree',
+            customerPhone: '9876543210',
+            customerDetails: {
+              email: 'victim_account@external.com' // Attacker attempting to override authenticated email
+            }
+          })
+        });
+
+        assert.strictEqual(res.status, 400);
+        const data = await res.json() as any;
+        assert.strictEqual(data.error, 'VALIDATION_ERROR');
+        assert.match(data.message, /Client-supplied email does not match authenticated account email/);
+      } finally {
+        (server as any).closeAllConnections?.();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+      }
+    });
+
+    it('authoritatively preserves server-side authenticated email when client omits email', async () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.CASHFREE_APP_ID = 'TEST1234567890';
+      process.env.CASHFREE_SECRET_KEY = 'cf_sec_test_val';
+      process.env.CASHFREE_ENV = 'TEST';
+      process.env.DATABASE_URL = validStagingDbUrl;
+      enrollSyntheticTestPrincipalForTesting(testPrincipal);
+
+      const { mockDb, tables } = createMockDb();
+      paymentGatewayService.setDbClient(mockDb);
+
+      let capturedPayload: any = null;
+      paymentGatewayService.setGatewayTransport(async (params) => {
+        capturedPayload = params;
+        return { gatewayOrderId: 'sub_cf_auth_email', shortUrl: 'https://sandbox.cashfree.com/sub/cf_auth' };
+      });
+
+      const checkout = await paymentGatewayService.createSubscriptionCheckout(
+        testPrincipal,
+        'pro',
+        'INR',
+        'cashfree',
+        { userId: testPrincipal, email: 'authoritative_verified@aira.com', name: 'Authoritative Owner' },
+        { phone: '9876543210' } // Client provides phone only, no email
+      );
+
+      assert.strictEqual(checkout.orderId, 'sub_cf_auth_email');
+      assert.strictEqual(capturedPayload.contactDetails.email, 'authoritative_verified@aira.com');
+      assert.strictEqual(capturedPayload.contactDetails.name, 'Authoritative Owner');
+
+      const subRecord = tables.subscriptions[0];
+      const metadata = JSON.parse(subRecord.metadata);
+      assert.strictEqual(metadata.customerEmail, 'authoritative_verified@aira.com');
+    });
+
+    it('strictly denies cross-customer contact spoofing where un-enrolled user attempts to inject another user phone/email', async () => {
+      process.env.AIRA_STAGING_SANDBOX_REHEARSAL_ENABLED = 'true';
+      process.env.AIRA_TEST_HARNESS_REHEARSAL = 'true';
+      process.env.CASHFREE_APP_ID = 'TEST1234567890';
+      process.env.CASHFREE_SECRET_KEY = 'cf_sec_test_val';
+      process.env.CASHFREE_ENV = 'TEST';
+      process.env.DATABASE_URL = validStagingDbUrl;
+      enrollSyntheticTestPrincipalForTesting(testPrincipal);
+      const attackerPrincipal = 'neon_user_attacker_identity';
+
+      const { mockDb, tables } = createMockDb();
+      paymentGatewayService.setDbClient(mockDb);
+
+      let gatewayCalled = false;
+      paymentGatewayService.setGatewayTransport(async () => {
+        gatewayCalled = true;
+        return { gatewayOrderId: 'sub_fail', shortUrl: 'https://fail' };
+      });
+
+      await assert.rejects(
+        async () => {
+          await paymentGatewayService.createSubscriptionCheckout(
+            attackerPrincipal,
+            'pro',
+            'INR',
+            'cashfree',
+            { userId: attackerPrincipal, email: 'attacker@evil.com' },
+            { phone: '9876543210', email: 'antigravitypower490@gmail.com' } // Attacker attempts to spoof enrolled victim contact info
+          );
+        },
+        (err: any) => err.message.includes('REHEARSAL_UNAUTHORIZED') || err.message.includes('VALIDATION_ERROR') || err.message.includes('SECURITY_VIOLATION')
+      );
+
+      assert.strictEqual(gatewayCalled, false);
+      assert.strictEqual(tables.subscriptions.length, 0);
+    });
+  });
 });
