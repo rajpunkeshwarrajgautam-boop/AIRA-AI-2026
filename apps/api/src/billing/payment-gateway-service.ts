@@ -140,6 +140,56 @@ export interface CheckoutSessionResult {
   checkoutUrl?: string; // ONLY populated if the gateway itself returned a hosted payment link (e.g. short_url)
 }
 
+export interface ContactDetails {
+  phone?: string;
+  email?: string;
+  name?: string;
+}
+
+export interface PhoneValidationResult {
+  isValid: boolean;
+  phone?: string;
+  error?: string;
+}
+
+/**
+ * Validates and normalizes Indian mobile numbers for payment gateway mandates (RBI compliance).
+ * Accepts 10-digit formats with optional +91, 91, or leading 0 prefixes, dashes, and spaces.
+ */
+export function validateAndNormalizeIndianPhone(phoneInput: unknown): PhoneValidationResult {
+  if (typeof phoneInput !== 'string' || !phoneInput.trim()) {
+    return {
+      isValid: false,
+      error: 'A valid 10-digit mobile phone number is required for Cashfree subscription e-mandate registration.'
+    };
+  }
+
+  // Strip spaces, dashes, parentheses, dots
+  const cleaned = phoneInput.trim().replace(/[\s\-().]/g, '');
+  let digits = cleaned;
+
+  if (digits.startsWith('+91')) {
+    digits = digits.slice(3);
+  } else if (digits.startsWith('91') && digits.length === 12) {
+    digits = digits.slice(2);
+  } else if (digits.startsWith('0') && digits.length === 11) {
+    digits = digits.slice(1);
+  }
+
+  // Cashfree requires a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9
+  if (/^[6-9]\d{9}$/.test(digits)) {
+    return {
+      isValid: true,
+      phone: digits
+    };
+  }
+
+  return {
+    isValid: false,
+    error: 'Invalid mobile phone number. Must be a valid 10-digit Indian mobile number starting with 6-9.'
+  };
+}
+
 export type GatewayOrderTransport = (params: {
   gateway: 'razorpay' | 'cashfree';
   orderId: string;
@@ -151,6 +201,7 @@ export type GatewayOrderTransport = (params: {
   planId?: string;
   action?: 'create_subscription' | 'create_order' | 'cancel_subscription';
   gatewaySubscriptionId?: string;
+  contactDetails?: ContactDetails;
 }) => Promise<{ gatewayOrderId: string; shortUrl?: string; cancelled?: boolean }>;
 
 export const CANDIDATE_RAZORPAY_PLANS: Record<PlanTier, Record<CurrencyCode, string>> = {
@@ -2149,11 +2200,21 @@ export class PaymentGatewayService {
     planTier: PlanTier,
     currency: CurrencyCode = 'INR',
     requestedGateway?: 'razorpay' | 'cashfree',
-    principalContext?: { userId: string; email?: string; isSynthetic?: boolean }
+    principalContext?: { userId: string; email?: string; isSynthetic?: boolean },
+    contactDetails?: ContactDetails
   ): Promise<CheckoutSessionResult> {
     const plan = COMMERCIAL_PLANS[planTier];
     if (!plan || planTier === 'free' || planTier === 'guest') {
       throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
+    }
+
+    let normalizedPhone: string | undefined;
+    if (contactDetails?.phone) {
+      const phoneValidation = validateAndNormalizeIndianPhone(contactDetails.phone);
+      if (!phoneValidation.isValid) {
+        throw new Error(`VALIDATION_ERROR: ${phoneValidation.error || 'A valid 10-digit mobile phone number is required.'}`);
+      }
+      normalizedPhone = phoneValidation.phone;
     }
 
     const isRehearsal = isStagingSandboxRehearsalActive();
@@ -2198,8 +2259,10 @@ export class PaymentGatewayService {
     }
 
     let customerId: string;
+    let existingCustRecord: any = null;
     if (this.customDbClient) {
       const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
+      existingCustRecord = existingCust;
       if (existingCust) {
         customerId = (existingCust as any).id;
       } else {
@@ -2213,8 +2276,20 @@ export class PaymentGatewayService {
       }
     } else {
       const customer = await commercialBillingService.getOrCreateCustomer(principalId);
+      existingCustRecord = customer;
       customerId = customer.id;
     }
+
+    // Authoritative email hierarchy: Server-side authenticated identity strictly takes precedence.
+    // A client-supplied email must not silently override the authenticated account's verified email.
+    const authoritativeEmail = (principalContext as any)?.email || (existingCustRecord as any)?.email;
+    if (authoritativeEmail && contactDetails?.email) {
+      if (contactDetails.email.trim().toLowerCase() !== authoritativeEmail.trim().toLowerCase()) {
+        throw new Error('VALIDATION_ERROR: Client-supplied email does not match authenticated account email. Forged email addresses are not permitted.');
+      }
+    }
+    const customerEmail = authoritativeEmail || contactDetails?.email || `${principalId}@aira.internal`;
+    const customerName = (principalContext as any)?.name || (existingCustRecord as any)?.name || contactDetails?.name || 'AIRA Subscriber';
 
     const purchaseId = `pur_${crypto.randomUUID().replace(/-/g, '')}`;
 
@@ -2235,7 +2310,12 @@ export class PaymentGatewayService {
         customerId,
         planTier,
         planId: recurringPlanId,
-        action: 'create_subscription'
+        action: 'create_subscription',
+        contactDetails: {
+          phone: normalizedPhone,
+          email: customerEmail,
+          name: customerName
+        }
       });
       gatewayOrderId = res.gatewayOrderId;
       gatewayCheckoutUrl = res.shortUrl;
@@ -2331,6 +2411,9 @@ export class PaymentGatewayService {
       if (!recurringPlanId) {
         throw new Error(`BILLING_UNAVAILABLE: Cashfree recurring plan ID is not configured for ${planTier} in ${currency}.`);
       }
+      if (!normalizedPhone) {
+        throw new Error('VALIDATION_ERROR: A valid 10-digit mobile phone number is required for Cashfree subscription e-mandate registration.');
+      }
       const cfBaseUrl = (isSandbox || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST'))
         ? 'https://sandbox.cashfree.com/pg/subscriptions'
         : 'https://api.cashfree.com/pg/subscriptions';
@@ -2356,7 +2439,9 @@ export class PaymentGatewayService {
           },
           customer_details: {
             customer_id: customerId,
-            customer_email: `${principalId}@aira.internal`
+            customer_phone: normalizedPhone,
+            customer_email: customerEmail,
+            customer_name: customerName
           },
           subscription_notes: {
             principal_id: principalId,
@@ -2418,6 +2503,8 @@ export class PaymentGatewayService {
           purchaseId,
           planTier,
           currency,
+          customerPhone: normalizedPhone,
+          customerEmail: customerEmail,
           amount: price.amountMinorUnits,
           priceId: price.id,
           reconciliationStatus: 'AWAITING_PAYMENT',
@@ -2428,6 +2515,21 @@ export class PaymentGatewayService {
         created_at: now,
         updated_at: now
       });
+
+      if (normalizedPhone) {
+        try {
+          const cust = await clientOrTrx('billing_customers').where({ id: customerId }).first();
+          if (cust) {
+            const taxInfo = typeof cust.tax_info === 'string' ? JSON.parse(cust.tax_info || '{}') : (cust.tax_info || {});
+            await clientOrTrx('billing_customers').where({ id: customerId }).update({
+              tax_info: JSON.stringify({ ...taxInfo, phone: normalizedPhone }),
+              updated_at: now
+            });
+          }
+        } catch {
+          // Non-blocking metadata recording
+        }
+      }
 
       await clientOrTrx('billing_audit_events').insert({
         id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,

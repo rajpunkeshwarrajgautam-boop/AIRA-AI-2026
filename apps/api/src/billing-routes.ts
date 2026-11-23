@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { commercialBillingService } from './billing/commercial-billing-service.js';
-import { paymentGatewayService, isTerminalError } from './billing/payment-gateway-service.js';
+import { paymentGatewayService, isTerminalError, validateAndNormalizeIndianPhone } from './billing/payment-gateway-service.js';
 import { productionReadinessService } from './billing/production-readiness.js';
 import { COMMERCIAL_PLANS } from '../../../packages/contracts/src/commercial.js';
 import { isStagingSandboxRehearsalActive } from './billing/staging-sandbox-rehearsal-guard.js';
@@ -119,9 +119,34 @@ export function createBillingRoutes(): Router {
     const principal = req.principal;
     if (!principal) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { planId, currency, gateway } = req.body || {};
+    const { planId, currency, gateway, customerPhone, customerDetails } = req.body || {};
     if (!planId || (planId !== 'plus' && planId !== 'pro')) {
       return res.status(400).json({ error: 'Invalid planId. Must be "plus" or "pro".' });
+    }
+
+    const resolvedGateway = currency === 'USD' ? 'razorpay' : (gateway || 'razorpay');
+    const rawPhone = customerPhone || customerDetails?.phone;
+
+    // Security: Client-supplied email must not forge or override authenticated account email
+    const principalEmail = (principal as any)?.email;
+    const clientEmail = customerDetails?.email;
+    if (clientEmail && principalEmail) {
+      if (clientEmail.trim().toLowerCase() !== principalEmail.trim().toLowerCase()) {
+        return res.status(400).json({
+          error: 'VALIDATION_ERROR',
+          message: 'Client-supplied email does not match authenticated account email. Forged email addresses are not permitted.'
+        });
+      }
+    }
+
+    if (resolvedGateway === 'cashfree') {
+      const phoneValidation = validateAndNormalizeIndianPhone(rawPhone);
+      if (!phoneValidation.isValid) {
+        return res.status(400).json({
+          error: 'VALIDATION_ERROR',
+          message: phoneValidation.error || 'A valid 10-digit mobile phone number is required for Cashfree subscription e-mandate registration.'
+        });
+      }
     }
 
     try {
@@ -130,18 +155,24 @@ export function createBillingRoutes(): Router {
         planId,
         currency === 'USD' ? 'USD' : 'INR',
         gateway,
-        principal
+        principal,
+        {
+          phone: rawPhone,
+          email: principalEmail || clientEmail,
+          name: (principal as any)?.name || customerDetails?.name
+        }
       );
       res.json(checkout);
     } catch (err: any) {
+      const isValidationError = err?.message?.startsWith('VALIDATION_ERROR');
       const isRehearsalDenied = err?.message?.startsWith('REHEARSAL_') || err?.message?.includes('SECURITY_VIOLATION');
-      res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : (isRehearsalDenied ? 403 : 500))
-        .json({
-          error: err?.message?.startsWith('BILLING_UNAVAILABLE')
-            ? 'BILLING_UNAVAILABLE'
-            : (isRehearsalDenied ? 'REHEARSAL_REJECTED' : 'CHECKOUT_FAILED'),
-          message: err.message
-        });
+      const status = isValidationError ? 400 : (err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : (isRehearsalDenied ? 403 : 500));
+      res.status(status).json({
+        error: isValidationError
+          ? 'VALIDATION_ERROR'
+          : (err?.message?.startsWith('BILLING_UNAVAILABLE') ? 'BILLING_UNAVAILABLE' : (isRehearsalDenied ? 'REHEARSAL_REJECTED' : 'CHECKOUT_FAILED')),
+        message: err.message
+      });
     }
   });
 

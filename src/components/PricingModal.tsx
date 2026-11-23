@@ -23,6 +23,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
   const [checkoutAvailable, setCheckoutAvailable] = useState<boolean>(false);
   const [billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
+  const [customerPhone, setCustomerPhone] = useState<string>('');
+  const [phoneError, setPhoneError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -56,21 +58,47 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     if (tier === 'free' || tier === currentPlan) return;
     setLoadingPlan(tier);
     setCheckoutNotice(null);
+    setPhoneError(null);
+
+    const targetGateway = currency === 'USD' ? 'razorpay' : gateway;
+
+    if (targetGateway === 'cashfree') {
+      const cleaned = customerPhone.trim().replace(/[\s\-().]/g, '');
+      let digits = cleaned;
+      if (digits.startsWith('+91')) digits = digits.slice(3);
+      else if (digits.startsWith('91') && digits.length === 12) digits = digits.slice(2);
+      else if (digits.startsWith('0') && digits.length === 11) digits = digits.slice(1);
+
+      if (!/^[6-9]\d{9}$/.test(digits)) {
+        const errorMsg = 'Please enter a valid 10-digit Indian mobile number starting with 6-9 for Cashfree recurring subscription mandate.';
+        setPhoneError(errorMsg);
+        setCheckoutNotice(errorMsg);
+        setLoadingPlan(null);
+        return;
+      }
+    }
 
     try {
       if (onSelectPlan) {
         onSelectPlan(tier, currency);
       } else {
-        const targetGateway = currency === 'USD' ? 'razorpay' : gateway;
         const res = await authenticatedApiFetch('/api/billing/checkout/subscription', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ planId: tier, currency, gateway: targetGateway })
+          body: JSON.stringify({
+            planId: tier,
+            currency,
+            gateway: targetGateway,
+            customerPhone: customerPhone.trim() || undefined
+          })
         });
 
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          if (res.status === 401) {
+          if (res.status === 400 && data.error === 'VALIDATION_ERROR') {
+            setPhoneError(data.message || 'A valid 10-digit mobile number is required.');
+            setCheckoutNotice(data.message || 'Validation error: please check your mobile phone number.');
+          } else if (res.status === 401) {
             setCheckoutNotice('Authentication required. Please sign in to upgrade.');
           } else if (res.status === 403) {
             setCheckoutNotice(data.message || 'Access restricted: only authorized test principals can initiate sandbox checkout.');
@@ -229,6 +257,47 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           <div className="mx-6 md:mx-8 mt-6 p-4 rounded-xl bg-orange-500/10 border border-orange-500/20 text-orange-300 text-xs flex items-center justify-between">
             <span>{checkoutNotice}</span>
             <button onClick={() => setCheckoutNotice(null)} className="underline font-semibold ml-4">Dismiss</button>
+          </div>
+        )}
+
+        {/* Cashfree Contact Details Mandate Input */}
+        {currency === 'INR' && gateway === 'cashfree' && (
+          <div className="mx-6 md:mx-8 mt-4 p-4 rounded-2xl bg-stone-950/70 border border-orange-500/30">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <label htmlFor="cashfree-phone-input" className="block text-xs font-semibold text-stone-200">
+                  Mobile Number for Mandate Notifications (RBI Mandated)
+                </label>
+                <p className="text-[11px] text-stone-400 mt-0.5">
+                  Required by Reserve Bank of India regulations for pre-debit notifications on recurring e-mandates.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <span className="text-xs font-mono font-medium text-stone-300 bg-stone-800 px-2.5 py-2 rounded-xl border border-white/10">
+                  +91
+                </span>
+                <input
+                  id="cashfree-phone-input"
+                  type="tel"
+                  placeholder="9876543210"
+                  value={customerPhone}
+                  onChange={(e) => {
+                    setCustomerPhone(e.target.value);
+                    if (phoneError) setPhoneError(null);
+                  }}
+                  aria-label="Mobile Number for Cashfree Mandate Notifications"
+                  aria-invalid={!!phoneError}
+                  aria-describedby={phoneError ? 'cashfree-phone-error' : undefined}
+                  className="w-full sm:w-44 bg-stone-900 border border-white/15 rounded-xl px-3 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  maxLength={14}
+                />
+              </div>
+            </div>
+            {phoneError && (
+              <p id="cashfree-phone-error" className="text-[11px] text-red-400 mt-2 font-medium">
+                {phoneError}
+              </p>
+            )}
           </div>
         )}
 
