@@ -2298,7 +2298,11 @@ export class PaymentGatewayService {
 
     const recurringPlanId = gateway === 'razorpay'
       ? CANDIDATE_RAZORPAY_PLANS[planTier]?.[currency]
-      : CANDIDATE_CASHFREE_PLANS[planTier]?.[currency];
+      : (currency === 'INR' && planTier === 'plus'
+          ? (process.env.CASHFREE_PLAN_ID_PLUS_INR || CANDIDATE_CASHFREE_PLANS.plus.INR)
+          : (currency === 'INR' && planTier === 'pro'
+              ? (process.env.CASHFREE_PLAN_ID_PRO_INR || CANDIDATE_CASHFREE_PLANS.pro.INR)
+              : CANDIDATE_CASHFREE_PLANS[planTier]?.[currency]));
 
     if (this.customGatewayTransport) {
       const res = await this.customGatewayTransport({
@@ -2453,6 +2457,9 @@ export class PaymentGatewayService {
 
       if (!cfSubRes.ok) {
         const errText = await cfSubRes.text();
+        if (cfSubRes.status === 400 && (errText.includes('plan_not_found') || errText.includes('Plan does not exist'))) {
+          throw new Error(`BILLING_UNAVAILABLE: Cashfree recurring plan "${recurringPlanId}" is not configured on the payment gateway. Operator provisioning is required.`);
+        }
         throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Cashfree monthly recurring subscription creation failed (HTTP ${cfSubRes.status}): ${errText}`);
       } else {
         const cfData: any = await cfSubRes.json();

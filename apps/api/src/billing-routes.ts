@@ -166,12 +166,26 @@ export function createBillingRoutes(): Router {
     } catch (err: any) {
       const isValidationError = err?.message?.startsWith('VALIDATION_ERROR');
       const isRehearsalDenied = err?.message?.startsWith('REHEARSAL_') || err?.message?.includes('SECURITY_VIOLATION');
-      const status = isValidationError ? 400 : (err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : (isRehearsalDenied ? 403 : 500));
+      const isBillingUnavailable = err?.message?.startsWith('BILLING_UNAVAILABLE');
+      const status = isValidationError ? 400 : (isBillingUnavailable ? 503 : (isRehearsalDenied ? 403 : 500));
+
+      if (status === 500) {
+        console.error('[BillingRoutes] Subscription checkout failed unexpectedly:', {
+          principalId: principal.userId,
+          planId,
+          gateway,
+          error: err?.message,
+          stack: err?.stack
+        });
+      }
+
       res.status(status).json({
         error: isValidationError
           ? 'VALIDATION_ERROR'
-          : (err?.message?.startsWith('BILLING_UNAVAILABLE') ? 'BILLING_UNAVAILABLE' : (isRehearsalDenied ? 'REHEARSAL_REJECTED' : 'CHECKOUT_FAILED')),
-        message: err.message
+          : (isBillingUnavailable ? 'BILLING_UNAVAILABLE' : (isRehearsalDenied ? 'REHEARSAL_REJECTED' : 'CHECKOUT_FAILED')),
+        message: status === 500
+          ? 'Unable to initiate subscription checkout with the payment provider. Please try again later or contact support.'
+          : err.message
       });
     }
   });
