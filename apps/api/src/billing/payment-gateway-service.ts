@@ -1161,7 +1161,9 @@ export class PaymentGatewayService {
         payload.data?.subscription?.subscription_id ||
         subEntity.subscription_id ||
         subEntity.cf_subscription_id ||
-        (subEntity.id && typeof subEntity.id === 'string' && subEntity.id.startsWith('sub_') ? subEntity.id : undefined)
+        (subEntity.id && typeof subEntity.id === 'string' && subEntity.id.startsWith('sub_') ? subEntity.id : undefined) ||
+        (orderEntity.id && typeof orderEntity.id === 'string' && orderEntity.id.startsWith('sub_') ? orderEntity.id : undefined) ||
+        (paymentEntity.order_id && typeof paymentEntity.order_id === 'string' && paymentEntity.order_id.startsWith('sub_') ? paymentEntity.order_id : undefined)
       );
 
       if (subCandidate && typeof subCandidate === 'string') {
@@ -1179,7 +1181,7 @@ export class PaymentGatewayService {
         orderEntity.notes?.purchase_id
       );
 
-      // Priority 3: Fallback direct one-time order ID (only if NOT an invoice or subscription)
+      // Priority 3: Fallback direct one-time order ID (only if NOT an invoice)
       const rawOrderId = (
         orderEntity.id ||
         orderEntity.order_id ||
@@ -1191,8 +1193,7 @@ export class PaymentGatewayService {
       const orderCandidate = (
         typeof rawOrderId === 'string' &&
         !rawOrderId.startsWith('inv_') &&
-        !rawOrderId.startsWith('invoice_') &&
-        !rawOrderId.startsWith('sub_')
+        !rawOrderId.startsWith('invoice_')
           ? rawOrderId.trim()
           : undefined
       );
