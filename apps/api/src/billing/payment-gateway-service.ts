@@ -138,6 +138,8 @@ export interface CheckoutSessionResult {
   gateway: 'razorpay' | 'cashfree' | 'sandbox';
   isSandbox: boolean;
   checkoutUrl?: string; // ONLY populated if the gateway itself returned a hosted payment link (e.g. short_url)
+  paymentSessionId?: string; // Cashfree payment / subscription session ID for Cashfree Web SDK
+  subscriptionSessionId?: string; // Alias for Cashfree subscription session ID
 }
 
 export interface ContactDetails {
@@ -202,7 +204,13 @@ export type GatewayOrderTransport = (params: {
   action?: 'create_subscription' | 'create_order' | 'cancel_subscription';
   gatewaySubscriptionId?: string;
   contactDetails?: ContactDetails;
-}) => Promise<{ gatewayOrderId: string; shortUrl?: string; cancelled?: boolean }>;
+}) => Promise<{
+  gatewayOrderId: string;
+  shortUrl?: string;
+  cancelled?: boolean;
+  paymentSessionId?: string;
+  subscriptionSessionId?: string;
+}>;
 
 export const CANDIDATE_RAZORPAY_PLANS: Record<PlanTier, Record<CurrencyCode, string>> = {
   guest: { INR: '', USD: '' },
@@ -2295,6 +2303,7 @@ export class PaymentGatewayService {
 
     let gatewayOrderId: string;
     let gatewayCheckoutUrl: string | undefined;
+    let gatewayPaymentSessionId: string | undefined;
 
     const recurringPlanId = gateway === 'razorpay'
       ? CANDIDATE_RAZORPAY_PLANS[planTier]?.[currency]
@@ -2323,6 +2332,7 @@ export class PaymentGatewayService {
       });
       gatewayOrderId = res.gatewayOrderId;
       gatewayCheckoutUrl = res.shortUrl;
+      gatewayPaymentSessionId = res.paymentSessionId || res.subscriptionSessionId;
     } else if (gateway === 'razorpay' && process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_mock')) {
       if (!recurringPlanId) {
         throw new Error(`BILLING_UNAVAILABLE: Razorpay recurring plan ID is not configured for ${planTier} in ${currency}.`);
@@ -2422,6 +2432,11 @@ export class PaymentGatewayService {
         ? 'https://sandbox.cashfree.com/pg/subscriptions'
         : 'https://api.cashfree.com/pg/subscriptions';
 
+      const canonicalDomain = isSandbox
+        ? (process.env.AUTHORIZED_STAGING_CANONICAL_DOMAIN || 'staging.virexaaiventures.com')
+        : (process.env.AIRA_CANONICAL_DOMAIN || 'aira-ai-2026.vercel.app');
+      const returnUrl = `https://${canonicalDomain}/?tab=billing&sub_id=${encodeURIComponent(purchaseId)}&gateway=cashfree`;
+
       const cfSubRes = await fetch(cfBaseUrl, {
         method: 'POST',
         headers: {
@@ -2447,6 +2462,10 @@ export class PaymentGatewayService {
             customer_email: customerEmail,
             customer_name: customerName
           },
+          subscription_meta: {
+            return_url: returnUrl,
+            notification_channel: ['EMAIL', 'SMS']
+          },
           subscription_notes: {
             principal_id: principalId,
             plan_tier: planTier,
@@ -2465,11 +2484,18 @@ export class PaymentGatewayService {
         const cfData: any = await cfSubRes.json();
         gatewayOrderId = cfData.subscription_id || cfData.sub_id || purchaseId;
         gatewayCheckoutUrl = cfData.auth_link || cfData.sub_link || cfData.payment_link;
+        const sessionId = cfData.subscription_session_id || cfData.payment_session_id;
+        if (sessionId) {
+          gatewayPaymentSessionId = sessionId;
+        }
       }
     } else if (isSandbox) {
       gatewayOrderId = gateway === 'cashfree'
         ? `sub_cf_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`
         : `sub_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
+      if (gateway === 'cashfree') {
+        gatewayPaymentSessionId = `cf_session_sandbox_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      }
     } else {
       throw new Error('BILLING_UNAVAILABLE: Live gateway secret keys not configured for order creation.');
     }
@@ -2575,7 +2601,9 @@ export class PaymentGatewayService {
       currency,
       gateway,
       isSandbox,
-      checkoutUrl: gatewayCheckoutUrl
+      checkoutUrl: gatewayCheckoutUrl,
+      paymentSessionId: gatewayPaymentSessionId,
+      subscriptionSessionId: gatewayPaymentSessionId
     };
   }
 
