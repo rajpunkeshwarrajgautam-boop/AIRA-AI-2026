@@ -464,7 +464,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         }
       };
 
-      const timestamp = '1729355000';
+      const timestamp = String(Math.floor(Date.now() / 1000));
       const rawBody = JSON.stringify(cfPayload);
       const signature = crypto.createHmac('sha256', cfSecret).update(`${timestamp}${rawBody}`).digest('base64');
 

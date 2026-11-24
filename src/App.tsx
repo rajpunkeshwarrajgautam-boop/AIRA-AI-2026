@@ -268,6 +268,11 @@ function App() {
         url.searchParams.delete('cf_id');
         url.searchParams.delete('session_id');
         url.searchParams.delete('gateway');
+        url.searchParams.delete('payment_id');
+        url.searchParams.delete('signature');
+        url.searchParams.delete('razorpay_payment_id');
+        url.searchParams.delete('razorpay_signature');
+        url.searchParams.delete('razorpay_subscription_id');
         window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : '') + url.hash);
       }
     } catch {

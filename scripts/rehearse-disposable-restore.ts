@@ -95,11 +95,13 @@ export const EXPECTED_MIGRATIONS = Object.freeze([
   '030_principal_workspace_authority.ts',
   '031_autonomous_agent_tasks.ts',
   '032_reconcile_workflow_run_artifacts.ts',
-  '033_billing_invoice_sequences.ts'
+  '033_billing_invoice_sequences.ts',
+  '034_unique_active_subscription_per_customer.ts',
+  '035_subscription_cancellation_and_invoice_outbox.ts'
 ]);
 
 // ============================================================================
-// 2. Authoritative Table Catalog (50 Total Tables: 48 Application + 2 Knex)
+// 2. Authoritative Table Catalog (52 Total Tables: 50 Application + 2 Knex)
 // ============================================================================
 export const EXPECTED_TABLES = Object.freeze([
   'agents',
@@ -150,6 +152,8 @@ export const EXPECTED_TABLES = Object.freeze([
   'durable_browser_sessions',
   'billing_invoices',
   'billing_credit_notes',
+  'subscription_cancellation_outbox',
+  'billing_invoice_reconciliation_outbox',
   'knex_migrations',
   'knex_migrations_lock'
 ]);
