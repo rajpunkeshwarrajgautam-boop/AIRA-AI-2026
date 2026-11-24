@@ -105,6 +105,15 @@ describe('Cashfree Recurring Plan Dynamic Provisioning & Safety Suite', () => {
             }
           }
           return updatedCount;
+        },
+        async del() {
+          const table = tables[tableName] || [];
+          const remaining = table.filter(r => !matchRow(r));
+          tables[tableName] = remaining;
+          return table.length - remaining.length;
+        },
+        async delete() {
+          return this.del();
         }
       };
 
