@@ -4,6 +4,51 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { COMMERCIAL_PLANS, PlanTier, CurrencyCode } from '../types/commercial-types';
 import { authenticatedApiFetch } from '../lib/neonAuth';
 
+/**
+ * Validates that a Cashfree redirect URL is using an official, trusted Cashfree domain over HTTPS.
+ * Prevents open-redirect, domain spoofing, and environment confusion attacks.
+ */
+export function isTrustedCashfreeUrl(rawUrl: string, isSandbox?: boolean): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'https:') return false;
+
+    const sandboxHosts = ['sandbox.cashfree.com', 'payments-test.cashfree.com'];
+    const prodHosts = ['api.cashfree.com', 'payments.cashfree.com'];
+
+    const allowedHosts = isSandbox === true
+      ? sandboxHosts
+      : isSandbox === false
+        ? prodHosts
+        : [...sandboxHosts, ...prodHosts];
+
+    return allowedHosts.includes(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Loads the official Cashfree Web SDK v3 script dynamically.
+ */
+export function loadCashfreeScript(): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    if (typeof window === 'undefined') return resolve(false);
+    if ((window as any).Cashfree) return resolve(true);
+    const existingScript = document.querySelector('script[src*="cashfree.com"]');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(true));
+      existingScript.addEventListener('error', () => resolve(false));
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://sdk.cashfree.com/js/v3/cashfree.js';
+    script.onload = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
+
 interface PricingModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -55,7 +100,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   if (!isOpen) return null;
 
   const handleSubscribe = async (tier: PlanTier) => {
-    if (tier === 'free' || tier === currentPlan) return;
+    if (loadingPlan !== null || tier === 'free' || tier === currentPlan) return;
     setLoadingPlan(tier);
     setCheckoutNotice(null);
     setPhoneError(null);
@@ -110,8 +155,46 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           return;
         }
 
-        if (data.checkoutUrl) {
-          setCheckoutNotice(`Launching ${data.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay'} Checkout...`);
+        // Cashfree Recurring Mandate Checkout Flow (Strategy A: Web SDK v3; Strategy B: Hosted Link Fallback)
+        if (data.gateway === 'cashfree') {
+          const sessionId = data.paymentSessionId || data.subscriptionSessionId;
+          const checkoutUrl = data.checkoutUrl;
+
+          // Strategy A: Cashfree Web SDK v3 invocation when session ID is available
+          if (sessionId) {
+            setCheckoutNotice('Initializing Cashfree secure mandate authorization...');
+            try {
+              const loaded = await loadCashfreeScript();
+              if (loaded && (window as any).Cashfree) {
+                const cashfree = (window as any).Cashfree({
+                  mode: data.isSandbox ? 'sandbox' : 'production'
+                });
+                cashfree.checkout({
+                  paymentSessionId: sessionId,
+                  redirectTarget: '_self'
+                });
+                return;
+              }
+            } catch (sdkErr: any) {
+              console.warn('[PricingModal] Cashfree Web SDK checkout error, falling back to hosted checkout URL:', sdkErr?.message);
+            }
+          }
+
+          // Strategy B: Hosted mandate authorization link fallback (only if genuine provider auth_link exists and is trusted)
+          if (checkoutUrl && isTrustedCashfreeUrl(checkoutUrl, data.isSandbox)) {
+            setCheckoutNotice('Launching Cashfree Checkout...');
+            window.location.assign(checkoutUrl);
+            return;
+          }
+
+          // Fail-closed: No valid session ID and no trusted checkout URL
+          setCheckoutNotice('Unable to launch Cashfree mandate authorization. Please try again or contact support.');
+          setLoadingPlan(null);
+          return;
+        }
+
+        if (data.gateway !== 'cashfree' && data.checkoutUrl) {
+          setCheckoutNotice('Launching Checkout...');
           window.location.assign(data.checkoutUrl);
           return;
         }
@@ -169,7 +252,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           }
         }
 
-        setCheckoutNotice(`Checkout initiated for ${tier.toUpperCase()} (${data.currency} ${(data.amount / 100).toFixed(2)}). Order ID: ${data.orderId}`);
+        setCheckoutNotice('Unable to initialize payment gateway. Please try again or contact support.');
       }
     } catch (err: any) {
       setCheckoutNotice(err.message || 'Checkout failed');
