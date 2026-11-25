@@ -2230,12 +2230,59 @@ export class PaymentGatewayService {
       try {
         meta = typeof existingSub.metadata === 'string' ? JSON.parse(existingSub.metadata) : (existingSub.metadata || {});
       } catch {}
+
+      let hasPaidFulfillment =
+        existingSub.status === 'active' ||
+        existingSub.status === 'refunded' ||
+        Number(meta.fulfilledCycle || 0) >= 1;
+
+      if (!hasPaidFulfillment) {
+        try {
+          const paidAudit = await trx('billing_audit_events')
+            .where({ customer_id: existingSub.customer_id })
+            .whereIn('event_type', ['SUBSCRIPTION_ACTIVATED', 'SUBSCRIPTION_RENEWED', 'PAYMENT_SETTLED'])
+            .select('*');
+          if (Array.isArray(paidAudit)) {
+            hasPaidFulfillment = paidAudit.some((ev: any) => {
+              try {
+                const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : (ev.payload || {});
+                return (p.subscriptionId === existingSub.id || p.purchaseId === existingSub.id) && Boolean(p.actualPaymentId || p.paymentId);
+              } catch { return false; }
+            });
+          }
+        } catch {}
+      }
+
+      if (!hasPaidFulfillment) {
+        try {
+          const hasInvTable = typeof trx.schema?.hasTable === 'function'
+            ? await trx.schema.hasTable('billing_invoices')
+            : false;
+          if (hasInvTable) {
+            const invRow = await trx('billing_invoices')
+              .where({ subscription_id: existingSub.id, customer_id: existingSub.customer_id })
+              .first();
+            if (invRow && Number(invRow.total_amount) > 0 && invRow.billing_event_id && invRow.billing_event_id !== meta.auth_payment_id) {
+              hasPaidFulfillment = true;
+            }
+          }
+        } catch {}
+      }
+
+      const nextLifecycleStage = hasPaidFulfillment ? 'PAID_SUBSCRIPTION_CANCELLED' : 'UNPAID_CHECKOUT_CANCELLED';
+      const nextStatus = existingSub.status === 'canceled' ? 'canceled' : 'cancelled';
+
       meta.cancellation_status = 'CANCELLATION_CONFIRMED';
       meta.cancelled_at = now;
+      meta.hadPaidSubscription = hasPaidFulfillment;
+      meta.lifecycleStage = nextLifecycleStage;
+      if (!hasPaidFulfillment && meta.reconciliationStatus !== 'PROVIDER_CONFIRMED_UNPAID_EXPIRED') {
+        meta.reconciliationStatus = 'UNPAID_CHECKOUT_CANCELLED';
+      }
 
       await trx('subscriptions').where({ id: existingSub.id }).update({
-        status: 'cancelled',
-        cancelled_at: now,
+        status: nextStatus,
+        cancelled_at: existingSub.cancelled_at || now,
         cancel_at_period_end: false,
         metadata: JSON.stringify(meta),
         updated_at: now
@@ -2250,6 +2297,9 @@ export class PaymentGatewayService {
         payload: JSON.stringify({
           subscriptionId: existingSub.id,
           cancellation_status: 'CANCELLATION_CONFIRMED',
+          hadPaidSubscription: hasPaidFulfillment,
+          lifecycleStage: nextLifecycleStage,
+          subscriptionStatus: nextStatus,
           cancelled_at: now
         }),
         created_at: now
@@ -3713,6 +3763,8 @@ export class PaymentGatewayService {
       metadata: JSON.stringify({
         ...existingMeta,
         reconciliationStatus: nextStatus === 'expired' ? 'PROVIDER_CONFIRMED_UNPAID_EXPIRED' : `PROVIDER_${nextStatus.toUpperCase()}`,
+        lifecycleStage: nextStatus === 'expired' ? 'UNPAID_CHECKOUT_EXPIRED' : 'UNPAID_CHECKOUT_CANCELLED',
+        hadPaidSubscription: false,
         gateway_subscription_status: providerStatus || existingMeta.gateway_subscription_status,
         reconciledAt: now,
         reconciliationReason: reason,
@@ -4019,6 +4071,8 @@ export class PaymentGatewayService {
           metadata: JSON.stringify({
             ...meta,
             reconciliationStatus: 'CUSTOMER_ABANDONED_CANCELLED',
+            lifecycleStage: resolvedLocalStatus === 'expired' ? 'UNPAID_CHECKOUT_EXPIRED' : 'UNPAID_CHECKOUT_CANCELLED',
+            hadPaidSubscription: false,
             gateway_subscription_status: check.exists ? (terminalCancelledOrFailed.has(check.rawStatus) ? check.rawStatus : 'CANCELLED') : 'NOT_FOUND',
             abandonedAt: now,
             abandonReason: options?.reason || 'customer_cancelled_pending',
@@ -5394,6 +5448,21 @@ export class PaymentGatewayService {
     debugHookBeforeFinalize?: (lease: { ownerToken: string; generation: number }) => Promise<void> | void;
   }): Promise<InvoiceRecord | null> {
     const cycle = params.cycleNumber || 1;
+    let purchaseMeta: any = {};
+    try {
+      purchaseMeta = typeof params.purchaseRecord?.metadata === 'string'
+        ? JSON.parse(params.purchaseRecord.metadata)
+        : (params.purchaseRecord?.metadata || {});
+    } catch {}
+
+    // Reject mandate-authorization verification payments (e.g. ₹1 Cashfree AUTH) from generating paid invoices
+    if (
+      (params.actualPaymentId && purchaseMeta?.auth_payment_id && params.actualPaymentId === purchaseMeta.auth_payment_id && params.actualPaymentId !== purchaseMeta?.initialPaymentId && params.actualPaymentId !== purchaseMeta?.lastPaymentId) ||
+      Number(params.purchaseRecord?.amount_minor_units || 0) <= 0
+    ) {
+      throw new Error('INVOICE_PAYMENT_EVIDENCE_INVALID: Cannot issue paid tax invoice for unpaid or mandate-auth-only transaction.');
+    }
+
     const cycleBindingKey = `inv_binding:${params.customerId}:${params.purchaseRecord.id}:cycle:${cycle}`;
     let currentGeneration = 1;
     let currentOwnerToken = params.workerToken || `wkr_${crypto.randomUUID().replace(/-/g, '')}`;
@@ -6564,8 +6633,25 @@ export class PaymentGatewayService {
   }
 
   /**
+   * Parses JSON payload or metadata safely without throwing on malformed records.
+   */
+  private parseJsonRecordSafe(raw: unknown): Record<string, any> {
+    if (!raw) return {};
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+    return typeof raw === 'object' ? (raw as Record<string, any>) : {};
+  }
+
+  /**
    * Generates GST-compliant, sequential tax invoices for reconciled subscription payments.
-   * Fail-closed on missing or mismatched principal accounts.
+   * Requires authoritative payment evidence matching customer, subscription, gateway, amount, currency and cycle.
+   * Never synthesizes invoices from subscription status alone; fail-closed on missing or mismatched accounts.
    */
   async getInvoices(principalId: string): Promise<InvoiceRecord[]> {
     try {
@@ -6583,235 +6669,412 @@ export class PaymentGatewayService {
 
       const dbClient = this.getDb();
 
-      // Check relational billing_invoices table first if available
-      try {
-        const hasInvTable = typeof (dbClient as any).schema?.hasTable === 'function'
-          ? await (dbClient as any).schema.hasTable('billing_invoices')
-          : false;
-        if (hasInvTable) {
-          let invQuery: any = (dbClient as any)('billing_invoices').where({ customer_id: customerId });
-          if (typeof invQuery.orderBy === 'function') {
-            invQuery = invQuery.orderBy('created_at', 'desc');
-          }
-          const invRows = typeof invQuery.select === 'function' ? await invQuery.select('*') : (await invQuery || []);
-          if (Array.isArray(invRows) && invRows.length > 0) {
-            const cnByInvNumber = new Map<string, any>();
-            const cnBySubId = new Map<string, any>();
-            try {
-              const hasCnTable = typeof (dbClient as any).schema?.hasTable === 'function'
-                ? await (dbClient as any).schema.hasTable('billing_credit_notes')
-                : false;
-              if (hasCnTable) {
-                let cnQuery: any = (dbClient as any)('billing_credit_notes').where({ customer_id: customerId });
-                const cnRows = typeof cnQuery.select === 'function' ? await cnQuery.select('*') : (await cnQuery || []);
-                for (const cn of (cnRows || [])) {
-                  if (cn.original_invoice_number) cnByInvNumber.set(cn.original_invoice_number, cn);
-                  if (cn.subscription_id) cnBySubId.set(cn.subscription_id, cn);
-                }
-              }
-            } catch {}
-
-            return invRows.map((r: any) => {
-              const linkedCn = cnByInvNumber.get(r.invoice_number) || cnBySubId.get(r.subscription_id);
-              const mapped = this.mapBillingInvoiceRow(r);
-              if (linkedCn) {
-                mapped.status = linkedCn.is_partial_refund ? 'Partially Refunded' : 'Refunded';
-                mapped.creditNoteNumber = linkedCn.credit_note_number;
-                mapped.refundAmount = Number(linkedCn.refund_amount) || 0;
-              }
-              return mapped;
-            });
-          }
-        }
-      } catch {}
-
-      // Check durable issued invoices in billing_audit_events first
-      let invoiceAuditEvents: any[] = [];
-      try {
-        let auditQuery: any = dbClient('billing_audit_events').where({
-          customer_id: customerId,
-          event_type: 'TAX_INVOICE_ISSUED'
-        });
-        if (typeof auditQuery.orderBy === 'function') {
-          auditQuery = auditQuery.orderBy('created_at', 'desc');
-        }
-        if (typeof auditQuery.select === 'function') {
-          invoiceAuditEvents = (await auditQuery.select('*')) || [];
-        } else {
-          invoiceAuditEvents = (await auditQuery) || [];
-        }
-      } catch {}
-
-      // Check pending reconciliation audit events
-      let pendingAuditEvents: any[] = [];
-      try {
-        let pendingQuery: any = dbClient('billing_audit_events').where({
-          customer_id: customerId,
-          event_type: 'TAX_INVOICE_PENDING_RECONCILIATION'
-        });
-        if (typeof pendingQuery.select === 'function') {
-          pendingAuditEvents = (await pendingQuery.select('*')) || [];
-        } else {
-          pendingAuditEvents = (await pendingQuery) || [];
-        }
-      } catch {}
-
-      // Credit notes
-      let creditNoteEvents: any[] = [];
-      try {
-        const cnQuery: any = dbClient('billing_audit_events').where({
-          customer_id: customerId,
-          event_type: 'CREDIT_NOTE_ISSUED'
-        });
-        if (typeof cnQuery.select === 'function') {
-          creditNoteEvents = (await cnQuery.select('*')) || [];
-        } else {
-          creditNoteEvents = (await cnQuery) || [];
-        }
-      } catch {}
-
-      const creditNotesByInvoice = new Map<string, any>();
-      for (const cnEv of creditNoteEvents || []) {
+      const loadRows = async (tableName: string, whereClause: Record<string, any>, orderCol?: string): Promise<any[]> => {
         try {
-          const cnPayload = typeof cnEv.payload === 'string' ? JSON.parse(cnEv.payload) : cnEv.payload;
-          if (cnPayload?.originalInvoiceNumber) {
-            creditNotesByInvoice.set(cnPayload.originalInvoiceNumber, cnPayload);
+          if (typeof (dbClient as any).schema?.hasTable === 'function') {
+            const exists = await (dbClient as any).schema.hasTable(tableName);
+            if (!exists) return [];
           }
-          if (cnPayload?.subscriptionId) {
-            creditNotesByInvoice.set(`sub_${cnPayload.subscriptionId}`, cnPayload);
+          let q: any = (dbClient as any)(tableName).where(whereClause);
+          if (orderCol && typeof q.orderBy === 'function') {
+            q = q.orderBy(orderCol, 'desc');
           }
-        } catch {}
+          if (typeof q.select === 'function') {
+            return (await q.select('*')) || [];
+          }
+          const awaited = await q;
+          return Array.isArray(awaited) ? awaited : awaited ? [awaited] : [];
+        } catch {
+          return [];
+        }
+      };
+
+      // Load customer's subscriptions, audit trail, gateway events, and credit notes for cross-verification
+      const customerSubs = await loadRows('subscriptions', { customer_id: customerId }, 'created_at');
+      const subsById = new Map<string, any>();
+      for (const s of customerSubs) {
+        if (s?.id && s.customer_id === customerId) subsById.set(s.id, s);
       }
+
+      const customerAuditEvents = await loadRows('billing_audit_events', { customer_id: customerId }, 'created_at');
+
+      const authPaymentIds = new Set<string>();
+      const failedPaymentIds = new Set<string>();
+      const settledPaymentEvidenceBySub = new Map<string, Array<{ paymentId?: string; amountMinor?: number; currency?: string; gateway?: string; cycle?: number }>>();
+      const invoiceAuditEvents: any[] = [];
+      const pendingAuditEvents: any[] = [];
+      const creditNoteEvents: any[] = [];
+      const refundedSubsMap = new Map<string, { isPartial: boolean; refundAmount?: number; creditNoteNumber?: string }>();
+
+      for (const ev of customerAuditEvents) {
+        const p = this.parseJsonRecordSafe(ev?.payload);
+        if (ev.event_type === 'SUBSCRIPTION_MANDATE_AUTH_RECORDED') {
+          if (typeof p.authPaymentId === 'string' && p.authPaymentId) {
+            authPaymentIds.add(p.authPaymentId);
+          }
+        } else if (ev.event_type === 'PAYMENT_FAILED') {
+          const pid = p.paymentId || p.actualPaymentId || p.gatewayPaymentId;
+          if (typeof pid === 'string' && pid) failedPaymentIds.add(pid);
+        } else if (
+          ev.event_type === 'SUBSCRIPTION_ACTIVATED' ||
+          ev.event_type === 'SUBSCRIPTION_RENEWED' ||
+          ev.event_type === 'PAYMENT_SETTLED'
+        ) {
+          const subId = p.purchaseId || p.subscriptionId;
+          const pid = p.actualPaymentId || p.paymentId;
+          if (subId && pid) {
+            const list = settledPaymentEvidenceBySub.get(subId) || [];
+            list.push({
+              paymentId: pid,
+              amountMinor: p.amount !== undefined ? Number(p.amount) : undefined,
+              currency: typeof p.currency === 'string' ? p.currency.toUpperCase() : undefined,
+              gateway: typeof p.gateway === 'string' ? p.gateway.toLowerCase() : undefined,
+              cycle: p.cycleNumber !== undefined ? Number(p.cycleNumber) : undefined
+            });
+            settledPaymentEvidenceBySub.set(subId, list);
+          }
+        } else if (ev.event_type === 'TAX_INVOICE_ISSUED') {
+          invoiceAuditEvents.push(ev);
+        } else if (ev.event_type === 'TAX_INVOICE_PENDING_RECONCILIATION') {
+          pendingAuditEvents.push(ev);
+        } else if (ev.event_type === 'CREDIT_NOTE_ISSUED') {
+          creditNoteEvents.push(ev);
+        } else if (ev.event_type === 'SUBSCRIPTION_REFUNDED' || ev.event_type === 'SUBSCRIPTION_PARTIALLY_REFUNDED') {
+          if (p.subscriptionId) {
+            const isPartial = ev.event_type === 'SUBSCRIPTION_PARTIALLY_REFUNDED';
+            const refundAmt = p.refundAmount !== undefined ? Number(p.refundAmount) : (p.amount !== undefined ? Number(p.amount) : undefined);
+            refundedSubsMap.set(p.subscriptionId, { isPartial, refundAmount: refundAmt });
+          }
+        }
+      }
+
+      // Inspect payment_gateway_events for AUTH-only / failed / settled CHARGE classifications
+      const allGatewayEvents = await loadRows('payment_gateway_events', {}, 'created_at');
+      const gwAuthPaymentIds = new Set<string>();
+      const gwFailedPaymentIds = new Set<string>();
+      const gwSettledCharges = new Map<string, { gateway?: string; currency?: string; amountMinor?: number; subIds: Set<string> }>();
+
+      for (const gev of allGatewayEvents) {
+        const gp = this.parseJsonRecordSafe(gev?.payload);
+        const data = gp.data || gp;
+        const payEntity = gp.payload?.payment?.entity || gp.payment || data.payment || {};
+        const paymentType = String(payEntity.payment_type || data.payment_type || '').toUpperCase();
+        const paymentStatus = String(payEntity.payment_status || payEntity.status || data.payment_status || '').toUpperCase();
+        const pid = String(payEntity.cf_payment_id || payEntity.id || data.cf_payment_id || data.payment_id || '').trim();
+        const subRef = String(
+          data.subscription_id ||
+          data.subscription_details?.subscription_id ||
+          gp.payload?.subscription?.entity?.id ||
+          gp.subscription?.id ||
+          ''
+        ).trim();
+
+        if (!pid) continue;
+        if (paymentType === 'AUTH' || gev.event_type === 'SUBSCRIPTION_AUTH_SUCCESS') {
+          gwAuthPaymentIds.add(pid);
+          continue;
+        }
+        if (
+          gev.event_type === 'PAYMENT_FAILED' ||
+          gev.event_type === 'SUBSCRIPTION_PAYMENT_FAILED' ||
+          gev.event_type === 'payment.failed' ||
+          paymentStatus === 'FAILED' ||
+          paymentStatus === 'USER_DROPPED' ||
+          paymentStatus === 'CANCELLED'
+        ) {
+          gwFailedPaymentIds.add(pid);
+          continue;
+        }
+        const isSettledPayment =
+          paymentStatus === 'SUCCESS' ||
+          paymentStatus === 'CAPTURED' ||
+          paymentStatus === 'PAID' ||
+          gev.event_type === 'subscription.charged' ||
+          gev.event_type === 'SUBSCRIPTION_PAYMENT_SUCCESS' ||
+          gev.event_type === 'payment.captured';
+        if (isSettledPayment) {
+          const rawAmt = payEntity.payment_amount !== undefined
+            ? Math.round(Number(payEntity.payment_amount) * 100)
+            : (payEntity.amount !== undefined ? Number(payEntity.amount) : (data.payment_amount !== undefined ? Math.round(Number(data.payment_amount) * 100) : undefined));
+          const rawCurr = String(payEntity.payment_currency || payEntity.currency || data.payment_currency || '').toUpperCase() || undefined;
+          const entry = gwSettledCharges.get(pid) || {
+            gateway: typeof gev.gateway === 'string' ? gev.gateway.toLowerCase() : undefined,
+            currency: rawCurr,
+            amountMinor: rawAmt,
+            subIds: new Set<string>()
+          };
+          if (subRef) entry.subIds.add(subRef);
+          gwSettledCharges.set(pid, entry);
+        }
+      }
+
+      // Build credit note & refund lookups across billing_credit_notes and CREDIT_NOTE_ISSUED audit events
+      const cnByInvNumber = new Map<string, any>();
+      const cnBySubId = new Map<string, any>();
+
+      const creditNoteRows = await loadRows('billing_credit_notes', { customer_id: customerId });
+      for (const cn of creditNoteRows) {
+        const entry = {
+          creditNoteNumber: cn.credit_note_number,
+          isPartialRefund: Boolean(cn.is_partial_refund),
+          refundAmount: cn.refund_amount !== undefined ? Number(cn.refund_amount) : undefined,
+          refundAmountMinorUnits: cn.refund_amount_minor_units !== undefined ? Number(cn.refund_amount_minor_units) : undefined
+        };
+        if (cn.original_invoice_number) cnByInvNumber.set(cn.original_invoice_number, entry);
+        if (cn.subscription_id) cnBySubId.set(cn.subscription_id, entry);
+      }
+      for (const cnEv of creditNoteEvents) {
+        const cnPayload = this.parseJsonRecordSafe(cnEv?.payload);
+        const entry = {
+          creditNoteNumber: cnPayload.creditNoteNumber || cnEv.actor_id,
+          isPartialRefund: Boolean(cnPayload.isPartialRefund),
+          refundAmount: cnPayload.refundAmount !== undefined ? Number(cnPayload.refundAmount) : undefined,
+          refundAmountMinorUnits: cnPayload.refundAmountMinorUnits !== undefined ? Number(cnPayload.refundAmountMinorUnits) : undefined
+        };
+        if (cnPayload.originalInvoiceNumber && !cnByInvNumber.has(cnPayload.originalInvoiceNumber)) {
+          cnByInvNumber.set(cnPayload.originalInvoiceNumber, entry);
+        }
+        if (cnPayload.subscriptionId && !cnBySubId.has(cnPayload.subscriptionId)) {
+          cnBySubId.set(cnPayload.subscriptionId, entry);
+        }
+      }
+
+      // Verify whether a subscription row exists globally under another customer (guards against cross-customer reference forgery)
+      const findSubscriptionById = async (subscriptionId?: string): Promise<{ sub: any | null; owned: boolean }> => {
+        if (!subscriptionId) return { sub: null, owned: true };
+        if (subsById.has(subscriptionId)) return { sub: subsById.get(subscriptionId), owned: true };
+        try {
+          const found = await (dbClient as any)('subscriptions').where({ id: subscriptionId }).first();
+          if (!found) return { sub: null, owned: true };
+          return { sub: found, owned: found.customer_id === customerId };
+        } catch {
+          return { sub: null, owned: true };
+        }
+      };
+
+      const hasVerifiedPaymentEvidence = async (candidate: {
+        invoiceNumber?: string;
+        customerId: string;
+        subscriptionId?: string;
+        cycleNumber?: number;
+        paymentId?: string;
+        gateway?: string;
+        currency?: string;
+        totalAmount: number;
+      }): Promise<boolean> => {
+        const invNum = String(candidate.invoiceNumber || '');
+        if (!invNum || /^INV-2026-LEGACY-/i.test(invNum)) return false;
+        if (candidate.customerId !== customerId) return false;
+        if (!Number.isFinite(candidate.totalAmount) || candidate.totalAmount <= 0) return false;
+
+        const pid = candidate.paymentId ? String(candidate.paymentId).trim() : '';
+        if (pid) {
+          if (authPaymentIds.has(pid) || (gwAuthPaymentIds.has(pid) && !gwSettledCharges.has(pid))) {
+            return false;
+          }
+          if ((failedPaymentIds.has(pid) || gwFailedPaymentIds.has(pid)) && !gwSettledCharges.has(pid)) {
+            return false;
+          }
+        }
+
+        const { sub, owned } = await findSubscriptionById(candidate.subscriptionId);
+        if (!owned) return false;
+
+        if (sub) {
+          const subMeta = this.parseJsonRecordSafe(sub.metadata);
+          if (pid && subMeta.auth_payment_id && pid === subMeta.auth_payment_id && pid !== subMeta.initialPaymentId && pid !== subMeta.lastPaymentId) {
+            return false;
+          }
+
+          if (candidate.gateway && sub.gateway && candidate.gateway.toLowerCase() !== String(sub.gateway).toLowerCase()) {
+            return false;
+          }
+
+          const subCurrency = String(sub.currency || 'INR').toUpperCase();
+          const invCurrency = String(candidate.currency || subCurrency).toUpperCase();
+          if (invCurrency !== subCurrency) return false;
+
+          const subAmountMinor = Number(sub.amount_minor_units || 0);
+          const invAmountMinor = Math.round(candidate.totalAmount * 100);
+          if (subAmountMinor > 0 && Math.abs(invAmountMinor - subAmountMinor) > 1) {
+            return false;
+          }
+          if (subAmountMinor > 100 && invAmountMinor <= 100) {
+            return false;
+          }
+
+          const cycle = Number(candidate.cycleNumber || 1);
+          if (cycle < 1) return false;
+
+          const gwCharge = pid ? gwSettledCharges.get(pid) : undefined;
+          if (gwCharge) {
+            if (gwCharge.gateway && sub.gateway && gwCharge.gateway !== String(sub.gateway).toLowerCase()) return false;
+            if (gwCharge.currency && gwCharge.currency !== subCurrency) return false;
+            if (gwCharge.amountMinor !== undefined && subAmountMinor > 0 && Math.abs(gwCharge.amountMinor - subAmountMinor) > 1) return false;
+            if (gwCharge.subIds.size > 0 && !gwCharge.subIds.has(sub.id) && !(sub.gateway_subscription_id && gwCharge.subIds.has(sub.gateway_subscription_id))) {
+              return false;
+            }
+          }
+
+          const settledEvs = settledPaymentEvidenceBySub.get(sub.id) || [];
+          const hasSettledAuditOrGw = Boolean(gwCharge) || settledEvs.some(se => (!pid || se.paymentId === pid) && (!se.currency || se.currency === subCurrency));
+
+          const isUnpaidLifecycle =
+            sub.status === 'pending' ||
+            sub.status === 'initiating' ||
+            sub.status === 'ambiguous_timeout' ||
+            sub.status === 'canceled' ||
+            sub.status === 'expired' ||
+            sub.status === 'failed' ||
+            subMeta.lifecycleStage === 'UNPAID_CHECKOUT_CANCELLED' ||
+            subMeta.lifecycleStage === 'UNPAID_CHECKOUT_EXPIRED' ||
+            subMeta.hadPaidSubscription === false;
+
+          if (isUnpaidLifecycle && !hasSettledAuditOrGw) {
+            return false;
+          }
+
+          if (!hasSettledAuditOrGw) {
+            // Require explicit prior paid fulfillment if status is active/cancelled/refunded with no payment audit or gateway settlement row
+            const hasPaidStatusAndMeta =
+              (sub.status === 'active' || sub.status === 'cancelled' || sub.status === 'refunded') &&
+              (Number(subMeta.fulfilledCycle || 0) >= cycle || subMeta.hadPaidSubscription === true || subMeta.refunded === true) &&
+              Boolean(subMeta.initialPaymentId || subMeta.lastPaymentId);
+            if (!hasPaidStatusAndMeta && !invoiceAuditEvents.some(ev => {
+              const ep = this.parseJsonRecordSafe(ev.payload);
+              return ep.subscriptionId === sub.id && ep.invoiceNumber === invNum;
+            })) {
+              return false;
+            }
+          }
+        }
+
+        return true;
+      };
+
+      const applyRefundState = (record: InvoiceRecord, subId?: string, invNum?: string): InvoiceRecord => {
+        const linkedCn = (invNum ? cnByInvNumber.get(invNum) : undefined) || (subId ? cnBySubId.get(subId) : undefined);
+        const linkedSubRefund = subId ? refundedSubsMap.get(subId) : undefined;
+        const linkedSub = subId ? subsById.get(subId) : undefined;
+        const subMeta = this.parseJsonRecordSafe(linkedSub?.metadata);
+
+        if (linkedCn) {
+          record.status = linkedCn.isPartialRefund ? 'Partially Refunded' : 'Refunded';
+          if (linkedCn.creditNoteNumber) record.creditNoteNumber = linkedCn.creditNoteNumber;
+          if (linkedCn.refundAmount !== undefined) record.refundAmount = linkedCn.refundAmount;
+          if (linkedCn.refundAmountMinorUnits !== undefined) record.refundAmountMinorUnits = linkedCn.refundAmountMinorUnits;
+        } else if (linkedSubRefund) {
+          record.status = linkedSubRefund.isPartial ? 'Partially Refunded' : 'Refunded';
+          if (linkedSubRefund.refundAmount !== undefined) record.refundAmount = linkedSubRefund.refundAmount;
+        } else if (linkedSub?.status === 'refunded' || subMeta.refunded === true) {
+          record.status = 'Refunded';
+          if (subMeta.creditNoteNumber) record.creditNoteNumber = subMeta.creditNoteNumber;
+          if (subMeta.refundAmount !== undefined) record.refundAmount = Number(subMeta.refundAmount);
+        } else if (subMeta.partialRefund === true) {
+          record.status = 'Partially Refunded';
+          if (subMeta.refundAmount !== undefined) record.refundAmount = Number(subMeta.refundAmount);
+        }
+        return record;
+      };
 
       const invoices: InvoiceRecord[] = [];
+      const seenInvoiceNumbers = new Set<string>();
       const issuedSubscriptionCycles = new Set<string>();
 
-      // Sort descending by created_at
-      invoiceAuditEvents.sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
-
-      for (const ev of invoiceAuditEvents || []) {
-        try {
-          const p = typeof ev.payload === 'string' ? JSON.parse(ev.payload) : ev.payload;
-          if (p?.subscriptionId) {
-            issuedSubscriptionCycles.add(`${p.subscriptionId}_${p.cycleNumber || 1}`);
-          }
-          const linkedCn = creditNotesByInvoice.get(p.invoiceNumber) || (p.subscriptionId ? creditNotesByInvoice.get(`sub_${p.subscriptionId}`) : null);
-
-          let status = p.status || 'Paid';
-          if (linkedCn) {
-            status = linkedCn.isPartialRefund ? 'Partially Refunded' : 'Refunded';
-          }
-
-          invoices.push({
-            invoiceNumber: p.invoiceNumber || ev.actor_id,
-            date: p.date || new Date(Number(ev.created_at) || Date.now()).toISOString().split('T')[0],
-            plan: p.plan || 'AIRA Subscription',
-            currency: (p.currency || 'INR').toUpperCase(),
-            totalAmount: Number(p.totalAmount) || 0,
-            taxableBase: Number(p.taxableBase) || 0,
-            gstAmount: Number(p.gstAmount) || 0,
-            cgstAmount: p.cgstAmount !== undefined ? Number(p.cgstAmount) : undefined,
-            sgstAmount: p.sgstAmount !== undefined ? Number(p.sgstAmount) : undefined,
-            igstAmount: p.igstAmount !== undefined ? Number(p.igstAmount) : undefined,
-            sacCode: p.sacCode || '998431',
-            supplierName: p.supplierName || 'Virexa AI Ventures Private Limited',
-            supplierGstin: p.supplierGstin || process.env.AIRA_SUPPLIER_GSTIN || undefined,
-            taxComplianceStatus: p.taxComplianceStatus || 'COMPLIANT',
-            placeOfSupply: p.placeOfSupply || 'UNKNOWN',
-            status,
-            pdfDownloadAvailable: false,
-            creditNoteNumber: linkedCn?.creditNoteNumber,
-            refundAmount: linkedCn?.refundAmount ? Number(linkedCn.refundAmount) : undefined,
-            refundAmountMinorUnits: linkedCn?.refundAmountMinorUnits ? Number(linkedCn.refundAmountMinorUnits) : undefined
-          });
-        } catch {}
-      }
-
-      // Add truthful entry for any pending reconciliation events not yet fulfilled
-      for (const pev of pendingAuditEvents || []) {
-        try {
-          const pp = typeof pev.payload === 'string' ? JSON.parse(pev.payload) : pev.payload;
-          const key = `${pp.purchaseId}_${pp.cycleNumber || 1}`;
-          if (!issuedSubscriptionCycles.has(key)) {
-            invoices.push({
-              invoiceNumber: 'INV-PENDING-RECONCILIATION',
-              date: new Date(Number(pev.created_at) || Date.now()).toISOString().split('T')[0],
-              plan: pp.planTier === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
-              currency: 'INR',
-              totalAmount: Math.round(((Number(pp.amount) || 0) / 100) * 100) / 100,
-              taxableBase: 0,
-              gstAmount: 0,
-              sacCode: '998431',
-              supplierName: 'Virexa AI Ventures Private Limited',
-              taxComplianceStatus: 'PROVISIONAL_PENDING_RECONCILIATION' as any,
-              placeOfSupply: 'UNKNOWN',
-              status: 'Pending Reconciliation',
-              pdfDownloadAvailable: false
-            });
-          }
-        } catch {}
-      }
-
-      if (invoices.length > 0) {
-        return invoices;
-      }
-
-      // Fallback: Query subscriptions table for legacy / mock rows without audit events
-      let subs: SubscriptionRow[] = [];
-      const query = dbClient('subscriptions').where({ customer_id: customerId });
-      if (typeof query.orderBy === 'function') {
-        subs = await query.orderBy('created_at', 'desc');
-      } else if (typeof query.first === 'function') {
-        const firstRow = await query.first();
-        subs = firstRow ? [firstRow as any] : [];
-      } else if (typeof query.select === 'function') {
-        subs = await query.select('*');
-      }
-
-      const paidSubs = (subs || []).filter(s => s && s.customer_id === customerId && (s.status === 'active' || s.status === 'cancelled' || s.status === 'refunded'));
-
-      return paidSubs.map((sub, index) => {
-        let meta: any = {};
-        try {
-          meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
-        } catch {}
-
-        const taxResult = taxDeterminationService.determineTax({
-          amountMinorUnits: Number(sub.amount_minor_units) || 0,
-          currency: sub.currency,
-          customerCountry: meta.customerCountry || meta.country,
-          customerState: meta.customerState || meta.billingState || meta.state,
-          placeOfSupply: meta.placeOfSupply,
-          lutNumber: meta.lutNumber || process.env.AIRA_LUT_NUMBER,
-          lutAvailable: meta.lutAvailable !== undefined ? meta.lutAvailable : (process.env.AIRA_LUT_AVAILABLE ? process.env.AIRA_LUT_AVAILABLE === 'true' : undefined),
-          supplierGstin: process.env.AIRA_SUPPLIER_GSTIN,
-          supplierGstinVerified: process.env.AIRA_SUPPLIER_GSTIN_VERIFIED ? process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true' : undefined
+      // 1. Primary source: relational billing_invoices table rows backed by verified payment evidence
+      const invRows = await loadRows('billing_invoices', { customer_id: customerId }, 'created_at');
+      for (const r of invRows) {
+        const ok = await hasVerifiedPaymentEvidence({
+          invoiceNumber: r.invoice_number,
+          customerId: r.customer_id,
+          subscriptionId: r.subscription_id,
+          cycleNumber: r.cycle_number,
+          paymentId: r.billing_event_id,
+          gateway: r.gateway,
+          currency: r.currency,
+          totalAmount: Number(r.total_amount) || 0
         });
+        if (!ok) continue;
 
-        const dateStr = new Date(Number(sub.created_at) || Date.now()).toISOString().split('T')[0];
-        const invoiceNumber = `INV-2026-LEGACY-${String(index + 1).padStart(4, '0')}`;
-        const planName = COMMERCIAL_PLANS[sub.plan_id as PlanTier]?.name || (sub.plan_id === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
+        const mapped = applyRefundState(this.mapBillingInvoiceRow(r), r.subscription_id, r.invoice_number);
+        invoices.push(mapped);
+        seenInvoiceNumbers.add(mapped.invoiceNumber);
+        if (r.subscription_id) {
+          issuedSubscriptionCycles.add(`${r.subscription_id}_${r.cycle_number || 1}`);
+        }
+      }
 
-        return {
+      // 2. Durable issued invoices in billing_audit_events (for legacy pre-table records or audit-backed test fixtures)
+      invoiceAuditEvents.sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
+      for (const ev of invoiceAuditEvents) {
+        const p = this.parseJsonRecordSafe(ev?.payload);
+        const invoiceNumber = String(p.invoiceNumber || ev.actor_id || '').trim();
+        if (!invoiceNumber || seenInvoiceNumbers.has(invoiceNumber)) continue;
+
+        const ok = await hasVerifiedPaymentEvidence({
           invoiceNumber,
-          date: dateStr,
-          plan: planName,
-          currency: (sub.currency || 'INR').toUpperCase(),
-          totalAmount: taxResult.totalAmount,
-          taxableBase: taxResult.taxableBase,
-          gstAmount: taxResult.gstAmount,
-          cgstAmount: taxResult.cgstAmount,
-          sgstAmount: taxResult.sgstAmount,
-          igstAmount: taxResult.igstAmount,
-          sacCode: taxResult.sacCode,
-          supplierName: taxResult.supplierName,
-          supplierGstin: taxResult.supplierGstin,
-          taxComplianceStatus: taxResult.taxComplianceStatus as any,
-          placeOfSupply: taxResult.placeOfSupply,
-          status: sub.status === 'refunded' ? 'Refunded' : 'Paid',
+          customerId: ev.customer_id,
+          subscriptionId: p.subscriptionId,
+          cycleNumber: p.cycleNumber || 1,
+          paymentId: p.paymentId || p.actualPaymentId,
+          gateway: p.gateway,
+          currency: p.currency,
+          totalAmount: Number(p.totalAmount) || 0
+        });
+        if (!ok) continue;
+
+        if (p.subscriptionId) {
+          issuedSubscriptionCycles.add(`${p.subscriptionId}_${p.cycleNumber || 1}`);
+        }
+
+        const record = applyRefundState({
+          invoiceNumber,
+          date: p.date || new Date(Number(ev.created_at) || Date.now()).toISOString().split('T')[0],
+          plan: p.plan || 'AIRA Subscription',
+          currency: (p.currency || 'INR').toUpperCase(),
+          totalAmount: Number(p.totalAmount) || 0,
+          taxableBase: Number(p.taxableBase) || 0,
+          gstAmount: Number(p.gstAmount) || 0,
+          cgstAmount: p.cgstAmount !== undefined ? Number(p.cgstAmount) : undefined,
+          sgstAmount: p.sgstAmount !== undefined ? Number(p.sgstAmount) : undefined,
+          igstAmount: p.igstAmount !== undefined ? Number(p.igstAmount) : undefined,
+          sacCode: p.sacCode || '998431',
+          supplierName: p.supplierName || 'Virexa AI Ventures Private Limited',
+          supplierGstin: p.supplierGstin || process.env.AIRA_SUPPLIER_GSTIN || undefined,
+          taxComplianceStatus: p.taxComplianceStatus || 'COMPLIANT',
+          placeOfSupply: p.placeOfSupply || 'UNKNOWN',
+          status: p.status || 'Paid',
           pdfDownloadAvailable: false
-        };
-      });
+        }, p.subscriptionId, invoiceNumber);
+
+        invoices.push(record);
+        seenInvoiceNumbers.add(invoiceNumber);
+      }
+
+      // 3. Truthful pending-reconciliation rows when paid settlement happened but invoice sequence generation is retrying
+      for (const pev of pendingAuditEvents) {
+        const pp = this.parseJsonRecordSafe(pev?.payload);
+        const key = `${pp.purchaseId}_${pp.cycleNumber || 1}`;
+        if (!issuedSubscriptionCycles.has(key)) {
+          invoices.push({
+            invoiceNumber: 'INV-PENDING-RECONCILIATION',
+            date: new Date(Number(pev.created_at) || Date.now()).toISOString().split('T')[0],
+            plan: pp.planTier === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
+            currency: 'INR',
+            totalAmount: Math.round(((Number(pp.amount) || 0) / 100) * 100) / 100,
+            taxableBase: 0,
+            gstAmount: 0,
+            sacCode: '998431',
+            supplierName: 'Virexa AI Ventures Private Limited',
+            taxComplianceStatus: 'PROVISIONAL_PENDING_RECONCILIATION' as any,
+            placeOfSupply: 'UNKNOWN',
+            status: 'Pending Reconciliation',
+            pdfDownloadAvailable: false
+          });
+        }
+      }
+
+      return invoices;
     } catch (err: any) {
       console.error(`[PaymentGateway] getInvoices query failed for principal ${principalId}:`, err?.message);
       throw new Error(`BILLING_INVOICE_QUERY_FAILED: Failed to retrieve invoices. ${err?.message || ''}`.trim());

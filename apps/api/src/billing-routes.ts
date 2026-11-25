@@ -326,11 +326,14 @@ export function createBillingRoutes(): Router {
     if (!requested || !/^[a-zA-Z0-9_-]{3,80}$/.test(requested)) {
       return res.status(400).json({ error: 'VALIDATION_ERROR: Invalid invoice number format.' });
     }
+    if (/^INV-2026-LEGACY-/i.test(requested) || requested === 'INV-PENDING-RECONCILIATION') {
+      return res.status(404).json({ error: 'NOT_FOUND: Invoice not found for this account.' });
+    }
 
     try {
       const invoices = await paymentGatewayService.getInvoices(principal.userId);
       const invoice = invoices.find(inv => inv.invoiceNumber === requested);
-      if (!invoice) {
+      if (!invoice || (invoice.status !== 'Paid' && invoice.status !== 'Refunded' && invoice.status !== 'Partially Refunded')) {
         return res.status(404).json({ error: 'NOT_FOUND: Invoice not found for this account.' });
       }
 
