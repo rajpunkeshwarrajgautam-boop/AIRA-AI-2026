@@ -420,6 +420,7 @@ export class PaymentGatewayService {
   private customGatewayTransport: GatewayOrderTransport | null = null;
   private memoryInvoiceCounter: number = 0;
   private memoryCreditNoteCounter: number = 0;
+  private pendingCancelInFlight = new Map<string, Promise<any>>();
 
   constructor() {
     this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
@@ -3480,6 +3481,7 @@ export class PaymentGatewayService {
     exists: boolean;
     rawStatus: string;
     paidEvidence?: boolean;
+    hasAuthorizedMandate?: boolean;
     gatewaySubscriptionId?: string;
     rawData?: any;
     providerDetails?: Record<string, unknown>;
@@ -3496,15 +3498,24 @@ export class PaymentGatewayService {
         gatewaySubscriptionId: sub.gateway_subscription_id
       });
       if (!check || check.exists === false) {
-        return { queried: true, exists: false, rawStatus: 'NOT_FOUND' };
+        return { queried: true, exists: false, rawStatus: 'NOT_FOUND', paidEvidence: false, hasAuthorizedMandate: false };
       }
       const checkExtra = check as Record<string, any>;
       const rawStatus = String(checkExtra.subscription_status || check.status || 'UNKNOWN').toUpperCase();
+      const paidEvidence = Boolean(checkExtra.paid);
+      const hasAuthorizedMandate = Boolean(
+        checkExtra.authorized ||
+        String(checkExtra.authorizationStatus || '').toUpperCase() === 'ACTIVE' ||
+        rawStatus === 'AUTHENTICATED' ||
+        (sub.gateway === 'cashfree' && rawStatus === 'ACTIVE') ||
+        (sub.gateway === 'razorpay' && rawStatus === 'ACTIVE' && !paidEvidence)
+      );
       return {
         queried: true,
         exists: true,
         rawStatus,
-        paidEvidence: Boolean(checkExtra.paid),
+        paidEvidence,
+        hasAuthorizedMandate,
         gatewaySubscriptionId: check.gatewaySubscriptionId || sub.gateway_subscription_id,
         rawData: check,
         providerDetails: check
@@ -3519,18 +3530,21 @@ export class PaymentGatewayService {
         signal: AbortSignal.timeout(5000)
       });
       if (resp.status === 404) {
-        return { queried: true, exists: false, rawStatus: 'NOT_FOUND' };
+        return { queried: true, exists: false, rawStatus: 'NOT_FOUND', paidEvidence: false, hasAuthorizedMandate: false };
       }
       if (!resp.ok) {
         return { queried: false, exists: true, rawStatus: 'HTTP_ERROR', error: `Razorpay returned HTTP ${resp.status}` };
       }
       const data: any = await resp.json().catch(() => ({}));
       const rawStatus = String(data.status || 'UNKNOWN').toUpperCase();
+      const paidEvidence = Number(data.paid_count || 0) > 0;
+      const hasAuthorizedMandate = rawStatus === 'AUTHENTICATED' || (rawStatus === 'ACTIVE' && !paidEvidence);
       return {
         queried: true,
         exists: true,
         rawStatus,
-        paidEvidence: Number(data.paid_count || 0) > 0,
+        paidEvidence,
+        hasAuthorizedMandate,
         gatewaySubscriptionId: data.id || sub.gateway_subscription_id,
         rawData: data,
         providerDetails: this.sanitizeProviderDetails('razorpay', data)
@@ -3555,18 +3569,21 @@ export class PaymentGatewayService {
         signal: AbortSignal.timeout(5000)
       });
       if (resp.status === 404) {
-        return { queried: true, exists: false, rawStatus: 'NOT_FOUND' };
+        return { queried: true, exists: false, rawStatus: 'NOT_FOUND', paidEvidence: false, hasAuthorizedMandate: false };
       }
       if (!resp.ok) {
         return { queried: false, exists: true, rawStatus: 'HTTP_ERROR', error: `Cashfree returned HTTP ${resp.status}` };
       }
       const data: any = await resp.json().catch(() => ({}));
       const rawStatus = String(data.subscription_status || 'UNKNOWN').toUpperCase();
+      const authStatus = String(data?.authorisation_details?.authorization_status || '').toUpperCase();
+      const hasAuthorizedMandate = rawStatus === 'ACTIVE' || authStatus === 'ACTIVE';
       return {
         queried: true,
         exists: true,
         rawStatus,
         paidEvidence: false,
+        hasAuthorizedMandate,
         gatewaySubscriptionId: data.subscription_id || sub.gateway_subscription_id,
         rawData: data,
         providerDetails: this.sanitizeProviderDetails('cashfree', data)
@@ -3574,6 +3591,106 @@ export class PaymentGatewayService {
     }
 
     return { queried: false, exists: true, rawStatus: 'UNCONFIGURED', error: `Provider credentials for ${sub.gateway} are not configured.` };
+  }
+
+  private async cancelProviderPendingSubscription(sub: any): Promise<{
+    cancelled: boolean;
+    uncertain?: boolean;
+    error?: string;
+  }> {
+    const gatewaySubId = sub.gateway_subscription_id || sub.id;
+    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' ||
+      isStagingSandboxRehearsalActive() ||
+      process.env.NODE_ENV === 'test' ||
+      process.env.CASHFREE_ENV === 'TEST' ||
+      process.env.CASHFREE_APP_ID?.startsWith('TEST');
+
+    if (this.customGatewayTransport) {
+      try {
+        const res = await this.customGatewayTransport({
+          gateway: sub.gateway,
+          orderId: sub.id,
+          amountMinorUnits: Number(sub.amount_minor_units || 0),
+          currency: sub.currency || 'INR',
+          planTier: sub.plan_id,
+          action: 'cancel_subscription',
+          gatewaySubscriptionId: gatewaySubId
+        });
+        if (res && res.cancelled) {
+          return { cancelled: true };
+        }
+        return {
+          cancelled: false,
+          uncertain: true,
+          error: (res as any)?.error || 'Provider rejected pending checkout cancellation.'
+        };
+      } catch (err: any) {
+        return {
+          cancelled: false,
+          uncertain: true,
+          error: err?.message || 'Provider cancellation timed out or failed.'
+        };
+      }
+    }
+
+    if (sub.gateway === 'razorpay' && gatewaySubId && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+      try {
+        const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
+        const resp = await fetch(`https://api.razorpay.com/v1/subscriptions/${encodeURIComponent(gatewaySubId)}/cancel`, {
+          method: 'POST',
+          headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cancel_at_cycle_end: 0 }),
+          signal: AbortSignal.timeout(5000)
+        });
+        if (resp.ok || resp.status === 404) {
+          return { cancelled: true };
+        }
+        const errText = await resp.text().catch(() => '');
+        if (resp.status === 400 && /cancelled|expired|completed/i.test(errText)) {
+          return { cancelled: true };
+        }
+        return { cancelled: false, uncertain: true, error: `Razorpay returned HTTP ${resp.status}: ${errText}` };
+      } catch (err: any) {
+        return { cancelled: false, uncertain: true, error: err?.message || 'Razorpay cancellation failed.' };
+      }
+    }
+
+    if (sub.gateway === 'cashfree' && gatewaySubId && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY) {
+      try {
+        const cfBaseUrl = isSandbox
+          ? 'https://sandbox.cashfree.com/pg/subscriptions'
+          : 'https://api.cashfree.com/pg/subscriptions';
+        const resp = await fetch(`${cfBaseUrl}/${encodeURIComponent(gatewaySubId)}/manage`, {
+          method: 'POST',
+          headers: {
+            'x-client-id': process.env.CASHFREE_APP_ID,
+            'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+            'x-api-version': '2023-08-01',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            subscription_id: gatewaySubId,
+            action: 'CANCEL'
+          }),
+          signal: AbortSignal.timeout(5000)
+        });
+        if (resp.ok || resp.status === 404) {
+          return { cancelled: true };
+        }
+        const errText = await resp.text().catch(() => '');
+        if (resp.status === 400 && /cancelled|canceled|expired|completed/i.test(errText)) {
+          return { cancelled: true };
+        }
+        return { cancelled: false, uncertain: true, error: `Cashfree returned HTTP ${resp.status}: ${errText}` };
+      } catch (err: any) {
+        return { cancelled: false, uncertain: true, error: err?.message || 'Cashfree cancellation failed.' };
+      }
+    }
+
+    if (isSandbox || process.env.NODE_ENV === 'test') {
+      return { cancelled: true };
+    }
+    return { cancelled: false, uncertain: true, error: `Provider credentials for ${sub.gateway} are unavailable.` };
   }
 
   private async transitionUnpaidSubscriptionStatus(
@@ -3630,7 +3747,18 @@ export class PaymentGatewayService {
     principalId: string,
     subscriptionId: string,
     clientOrTrx?: any
-  ): Promise<{ reconciled: boolean; status: string; message: string; providerStatus?: string; providerDetails?: Record<string, unknown> }> {
+  ): Promise<{
+    reconciled: boolean;
+    status: string;
+    message: string;
+    providerStatus?: string;
+    providerDetails?: Record<string, unknown>;
+    paidEvidence?: boolean;
+    hasAuthorizedMandate?: boolean;
+    canCancelPending?: boolean;
+    planId?: string;
+    gateway?: string;
+  }> {
     const db = (clientOrTrx && typeof clientOrTrx === 'function') ? clientOrTrx : this.getDb();
     const sub = await db('subscriptions').where({ id: subscriptionId }).first();
     if (!sub) {
@@ -3650,6 +3778,319 @@ export class PaymentGatewayService {
     return this.reconcileAmbiguousSubscription(subscriptionId, db);
   }
 
+  /**
+   * Authoritatively cancels an abandoned or unpaid pending checkout after verifying
+   * gateway subscription & payment status. Refuses cancellation when payment evidence exists
+   * or when provider verification/cancellation fails, and preserves full transaction history.
+   */
+  async cancelPendingCheckout(
+    principalId: string,
+    subscriptionId: string,
+    options?: {
+      reason?: string;
+      allowCancelAuthorizedMandate?: boolean;
+    },
+    clientOrTrx?: any
+  ): Promise<{
+    cancelled: boolean;
+    safeToRetry: boolean;
+    status: string;
+    message: string;
+    providerStatus?: string;
+    providerDetails?: Record<string, unknown>;
+    uncertain?: boolean;
+    paymentSucceeded?: boolean;
+    alreadyPaid?: boolean;
+    hasAuthorizedMandate?: boolean;
+    inFlight?: boolean;
+  }> {
+    const lockKey = `${principalId}:${subscriptionId}`;
+    const existingPromise = this.pendingCancelInFlight.get(lockKey);
+    if (existingPromise) {
+      return existingPromise;
+    }
+
+    const runPromise = (async () => {
+      const db = (clientOrTrx && typeof clientOrTrx === 'function') ? clientOrTrx : this.getDb();
+      const sub = await db('subscriptions').where({ id: subscriptionId }).first();
+      if (!sub) {
+        throw new Error(`NOT_FOUND: Subscription ${subscriptionId} not found.`);
+      }
+
+      const customer = await db('billing_customers').where({ id: sub.customer_id }).first();
+      let meta: any = {};
+      try {
+        meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+      } catch {}
+      const ownerPrincipalId = customer?.principal_id || meta.principalId;
+      if (!ownerPrincipalId || ownerPrincipalId !== principalId) {
+        throw new Error(`OWNERSHIP_MISMATCH: Principal ${principalId} does not own subscription ${subscriptionId}.`);
+      }
+
+      const now = Date.now();
+      if (sub.status === 'active') {
+        return {
+          cancelled: false,
+          safeToRetry: false,
+          alreadyPaid: true,
+          paymentSucceeded: true,
+          status: 'active',
+          message: 'This subscription is already active and paid. Use Subscription Management in Settings to schedule cancellation.'
+        };
+      }
+
+      if (sub.status === 'canceled' || sub.status === 'expired' || sub.status === 'failed') {
+        return {
+          cancelled: true,
+          safeToRetry: true,
+          status: sub.status,
+          message: 'Your previous checkout session is cleared. You can now choose any plan or payment gateway.'
+        };
+      }
+
+      if (sub.status === 'initiating') {
+        const ageMs = now - Number(sub.created_at || 0);
+        if (ageMs < 30000) {
+          return {
+            cancelled: false,
+            safeToRetry: false,
+            inFlight: true,
+            status: 'initiating',
+            message: 'Checkout initialization is still in progress with the gateway. Please wait a few seconds and try again.'
+          };
+        }
+        await db('subscriptions').where({ id: sub.id, status: 'initiating' }).update({
+          status: 'ambiguous_timeout',
+          updated_at: now
+        });
+        sub.status = 'ambiguous_timeout';
+      }
+
+      let check: Awaited<ReturnType<PaymentGatewayService['queryProviderSubscriptionStatus']>>;
+      try {
+        check = await this.queryProviderSubscriptionStatus(sub);
+      } catch (qErr: any) {
+        check = {
+          queried: false,
+          exists: true,
+          rawStatus: 'QUERY_ERROR',
+          error: qErr?.message || 'Provider status query failed.'
+        };
+      }
+
+      if (!check.queried) {
+        try {
+          await db('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: sub.customer_id,
+            event_type: 'PENDING_CHECKOUT_CANCEL_UNCERTAIN',
+            actor_type: 'principal',
+            actor_id: principalId,
+            payload: JSON.stringify({
+              subscriptionId: sub.id,
+              gateway: sub.gateway,
+              reason: options?.reason || 'customer_cancel_pending',
+              error: check.error || 'Provider query unavailable'
+            }),
+            created_at: now
+          });
+        } catch {}
+
+        return {
+          cancelled: false,
+          safeToRetry: false,
+          uncertain: true,
+          status: sub.status,
+          providerStatus: check.rawStatus,
+          message: 'Unable to confirm payment status with the gateway right now. Keeping safety hold until verification succeeds.'
+        };
+      }
+
+      // Race check after provider query: if webhook activated subscription concurrently, refuse cancellation
+      const freshAfterQuery = await db('subscriptions').where({ id: sub.id }).first();
+      if (freshAfterQuery && freshAfterQuery.status === 'active') {
+        return {
+          cancelled: false,
+          safeToRetry: false,
+          paymentSucceeded: true,
+          alreadyPaid: true,
+          status: 'active',
+          providerStatus: check.rawStatus,
+          message: 'Your payment succeeded concurrently and your subscription is now active.'
+        };
+      }
+
+      if (check.paidEvidence) {
+        try {
+          await db('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: sub.customer_id,
+            event_type: 'CONCURRENT_PAYMENT_DETECTED',
+            actor_type: 'system',
+            actor_id: sub.id,
+            payload: JSON.stringify({
+              subscriptionId: sub.id,
+              gateway: sub.gateway,
+              providerStatus: check.rawStatus,
+              action: 'aborted_pending_cancellation'
+            }),
+            created_at: now
+          });
+        } catch {}
+
+        return {
+          cancelled: false,
+          safeToRetry: false,
+          paymentSucceeded: true,
+          status: freshAfterQuery?.status || sub.status,
+          providerStatus: check.rawStatus,
+          providerDetails: check.providerDetails,
+          message: 'Payment has been confirmed by the gateway! Cancellation was aborted to protect your payment — click Verify / Reconcile Status.'
+        };
+      }
+
+      if (check.hasAuthorizedMandate && !options?.allowCancelAuthorizedMandate) {
+        return {
+          cancelled: false,
+          safeToRetry: false,
+          hasAuthorizedMandate: true,
+          status: sub.status,
+          providerStatus: check.rawStatus,
+          providerDetails: check.providerDetails,
+          message: 'An e-mandate authorization is active for this pending subscription. Verify status or explicitly cancel the authorized mandate before switching plans.'
+        };
+      }
+
+      const terminalCancelledOrFailed = new Set([
+        'NOT_FOUND',
+        'CANCELLED',
+        'CANCELED',
+        'CUSTOMER_CANCELLED',
+        'EXPIRED',
+        'FAILED',
+        'BANK_APPROVAL_FAILED',
+        'COMPLETED',
+        'HALTED'
+      ]);
+
+      let resolvedLocalStatus: 'canceled' | 'expired' | 'failed' = 'canceled';
+      if (check.exists && !terminalCancelledOrFailed.has(check.rawStatus)) {
+        const cancelRes = await this.cancelProviderPendingSubscription(sub);
+        if (!cancelRes.cancelled) {
+          try {
+            await db('billing_audit_events').insert({
+              id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+              customer_id: sub.customer_id,
+              event_type: 'PENDING_CHECKOUT_CANCEL_FAILED',
+              actor_type: 'principal',
+              actor_id: principalId,
+              payload: JSON.stringify({
+                subscriptionId: sub.id,
+                gateway: sub.gateway,
+                providerStatus: check.rawStatus,
+                error: cancelRes.error || 'Provider cancel failed'
+              }),
+              created_at: now
+            });
+          } catch {}
+
+          return {
+            cancelled: false,
+            safeToRetry: false,
+            uncertain: true,
+            status: sub.status,
+            providerStatus: check.rawStatus,
+            message: 'Could not confirm cancellation with the payment gateway. Please retry verification in a moment.'
+          };
+        }
+      } else if (!check.exists) {
+        resolvedLocalStatus = 'canceled';
+      } else if (check.rawStatus === 'EXPIRED' || check.rawStatus === 'FAILED' || check.rawStatus === 'BANK_APPROVAL_FAILED') {
+        resolvedLocalStatus = 'expired';
+      }
+
+      // Atomic CAS transition: never overwrite a subscription activated concurrently by a webhook
+      const updatedCount = await db('subscriptions')
+        .where({ id: sub.id })
+        .whereIn('status', ['pending', 'ambiguous_timeout'])
+        .update({
+          status: resolvedLocalStatus,
+          cancelled_at: now,
+          metadata: JSON.stringify({
+            ...meta,
+            reconciliationStatus: 'CUSTOMER_ABANDONED_CANCELLED',
+            gateway_subscription_status: check.exists ? (terminalCancelledOrFailed.has(check.rawStatus) ? check.rawStatus : 'CANCELLED') : 'NOT_FOUND',
+            abandonedAt: now,
+            abandonReason: options?.reason || 'customer_cancelled_pending',
+            reconciledAt: now,
+            ...(check.providerDetails ? { providerDetails: check.providerDetails } : {})
+          }),
+          updated_at: now
+        });
+
+      if (!updatedCount) {
+        const latest = await db('subscriptions').where({ id: sub.id }).first();
+        if (latest?.status === 'active') {
+          return {
+            cancelled: false,
+            safeToRetry: false,
+            paymentSucceeded: true,
+            alreadyPaid: true,
+            status: 'active',
+            message: 'Payment completed concurrently and your subscription is now active.'
+          };
+        }
+        return {
+          cancelled: true,
+          safeToRetry: true,
+          status: latest?.status || resolvedLocalStatus,
+          message: 'Previous pending checkout cleared. You can now select any plan or payment gateway.'
+        };
+      }
+
+      await db('idempotent_operations')
+        .where({ key: `checkout:sub:${sub.customer_id}` })
+        .update({ status: `RESOLVED_${resolvedLocalStatus.toUpperCase()}`, locked_until: 0, updated_at: now });
+
+      try {
+        await db('billing_audit_events').insert({
+          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+          customer_id: sub.customer_id,
+          event_type: 'BILLING_CHECKOUT_ABANDONED',
+          actor_type: 'principal',
+          actor_id: principalId,
+          payload: JSON.stringify({
+            subscriptionId: sub.id,
+            gateway: sub.gateway,
+            planId: sub.plan_id,
+            previousStatus: sub.status,
+            resolvedStatus: resolvedLocalStatus,
+            providerStatus: check.rawStatus,
+            reason: options?.reason || 'customer_cancelled_pending',
+            hadAuthorizedMandate: Boolean(check.hasAuthorizedMandate)
+          }),
+          created_at: now
+        });
+      } catch {}
+
+      return {
+        cancelled: true,
+        safeToRetry: true,
+        status: resolvedLocalStatus,
+        providerStatus: check.exists && !terminalCancelledOrFailed.has(check.rawStatus) ? 'CANCELLED' : check.rawStatus,
+        providerDetails: check.providerDetails,
+        message: 'Previous unpaid checkout was cancelled cleanly. You can now select any plan or payment method.'
+      };
+    })();
+
+    this.pendingCancelInFlight.set(lockKey, runPromise);
+    try {
+      return await runPromise;
+    } finally {
+      this.pendingCancelInFlight.delete(lockKey);
+    }
+  }
+
   async reconcileAmbiguousSubscription(
     subscriptionId: string,
     clientOrTrx?: any,
@@ -3664,7 +4105,18 @@ export class PaymentGatewayService {
         evidenceReference: string;
       };
     }
-  ): Promise<{ reconciled: boolean; status: string; message: string; providerStatus?: string; providerDetails?: Record<string, unknown> }> {
+  ): Promise<{
+    reconciled: boolean;
+    status: string;
+    message: string;
+    providerStatus?: string;
+    providerDetails?: Record<string, unknown>;
+    paidEvidence?: boolean;
+    hasAuthorizedMandate?: boolean;
+    canCancelPending?: boolean;
+    planId?: string;
+    gateway?: string;
+  }> {
     const db = (clientOrTrx && typeof clientOrTrx === 'function') ? clientOrTrx : this.getDb();
     const sub = await db('subscriptions').where({ id: subscriptionId }).first();
     if (!sub) {
@@ -3857,23 +4309,58 @@ export class PaymentGatewayService {
         };
       }
 
-      // Expired unpaid mandate initialization (> 15 minutes old with zero payment or authorization)
+      // Unpaid mandate/checkout initialization (CREATED / INITIALIZED):
+      // >= 15m -> auto-expire cleanly; < 15m -> persist provider state & report actionable unpaid options
       const ageMs = now - Number(sub.created_at || 0);
-      if ((check.rawStatus === 'INITIALIZED' || check.rawStatus === 'CREATED') && sub.status === 'pending' && ageMs >= 15 * 60 * 1000) {
-        await this.transitionUnpaidSubscriptionStatus(
-          db,
-          sub,
-          'expired',
-          `Unpaid ${sub.gateway} checkout session expired after remaining ${check.rawStatus} > 15m.`,
-          check.rawStatus,
-          check.providerDetails
-        );
+      if ((check.rawStatus === 'INITIALIZED' || check.rawStatus === 'CREATED') && sub.status === 'pending') {
+        if (ageMs >= 15 * 60 * 1000) {
+          await this.transitionUnpaidSubscriptionStatus(
+            db,
+            sub,
+            'expired',
+            `Unpaid ${sub.gateway} checkout session expired after remaining ${check.rawStatus} > 15m.`,
+            check.rawStatus,
+            check.providerDetails
+          );
+          return {
+            reconciled: true,
+            status: 'expired',
+            providerStatus: check.rawStatus,
+            providerDetails: check.providerDetails,
+            paidEvidence: false,
+            hasAuthorizedMandate: false,
+            canCancelPending: false,
+            planId: sub.plan_id,
+            gateway: sub.gateway,
+            message: `Unpaid checkout expired after inactivity (${check.rawStatus}). You can now choose any plan or gateway.`
+          };
+        }
+
+        let existingMeta: any = {};
+        try {
+          existingMeta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+        } catch {}
+        await db('subscriptions').where({ id: sub.id }).update({
+          metadata: JSON.stringify({
+            ...existingMeta,
+            gateway_subscription_status: check.rawStatus,
+            ...(check.providerDetails ? { providerDetails: check.providerDetails } : {}),
+            status_checked_at: now
+          }),
+          updated_at: now
+        });
+
         return {
-          reconciled: true,
-          status: 'expired',
+          reconciled: false,
+          status: sub.status,
           providerStatus: check.rawStatus,
           providerDetails: check.providerDetails,
-          message: `Expired unpaid pending checkout (${check.rawStatus}) so a replacement session can be started safely.`
+          paidEvidence: false,
+          hasAuthorizedMandate: false,
+          canCancelPending: true,
+          planId: sub.plan_id,
+          gateway: sub.gateway,
+          message: `No payment was completed for this checkout on ${sub.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay'} yet. You can complete payment or cancel it to switch plans or payment methods.`
         };
       }
 
@@ -3898,6 +4385,11 @@ export class PaymentGatewayService {
             status: sub.status,
             providerStatus: check.rawStatus,
             providerDetails: check.providerDetails,
+            paidEvidence: false,
+            hasAuthorizedMandate: Boolean(check.hasAuthorizedMandate ?? true),
+            canCancelPending: true,
+            planId: sub.plan_id,
+            gateway: sub.gateway,
             message: `Provider mandate status is ${check.rawStatus}; awaiting settled full subscription charge webhook before activation.`
           };
         }
@@ -5996,6 +6488,8 @@ export class PaymentGatewayService {
       authorizationStatus: string | null;
       nextScheduleDate: string | null;
       lastPaymentError: string | null;
+      hasAuthorizedMandate: boolean;
+      canCancelPending: boolean;
       createdAt: number;
     } | null;
   }> {
@@ -6038,19 +6532,30 @@ export class PaymentGatewayService {
             }
           : null,
         pendingSubscription: pendingSub
-          ? {
-              id: pendingSub.id,
-              planId: pendingSub.plan_id as PlanTier,
-              gateway: pendingSub.gateway,
-              status: pendingSub.status,
-              amountMinorUnits: Number(pendingSub.amount_minor_units) || 0,
-              currency: pendingSub.currency || 'INR',
-              gatewaySubscriptionStatus: pendingMeta.gateway_subscription_status || providerDetails.subscriptionStatus || null,
-              authorizationStatus: pendingMeta.gateway_auth_status || providerDetails.authorizationStatus || null,
-              nextScheduleDate: pendingMeta.next_schedule_date || providerDetails.nextScheduleDate || null,
-              lastPaymentError: pendingMeta.lastPaymentError || null,
-              createdAt: Number(pendingSub.created_at) || 0
-            }
+          ? (() => {
+              const gwStatus = String(pendingMeta.gateway_subscription_status || providerDetails.subscriptionStatus || '').toUpperCase() || null;
+              const authStatus = String(pendingMeta.gateway_auth_status || providerDetails.authorizationStatus || '').toUpperCase() || null;
+              const hasAuthorizedMandate = Boolean(
+                authStatus === 'ACTIVE' ||
+                gwStatus === 'AUTHENTICATED' ||
+                (pendingSub.gateway === 'cashfree' && gwStatus === 'ACTIVE')
+              );
+              return {
+                id: pendingSub.id,
+                planId: pendingSub.plan_id as PlanTier,
+                gateway: pendingSub.gateway,
+                status: pendingSub.status,
+                amountMinorUnits: Number(pendingSub.amount_minor_units) || 0,
+                currency: pendingSub.currency || 'INR',
+                gatewaySubscriptionStatus: gwStatus,
+                authorizationStatus: authStatus,
+                nextScheduleDate: pendingMeta.next_schedule_date || providerDetails.nextScheduleDate || null,
+                lastPaymentError: pendingMeta.lastPaymentError || null,
+                hasAuthorizedMandate,
+                canCancelPending: pendingSub.status === 'pending' || pendingSub.status === 'ambiguous_timeout',
+                createdAt: Number(pendingSub.created_at) || 0
+              };
+            })()
           : null
       };
     } catch {

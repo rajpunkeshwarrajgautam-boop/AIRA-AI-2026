@@ -265,6 +265,35 @@ export function loadRazorpayScript(timeoutMs: number = 5000): Promise<boolean> {
   return razorpayScriptPromise;
 }
 
+interface PendingCheckoutSummary {
+  id: string;
+  planId: PlanTier;
+  gateway: string;
+  status: string;
+  gatewaySubscriptionStatus?: string | null;
+  authorizationStatus?: string | null;
+  nextScheduleDate?: string | null;
+  lastPaymentError?: string | null;
+  hasAuthorizedMandate?: boolean;
+  canCancelPending?: boolean;
+}
+
+function buildFriendlyPendingNotice(p: PendingCheckoutSummary): string {
+  const planLabel = p.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus';
+  const gwLabel = p.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay';
+  const scheduleStr = p.nextScheduleDate
+    ? new Date(p.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) + ' IST'
+    : null;
+
+  if (p.lastPaymentError) {
+    return `Your previous ${planLabel} checkout via ${gwLabel} did not complete (${p.lastPaymentError}). Verify payment status or cancel the pending checkout to try another plan or payment method.`;
+  }
+  if (p.hasAuthorizedMandate || (p.gateway === 'cashfree' && (p.gatewaySubscriptionStatus === 'ACTIVE' || p.authorizationStatus === 'ACTIVE'))) {
+    return `An e-mandate for ${planLabel} via ${gwLabel} is already authorized. ${scheduleStr ? `First subscription charge is scheduled for ${scheduleStr}; paid access activates upon settlement.` : 'Awaiting first recurring charge settlement.'} You can verify its status or cancel the authorized mandate before starting another plan.`;
+  }
+  return `You have an unfinished ${planLabel} checkout with ${gwLabel}. Verify payment status if you completed it, or cancel the pending checkout to switch plans or payment methods.`;
+}
+
 interface PricingModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -302,6 +331,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
   const setLoadingPlan = (tier: PlanTier | null) => setActivePlanTier(tier);
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
+  const [pendingCheckout, setPendingCheckout] = useState<PendingCheckoutSummary | null>(null);
   const [checkoutAvailable, setCheckoutAvailable] = useState<boolean>(false);
   const [_billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
   const [customerPhone, setCustomerPhone] = useState<string>('');
@@ -312,6 +342,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const isSubmittingRef = useRef<boolean>(false);
   const isMountedRef = useRef<boolean>(true);
   const isDismissedRef = useRef<boolean>(false);
+  const activePendingSubIdRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const watchdogTimerRef = useRef<any>(null);
   const pollingTimerRef = useRef<any>(null);
@@ -433,17 +464,16 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     authenticatedApiFetch('/api/billing/summary')
       .then(r => (r.ok ? r.json() : null))
       .then(summary => {
-        if (!active || !summary?.pendingSubscription) return;
-        const p = summary.pendingSubscription;
-        const scheduleStr = p.nextScheduleDate
-          ? new Date(p.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) + ' IST'
-          : null;
-        const baseNotice = p.lastPaymentError
-          ? `Previous checkout attempt (${p.id}) reported: ${p.lastPaymentError}. Verify status to clear or retry.`
-          : p.gateway === 'cashfree' && (p.gatewaySubscriptionStatus === 'ACTIVE' || p.authorizationStatus === 'ACTIVE')
-            ? `Cashfree mandate authorized (${p.id}) for ${p.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus'}. ${scheduleStr ? `First subscription charge is scheduled for ${scheduleStr}; paid tier activates upon settlement.` : 'Awaiting first recurring debit settlement.'}`
-            : `A pending checkout session (${p.id}) for ${p.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus'} via ${p.gateway} is awaiting completion or reconciliation.`;
-        setCheckoutNotice(prev => prev || baseNotice);
+        if (!active) return;
+        if (summary?.pendingSubscription) {
+          const p = summary.pendingSubscription as PendingCheckoutSummary;
+          activePendingSubIdRef.current = p.id;
+          setPendingCheckout(p);
+          setCheckoutNotice(prev => prev || buildFriendlyPendingNotice(p));
+        } else {
+          activePendingSubIdRef.current = null;
+          setPendingCheckout(null);
+        }
       })
       .catch(() => {});
 
@@ -451,6 +481,107 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       active = false;
     };
   }, [isOpen]);
+
+  const clearPendingState = () => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem('aira_unresolved_checkout');
+      }
+    } catch {}
+    activePendingSubIdRef.current = null;
+    setPendingCheckout(null);
+    setActivePlanTier(null);
+    setCheckoutState('IDLE');
+    isSubmittingRef.current = false;
+  };
+
+  const handleReconcilePendingCheckout = async (pendingSubId: string) => {
+    setCheckoutState('REQUESTING');
+    setCheckoutNotice('Verifying checkout status with the payment gateway…');
+    try {
+      const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(pendingSubId)}/reconcile`, {
+        method: 'POST',
+        body: JSON.stringify({})
+      });
+      const data = await res.json().catch(() => ({} as Record<string, any>));
+      if (!isMountedRef.current) return;
+      if (res.ok && data?.reconciled) {
+        clearPendingState();
+        if (data.status === 'active') {
+          setCheckoutState('COMPLETED');
+        }
+        setCheckoutNotice(data.message || 'Checkout status verified.');
+      } else {
+        setCheckoutState('RECONCILIATION_REQUIRED');
+        isSubmittingRef.current = false;
+        setActivePlanTier(null);
+        if (pendingCheckout) {
+          setPendingCheckout({
+            ...pendingCheckout,
+            gatewaySubscriptionStatus: data?.providerStatus || pendingCheckout.gatewaySubscriptionStatus,
+            hasAuthorizedMandate: typeof data?.hasAuthorizedMandate === 'boolean' ? data.hasAuthorizedMandate : pendingCheckout.hasAuthorizedMandate,
+            canCancelPending: typeof data?.canCancelPending === 'boolean' ? data.canCancelPending : true
+          });
+        }
+        setCheckoutNotice(data?.message || data?.error || 'Payment has not completed on the gateway yet. Complete checkout or cancel it to switch plans.');
+      }
+    } catch (err: any) {
+      if (!isMountedRef.current) return;
+      setCheckoutState('IDLE');
+      isSubmittingRef.current = false;
+      setActivePlanTier(null);
+      setCheckoutNotice(err?.message || 'Unable to reach billing server for status verification.');
+    }
+  };
+
+  const handleCancelPendingCheckout = async (
+    subscriptionId: string,
+    options?: { reason?: string; allowCancelAuthorizedMandate?: boolean; quiet?: boolean }
+  ) => {
+    if (!options?.quiet) {
+      setCheckoutState('REQUESTING');
+      setCheckoutNotice('Cancelling unfinished checkout with the payment gateway…');
+    }
+    try {
+      const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(subscriptionId)}/cancel-pending`, {
+        method: 'POST',
+        body: JSON.stringify({
+          reason: options?.reason || 'customer_cancelled_pending',
+          allowCancelAuthorizedMandate: Boolean(options?.allowCancelAuthorizedMandate)
+        })
+      });
+      const data = await res.json().catch(() => ({} as Record<string, any>));
+      if (!isMountedRef.current) return;
+      if (res.ok && data?.cancelled) {
+        clearPendingState();
+        setCheckoutNotice(
+          options?.quiet
+            ? 'Previous checkout was cancelled. You can choose any plan or payment method.'
+            : (data.message || 'Previous unpaid checkout was cancelled cleanly. You can now select any plan or payment method.')
+        );
+      } else {
+        isSubmittingRef.current = false;
+        setActivePlanTier(null);
+        if (data?.paymentSucceeded || data?.alreadyPaid) {
+          clearPendingState();
+          setCheckoutNotice(data.message || 'Your payment succeeded with the gateway! Refreshing your plan status.');
+        } else if (data?.hasAuthorizedMandate) {
+          setCheckoutState('RECONCILIATION_REQUIRED');
+          setPendingCheckout(prev => prev ? { ...prev, hasAuthorizedMandate: true, canCancelPending: true } : prev);
+          setCheckoutNotice(data.message || 'An e-mandate authorization is active. Verify status or explicitly cancel the authorized mandate before switching plans.');
+        } else {
+          setCheckoutState('RECONCILIATION_REQUIRED');
+          setCheckoutNotice(data?.message || data?.error || 'Unable to confirm cancellation with the gateway right now. Please retry verification shortly.');
+        }
+      }
+    } catch (err: any) {
+      if (!isMountedRef.current) return;
+      isSubmittingRef.current = false;
+      setActivePlanTier(null);
+      setCheckoutState('RECONCILIATION_REQUIRED');
+      setCheckoutNotice(err?.message || 'Unable to reach billing server to cancel the pending checkout.');
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -546,7 +677,15 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           setCheckoutNotice(data.message || 'Access restricted: only authorized test principals can initiate sandbox checkout.');
         } else if (res.status === 409) {
           setCheckoutState('RECONCILIATION_REQUIRED');
-          setCheckoutNotice(data.message || 'A checkout session is already in progress for this plan. Please complete or refresh.');
+          if (data.pendingSubscription) {
+            activePendingSubIdRef.current = data.pendingSubscription.id;
+            setPendingCheckout(data.pendingSubscription);
+          }
+          setCheckoutNotice(
+            data.customerMessage ||
+            (data.pendingSubscription ? buildFriendlyPendingNotice(data.pendingSubscription) : null) ||
+            'Another checkout session is already open for your account. Verify its status or cancel it before starting a new checkout.'
+          );
         } else if (res.status === 504 || data.error === 'GATEWAY_AMBIGUOUS_OUTCOME') {
           setCheckoutState('AMBIGUOUS_OUTCOME');
           setCheckoutNotice(data.message || 'Payment gateway timed out. Authoritative reconciliation is pending. Please do not reattempt.');
@@ -573,6 +712,17 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         return;
       }
 
+      if (data.purchaseId) {
+        activePendingSubIdRef.current = data.purchaseId;
+        setPendingCheckout({
+          id: data.purchaseId,
+          planId: tier,
+          gateway: data.gateway || targetGateway,
+          status: 'pending',
+          hasAuthorizedMandate: false,
+          canCancelPending: true
+        });
+      }
       setCheckoutState('SESSION_READY');
 
       // 4. Cashfree Recurring Mandate Checkout Flow
@@ -775,14 +925,23 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 modal: {
                   ondismiss: function () {
                     if (!isMountedRef.current) return;
+                    let dismissedDuringAuth = false;
                     setCheckoutState((prev) => {
                       if (prev === 'AWAITING_CONFIRMATION' || prev === 'COMPLETED' || prev === 'AMBIGUOUS_OUTCOME' || prev === 'RECONCILIATION_REQUIRED') {
                         return prev;
                       }
+                      dismissedDuringAuth = true;
                       isSubmittingRef.current = false;
                       setActivePlanTier(null);
                       return 'IDLE'; // Definitive safe recovery on user modal dismissal
                     });
+                    if (dismissedDuringAuth && data.purchaseId) {
+                      void handleCancelPendingCheckout(data.purchaseId, {
+                        reason: 'modal_dismissed',
+                        allowCancelAuthorizedMandate: false,
+                        quiet: true
+                      });
+                    }
                   }
                 }
               });
@@ -902,48 +1061,36 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         </div>
 
-        {/* Status / Error Toast Notice */}
-        {checkoutNotice && (() => {
-          const pendingSubId = checkoutNotice.match(/\b((?:pur|sub)_[a-zA-Z0-9_-]{4,80})\b/)?.[1] || null;
+        {/* Status / Error & Pending Recovery Notice */}
+        {(checkoutNotice || pendingCheckout) && (() => {
+          const targetPendingId = pendingCheckout?.id || activePendingSubIdRef.current || null;
+          const hasMandate = Boolean(pendingCheckout?.hasAuthorizedMandate);
           return (
-            <div className="mx-6 md:mx-8 mt-4 p-3 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-300 text-xs flex flex-wrap items-center justify-between gap-2">
-              <span className="flex-1 min-w-[200px]">{checkoutNotice}</span>
-              <div className="flex items-center gap-2 shrink-0">
-                {pendingSubId && !isCheckoutBusy && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      setCheckoutState('REQUESTING');
-                      setCheckoutNotice(`Verifying subscription ${pendingSubId} with payment gateway…`);
-                      try {
-                        const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(pendingSubId)}/reconcile`, {
-                          method: 'POST',
-                          body: JSON.stringify({})
-                        });
-                        const data = await res.json().catch(() => ({} as Record<string, any>));
-                        if (!isMountedRef.current) return;
-                        if (res.ok && data?.reconciled) {
-                          try {
-                            if (typeof sessionStorage !== 'undefined') {
-                              sessionStorage.removeItem('aira_unresolved_checkout');
-                            }
-                          } catch {}
-                          setCheckoutState(data.status === 'active' ? 'COMPLETED' : 'IDLE');
-                          setCheckoutNotice(data.message || 'Subscription status reconciled.');
-                        } else {
-                          setCheckoutState('IDLE');
-                          setCheckoutNotice(data?.message || data?.error || 'Unable to verify subscription status right now. Please try again shortly.');
-                        }
-                      } catch (err: any) {
-                        if (!isMountedRef.current) return;
-                        setCheckoutState('IDLE');
-                        setCheckoutNotice(err?.message || 'Unable to reach billing server for status verification.');
-                      }
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-orange-500/20 hover:bg-orange-500/30 border border-orange-400/40 text-orange-200 font-semibold text-[11px] whitespace-nowrap transition-colors"
-                  >
-                    Verify / Reconcile Status
-                  </button>
+            <div className="mx-6 md:mx-8 mt-4 p-3.5 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-200 text-xs flex flex-wrap items-center justify-between gap-3">
+              <span className="flex-1 min-w-[220px] leading-relaxed">
+                {checkoutNotice || (pendingCheckout ? buildFriendlyPendingNotice(pendingCheckout) : '')}
+              </span>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                {targetPendingId && !isCheckoutBusy && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void handleReconcilePendingCheckout(targetPendingId)}
+                      className="px-2.5 py-1.5 rounded-lg bg-orange-500/20 hover:bg-orange-500/30 border border-orange-400/40 text-orange-100 font-semibold text-[11px] whitespace-nowrap transition-colors"
+                    >
+                      Verify / Reconcile Status
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleCancelPendingCheckout(targetPendingId, {
+                        reason: hasMandate ? 'user_cancel_authorized_mandate' : 'user_cancel_pending',
+                        allowCancelAuthorizedMandate: hasMandate
+                      })}
+                      className="px-2.5 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-white/15 text-stone-200 font-semibold text-[11px] whitespace-nowrap transition-colors"
+                    >
+                      {hasMandate ? 'Cancel Authorized Mandate' : 'Cancel Pending Checkout'}
+                    </button>
+                  </>
                 )}
                 {isCheckoutBusy && <span className="animate-pulse text-[11px] text-orange-400 font-semibold">Processing…</span>}
               </div>
@@ -970,15 +1117,13 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 onClick={() => {
                   cleanupTimers();
                   setWatchdogRecoveryUrl(null);
-                  try {
-                    if (typeof sessionStorage !== 'undefined') {
-                      sessionStorage.removeItem('aira_unresolved_checkout');
-                    }
-                  } catch {}
-                  setCheckoutState('IDLE');
-                  isSubmittingRef.current = false;
-                  setActivePlanTier(null);
-                  setCheckoutNotice(null);
+                  const pendingId = activePendingSubIdRef.current || pendingCheckout?.id;
+                  if (pendingId) {
+                    void handleCancelPendingCheckout(pendingId, { reason: 'watchdog_dismissed', allowCancelAuthorizedMandate: false, quiet: true });
+                  } else {
+                    clearPendingState();
+                    setCheckoutNotice(null);
+                  }
                 }}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-stone-800 text-stone-300 hover:text-white transition-colors"
               >
