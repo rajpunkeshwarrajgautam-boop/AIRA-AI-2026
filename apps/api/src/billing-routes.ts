@@ -273,6 +273,8 @@ export function createBillingRoutes(): Router {
         ? 'active'
         : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
+      const lifecycle = await paymentGatewayService.getCustomerBillingLifecycleState(principal.userId);
+
       res.json({
         principalId: principal.userId,
         planId: entitlements.plan,
@@ -289,7 +291,9 @@ export function createBillingRoutes(): Router {
         reasoningBoostLimit: entitlements.reasoningBoostsLimit,
         checkoutAvailable: isCheckoutAvailable || isRehearsal,
         billingStatus,
-        featuresCertified: true
+        featuresCertified: true,
+        activeSubscription: lifecycle.activeSubscription,
+        pendingSubscription: lifecycle.pendingSubscription
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to fetch billing summary.' });
@@ -308,6 +312,95 @@ export function createBillingRoutes(): Router {
       res.json({ invoices });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to fetch invoices.' });
+    }
+  });
+
+  /**
+   * Protected: Download a GST-compliant tax invoice HTML receipt owned by the authenticated principal.
+   */
+  router.get('/invoices/:invoiceNumber/download', async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    const requested = typeof req.params.invoiceNumber === 'string' ? req.params.invoiceNumber.trim() : '';
+    if (!requested || !/^[a-zA-Z0-9_-]{3,80}$/.test(requested)) {
+      return res.status(400).json({ error: 'VALIDATION_ERROR: Invalid invoice number format.' });
+    }
+
+    try {
+      const invoices = await paymentGatewayService.getInvoices(principal.userId);
+      const invoice = invoices.find(inv => inv.invoiceNumber === requested);
+      if (!invoice) {
+        return res.status(404).json({ error: 'NOT_FOUND: Invoice not found for this account.' });
+      }
+
+      const escapeHtml = (value: unknown): string =>
+        String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+
+      const symbol = invoice.currency === 'INR' ? '₹' : '$';
+      const safeFileNum = invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '');
+      const taxRows =
+        invoice.cgstAmount !== undefined && invoice.sgstAmount !== undefined
+          ? `<tr><td>CGST (9%)</td><td class="num">${symbol}${invoice.cgstAmount.toFixed(2)}</td></tr><tr><td>SGST (9%)</td><td class="num">${symbol}${invoice.sgstAmount.toFixed(2)}</td></tr>`
+          : `<tr><td>IGST (18%)</td><td class="num">${symbol}${(invoice.igstAmount ?? invoice.gstAmount).toFixed(2)}</td></tr>`;
+
+      const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AIRA Tax Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; color: #1c1917; margin: 36px; max-width: 760px; }
+    .hdr { display: flex; justify-content: space-between; border-bottom: 2px solid #e7e5e4; padding-bottom: 16px; margin-bottom: 24px; }
+    .badge { display: inline-block; padding: 3px 8px; border-radius: 6px; background: #ecfdf5; color: #065f46; font-weight: 600; font-size: 12px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border-bottom: 1px solid #e7e5e4; padding: 10px 8px; text-align: left; font-size: 14px; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .total { font-weight: 700; font-size: 16px; background: #fafaf9; }
+    .meta { font-size: 13px; color: #57534e; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="hdr">
+    <div>
+      <h1 style="margin:0;font-size:22px;">Tax Invoice</h1>
+      <div class="meta"><strong>${escapeHtml(invoice.supplierName)}</strong>${invoice.supplierGstin ? ` · GSTIN: ${escapeHtml(invoice.supplierGstin)}` : ''}</div>
+      <div class="meta">SAC: ${escapeHtml(invoice.sacCode)} · Tax Compliance: ${escapeHtml(invoice.taxComplianceStatus)}</div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-family:monospace;font-weight:700;font-size:16px;">${escapeHtml(invoice.invoiceNumber)}</div>
+      <div class="meta">Date: ${escapeHtml(invoice.date)}</div>
+      <span class="badge">${escapeHtml(invoice.status)}</span>
+    </div>
+  </div>
+  <div class="meta">
+    <div><strong>Customer Principal:</strong> ${escapeHtml(principal.userId)}</div>
+    <div><strong>Place of Supply:</strong> ${escapeHtml(invoice.placeOfSupply)}</div>
+    <div><strong>Currency:</strong> ${escapeHtml(invoice.currency)}</div>
+  </div>
+  <table>
+    <thead><tr><th>Description</th><th class="num">Amount</th></tr></thead>
+    <tbody>
+      <tr><td>${escapeHtml(invoice.plan)} (Taxable Base)</td><td class="num">${symbol}${invoice.taxableBase.toFixed(2)}</td></tr>
+      ${taxRows}
+      <tr class="total"><td>Total Amount (${escapeHtml(invoice.currency)})</td><td class="num">${symbol}${invoice.totalAmount.toFixed(2)}</td></tr>
+    </tbody>
+  </table>
+  <p class="meta" style="margin-top:28px;">This is a computer-generated GST-compliant invoice from ${escapeHtml(invoice.supplierName)}.</p>
+</body>
+</html>`;
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="AIRA-GST-Invoice-${safeFileNum}.html"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).send(html);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to generate invoice download.' });
     }
   });
 

@@ -198,6 +198,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     wasOpenRef.current = isOpen;
   }, [isOpen, settings]);
 
+  interface ActiveSubscriptionSummary {
+    id: string;
+    planId: PlanTier;
+    gateway: string;
+    cancelAtPeriodEnd: boolean;
+    currentPeriodStart: number | null;
+    currentPeriodEnd: number | null;
+  }
+
+  interface PendingSubscriptionSummary {
+    id: string;
+    planId: PlanTier;
+    gateway: string;
+    status: string;
+    amountMinorUnits: number;
+    currency: string;
+    gatewaySubscriptionStatus: string | null;
+    authorizationStatus: string | null;
+    nextScheduleDate: string | null;
+    lastPaymentError: string | null;
+    createdAt: number;
+  }
+
   interface UsageData {
     planId: PlanTier;
     planName: string;
@@ -210,6 +233,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     paymentCollectionDisabled: boolean;
     checkoutAvailable: boolean;
     billingStatus: string;
+    activeSubscription: ActiveSubscriptionSummary | null;
+    pendingSubscription: PendingSubscriptionSummary | null;
   }
 
   const isGuestUser = userTier === 'guest' || !currentUser;
@@ -222,9 +247,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setUsageError(false);
     setUsageData(null);
     try {
-      const res = await authenticatedApiFetch('/api/billing/entitlements');
+      const [res, summaryRes] = await Promise.all([
+        authenticatedApiFetch('/api/billing/entitlements'),
+        authenticatedApiFetch('/api/billing/summary').catch(() => null)
+      ]);
       if (!res.ok) throw new Error('Unable to verify current entitlements.');
       const entitlements = await res.json();
+      const summary = summaryRes && summaryRes.ok ? await summaryRes.json().catch(() => null) : null;
       const planId = entitlements.plan as PlanTier;
       if (!Object.prototype.hasOwnProperty.call(COMMERCIAL_PLANS, planId) ||
           !Number.isFinite(entitlements.dailyStandardChatRemaining) ||
@@ -265,7 +294,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         resetAt: tomorrowUtc.toISOString(),
         paymentCollectionDisabled: !checkoutAvailable,
         checkoutAvailable,
-        billingStatus: serverBillingStatus
+        billingStatus: serverBillingStatus,
+        activeSubscription: summary?.activeSubscription || null,
+        pendingSubscription: summary?.pendingSubscription || null
       });
     } catch (err) {
       console.warn('[SettingsModal] fetchUsage error:', err);
@@ -280,6 +311,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
   const [isCancellingSub, setIsCancellingSub] = useState(false);
   const [cancelMessage, setCancelMessage] = useState<string | null>(null);
+  const [isReconcilingPending, setIsReconcilingPending] = useState(false);
+  const [reconcileMessage, setReconcileMessage] = useState<string | null>(null);
+  const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
+
+  const handleReconcilePending = async (subscriptionId: string) => {
+    setIsReconcilingPending(true);
+    setReconcileMessage(null);
+    try {
+      const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(subscriptionId)}/reconcile`, {
+        method: 'POST',
+        body: JSON.stringify({})
+      });
+      const data = await res.json().catch(() => ({} as Record<string, any>));
+      setReconcileMessage(data?.message || data?.error || 'Reconciliation check finished.');
+      await fetchUsage();
+      await fetchInvoices();
+    } catch (err: any) {
+      setReconcileMessage(err?.message || 'Unable to contact billing reconciliation service.');
+    } finally {
+      setIsReconcilingPending(false);
+    }
+  };
+
+  const handleDownloadInvoice = async (invoiceNumber: string) => {
+    setDownloadingInvoiceNum(invoiceNumber);
+    try {
+      const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invoiceNumber)}/download`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({} as any));
+        alert(errData.error || 'Failed to download invoice.');
+        return;
+      }
+      const html = await res.text();
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `AIRA-GST-Invoice-${invoiceNumber}.html`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err?.message || 'Unable to download invoice.');
+    } finally {
+      setDownloadingInvoiceNum(null);
+    }
+  };
 
   const fetchInvoices = useCallback(async () => {
     if (isGuestUser) return;
@@ -832,6 +911,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
 
+                  {/* Pending Subscription & Scheduled Payment Banner */}
+                  {usageData?.pendingSubscription && (
+                    <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-2.5 text-xs">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 font-bold text-claude-text-light dark:text-white">
+                            <Clock className="w-4 h-4 text-amber-500 shrink-0" />
+                            <span>
+                              Pending Subscription ({usageData.pendingSubscription.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus'} via {usageData.pendingSubscription.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay'})
+                            </span>
+                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/10">
+                              {usageData.pendingSubscription.id}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-relaxed">
+                            {usageData.pendingSubscription.lastPaymentError ? (
+                              <>Last gateway notice: <span className="text-red-500 font-medium">{usageData.pendingSubscription.lastPaymentError}</span>. Verify status to clear or retry.</>
+                            ) : usageData.pendingSubscription.gateway === 'cashfree' && (usageData.pendingSubscription.gatewaySubscriptionStatus === 'ACTIVE' || usageData.pendingSubscription.authorizationStatus === 'ACTIVE') ? (
+                              <>
+                                Mandate authorized (₹1 verification). Paid tier activates only after Cycle 1 settlement
+                                {usageData.pendingSubscription.nextScheduleDate ? (
+                                  <> — first scheduled debit: <strong className="text-claude-text-light dark:text-white">{new Date(usageData.pendingSubscription.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST</strong>.</>
+                                ) : '.'}
+                              </>
+                            ) : (
+                              <>Awaiting mandate/payment completion with {usageData.pendingSubscription.gateway}. Click Verify / Reconcile Status after payment or if checkout was closed early.</>
+                            )}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleReconcilePending(usageData.pendingSubscription!.id)}
+                          disabled={isReconcilingPending}
+                          className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-800 dark:text-amber-200 font-semibold text-xs whitespace-nowrap transition-colors disabled:opacity-50 shrink-0"
+                        >
+                          {isReconcilingPending ? 'Checking...' : 'Verify / Reconcile Status'}
+                        </button>
+                      </div>
+                      {reconcileMessage && (
+                        <div className="p-2 rounded-lg bg-black/5 dark:bg-white/5 text-[11px] text-claude-text-light dark:text-white">
+                          {reconcileMessage}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Quota Meters & Usage Gauges */}
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
@@ -1051,7 +1176,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   {tierKey === 'free'
                                     ? 'Get Started'
                                     : (usageData?.checkoutAvailable
-                                      ? `Upgrade to ${plan.name}`
+                                      ? `${activePlanId === 'pro' && tierKey === 'plus' ? 'Downgrade' : 'Upgrade'} to ${plan.name}`
                                       : 'View Plan Details')}
                                 </button>
                               )}
@@ -1065,23 +1190,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {/* Active Subscription Management & Cancellation */}
                   {(activePlanId === 'plus' || activePlanId === 'pro') && (
                     <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-3">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-3">
                         <div>
                           <h4 className="text-xs font-bold text-claude-text-light dark:text-white">
                             Active Subscription Management
                           </h4>
                           <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
-                            Recurring plan renewal via e-mandate. Cancellation stops renewal at the end of your billing cycle.
+                            {usageData?.activeSubscription?.cancelAtPeriodEnd
+                              ? `Cancellation scheduled. Your paid entitlements remain active until ${usageData.activeSubscription.currentPeriodEnd ? new Date(usageData.activeSubscription.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' }) : 'period end'}.`
+                              : 'Recurring plan renewal via e-mandate. Cancellation stops renewal at the end of your billing cycle.'}
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={handleCancelSubscription}
-                          disabled={isCancellingSub}
-                          className="px-3 py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-semibold transition-colors disabled:opacity-50"
-                        >
-                          {isCancellingSub ? 'Processing...' : 'Cancel Subscription'}
-                        </button>
+                        {usageData?.activeSubscription?.cancelAtPeriodEnd ? (
+                          <span className="px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-semibold whitespace-nowrap">
+                            Cancellation Scheduled
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={handleCancelSubscription}
+                            disabled={isCancellingSub}
+                            className="px-3 py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-semibold transition-colors disabled:opacity-50 whitespace-nowrap"
+                          >
+                            {isCancellingSub ? 'Processing...' : 'Cancel Subscription'}
+                          </button>
+                        )}
                       </div>
                       {cancelMessage && (
                         <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs">
@@ -1117,9 +1250,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           {invoices.map((inv: any, idx: number) => (
                             <div
                               key={inv.invoiceNumber || idx}
-                              className="p-3 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/30 flex items-center justify-between text-xs"
+                              className="p-3 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/30 flex items-center justify-between gap-3 text-xs"
                             >
-                              <div className="space-y-0.5">
+                              <div className="space-y-0.5 min-w-0">
                                 <div className="flex items-center gap-2">
                                   <span className="font-mono font-bold text-claude-text-light dark:text-white">{inv.invoiceNumber}</span>
                                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium">
@@ -1130,13 +1263,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   {inv.plan} · {inv.date} · SAC {inv.sacCode}
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <div className="font-mono font-bold text-claude-text-light dark:text-white">
-                                  {inv.currency === 'INR' ? '₹' : '$'}{inv.totalAmount.toFixed(2)}
+                              <div className="flex items-center gap-3 shrink-0">
+                                <div className="text-right">
+                                  <div className="font-mono font-bold text-claude-text-light dark:text-white">
+                                    {inv.currency === 'INR' ? '₹' : '$'}{inv.totalAmount.toFixed(2)}
+                                  </div>
+                                  <div className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
+                                    Incl. {inv.currency === 'INR' ? '₹' : '$'}{inv.gstAmount.toFixed(2)} GST
+                                  </div>
                                 </div>
-                                <div className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
-                                  Incl. {inv.currency === 'INR' ? '₹' : '$'}{inv.gstAmount.toFixed(2)} GST
-                                </div>
+                                {inv.invoiceNumber && inv.invoiceNumber !== 'INV-PENDING-RECONCILIATION' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void handleDownloadInvoice(inv.invoiceNumber)}
+                                    disabled={downloadingInvoiceNum === inv.invoiceNumber}
+                                    aria-label={`Download GST Invoice ${inv.invoiceNumber}`}
+                                    className="px-2.5 py-1.5 rounded-lg border border-claude-border-light dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/10 text-[11px] font-semibold text-claude-text-light dark:text-white inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+                                  >
+                                    <Download className="w-3.5 h-3.5" />
+                                    <span>{downloadingInvoiceNum === inv.invoiceNumber ? 'Saving…' : 'Invoice'}</span>
+                                  </button>
+                                )}
                               </div>
                             </div>
                           ))}

@@ -351,7 +351,10 @@ export const SAFE_RECONCILIATION_EVENTS = new Set([
   // Cashfree
   'SUBSCRIPTION_CANCELLED',
   'SUBSCRIPTION_HALTED',
+  'SUBSCRIPTION_PAYMENT_FAILED',
+  'SUBSCRIPTION_PAYMENT_CANCELLED',
   'PAYMENT_FAILED_WEBHOOK',
+  'PAYMENT_FAILED',
   'REFUND_SUCCESS'
 ]);
 
@@ -1520,10 +1523,19 @@ export class PaymentGatewayService {
           existingMeta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
         } catch {}
 
+        const nextScheduleDate =
+          payload.data?.next_schedule_date ||
+          subEntity.next_schedule_date ||
+          payload.data?.subscription_details?.next_schedule_date ||
+          payload.data?.subscription?.next_schedule_date ||
+          existingMeta.next_schedule_date ||
+          null;
+
         await trx('subscriptions').where({ id: purchaseRecord.id }).update({
           metadata: JSON.stringify({
             ...existingMeta,
             gateway_subscription_status: rawStatus,
+            ...(nextScheduleDate ? { next_schedule_date: nextScheduleDate } : {}),
             status_recorded_at: now
           }),
           updated_at: now
@@ -2455,6 +2467,90 @@ export class PaymentGatewayService {
         }),
         created_at: now
       });
+      return;
+    }
+
+    if (
+      eventType === 'payment.failed' ||
+      eventType === 'PAYMENT_FAILED_WEBHOOK' ||
+      eventType === 'PAYMENT_FAILED' ||
+      eventType === 'SUBSCRIPTION_PAYMENT_FAILED' ||
+      eventType === 'SUBSCRIPTION_PAYMENT_CANCELLED'
+    ) {
+      const cfFlatData = payload.data && (
+        payload.data.cf_payment_id !== undefined ||
+        payload.data.subscription_id !== undefined ||
+        payload.data.cf_subscription_id !== undefined
+      ) ? payload.data : {};
+      const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || payload.data?.payment_details || cfFlatData || {};
+      const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
+      const subEntity = payload.data?.subscription_details || payload.data?.subscription || {};
+      const gatewaySubId =
+        subEntity.subscription_id ||
+        subEntity.cf_subscription_id ||
+        cfFlatData.subscription_id ||
+        cfFlatData.cf_subscription_id ||
+        paymentEntity.subscription_id ||
+        paymentEntity.order_id ||
+        orderEntity.order_id ||
+        orderEntity.id;
+
+      const failedPaymentId =
+        paymentEntity.id ||
+        paymentEntity.cf_payment_id ||
+        paymentEntity.payment_id ||
+        payload.data?.payment_gateway_details?.gateway_payment_id ||
+        null;
+
+      const failureReason = String(
+        paymentEntity.error_description ||
+        paymentEntity.payment_message ||
+        paymentEntity.failure_reason ||
+        payload.data?.error_details?.error_description ||
+        payload.data?.payment_message ||
+        payload.data?.failure_reason ||
+        'Payment authorization or debit failed at gateway.'
+      ).slice(0, 300);
+
+      if (gatewaySubId) {
+        let subRecord = await trx('subscriptions').where({ gateway_subscription_id: gatewaySubId }).first();
+        if (!subRecord) {
+          subRecord = await trx('subscriptions').where({ id: gatewaySubId }).first();
+        }
+        if (subRecord) {
+          let meta: any = {};
+          try {
+            meta = typeof subRecord.metadata === 'string' ? JSON.parse(subRecord.metadata) : (subRecord.metadata || {});
+          } catch {}
+          const paymentType = String(paymentEntity.payment_type || payload.data?.payment_type || '').toUpperCase();
+          await trx('subscriptions').where({ id: subRecord.id }).update({
+            metadata: JSON.stringify({
+              ...meta,
+              lastPaymentError: failureReason,
+              lastPaymentFailedAt: now,
+              ...(failedPaymentId ? { lastFailedPaymentId: failedPaymentId } : {}),
+              ...(paymentType ? { lastFailedPaymentType: paymentType } : {})
+            }),
+            updated_at: now
+          });
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: subRecord.customer_id,
+            event_type: 'PAYMENT_FAILED',
+            actor_type: 'gateway_webhook',
+            actor_id: failedPaymentId || gatewaySubId,
+            payload: JSON.stringify({
+              subscriptionId: subRecord.id,
+              gateway,
+              eventType,
+              paymentType: paymentType || null,
+              failureReason,
+              failedPaymentId
+            }),
+            created_at: now
+          });
+        }
+      }
       return;
     }
 
@@ -4029,11 +4125,11 @@ export class PaymentGatewayService {
             errorMsg = `Razorpay cancellation returned HTTP ${resp.status}`;
           }
         } else if (task.gateway === 'cashfree' && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY) {
-          const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test' || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST');
+          const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || isStagingSandboxRehearsalActive() || process.env.NODE_ENV === 'test' || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST');
           const cfBaseUrl = isSandbox
             ? 'https://sandbox.cashfree.com/pg/subscriptions'
             : 'https://api.cashfree.com/pg/subscriptions';
-          const resp = await fetch(`${cfBaseUrl}/${task.gateway_subscription_id}/cancel`, {
+          const resp = await fetch(`${cfBaseUrl}/${encodeURIComponent(task.gateway_subscription_id)}/manage`, {
             method: 'POST',
             headers: {
               'x-client-id': process.env.CASHFREE_APP_ID,
@@ -4041,6 +4137,10 @@ export class PaymentGatewayService {
               'x-api-version': '2023-08-01',
               'Content-Type': 'application/json'
             },
+            body: JSON.stringify({
+              subscription_id: task.gateway_subscription_id,
+              action: 'CANCEL'
+            }),
             signal: AbortSignal.timeout(5000)
           });
           if (resp.ok || resp.status === 400 || resp.status === 404) {
@@ -4279,7 +4379,19 @@ export class PaymentGatewayService {
       return { success: false, message: 'No active subscription found.', gatewayCancelled: false };
     }
 
-    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    if (sub.cancel_at_period_end) {
+      return {
+        success: true,
+        message: 'Subscription is already scheduled to cancel at the end of the current billing period.',
+        gatewayCancelled: true
+      };
+    }
+
+    const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' ||
+      isStagingSandboxRehearsalActive() ||
+      process.env.NODE_ENV === 'test' ||
+      process.env.CASHFREE_ENV === 'TEST' ||
+      process.env.CASHFREE_APP_ID?.startsWith('TEST');
     let gatewayCancelled = false;
     let gatewayError: string | null = null;
 
@@ -4323,17 +4435,21 @@ export class PaymentGatewayService {
       }
     } else if (sub.gateway === 'cashfree' && sub.gateway_subscription_id && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY) {
       try {
-        const cfBaseUrl = (isSandbox || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST'))
+        const cfBaseUrl = isSandbox
           ? 'https://sandbox.cashfree.com/pg/subscriptions'
           : 'https://api.cashfree.com/pg/subscriptions';
-        const cfRes = await fetch(`${cfBaseUrl}/${sub.gateway_subscription_id}/cancel`, {
+        const cfRes = await fetch(`${cfBaseUrl}/${encodeURIComponent(sub.gateway_subscription_id)}/manage`, {
           method: 'POST',
           headers: {
             'x-client-id': process.env.CASHFREE_APP_ID,
             'x-client-secret': process.env.CASHFREE_SECRET_KEY,
             'x-api-version': '2023-08-01',
             'Content-Type': 'application/json'
-          }
+          },
+          body: JSON.stringify({
+            subscription_id: sub.gateway_subscription_id,
+            action: 'CANCEL'
+          })
         });
         if (cfRes.ok) {
           gatewayCancelled = true;
@@ -5858,6 +5974,88 @@ export class PaymentGatewayService {
     }
 
     return { reconciled, failed };
+  }
+
+  async getCustomerBillingLifecycleState(principalId: string): Promise<{
+    activeSubscription: {
+      id: string;
+      planId: PlanTier;
+      gateway: string;
+      cancelAtPeriodEnd: boolean;
+      currentPeriodStart: number | null;
+      currentPeriodEnd: number | null;
+    } | null;
+    pendingSubscription: {
+      id: string;
+      planId: PlanTier;
+      gateway: string;
+      status: string;
+      amountMinorUnits: number;
+      currency: string;
+      gatewaySubscriptionStatus: string | null;
+      authorizationStatus: string | null;
+      nextScheduleDate: string | null;
+      lastPaymentError: string | null;
+      createdAt: number;
+    } | null;
+  }> {
+    try {
+      const dbClient = this.getDb() as any;
+      const customer = await dbClient('billing_customers').where({ principal_id: principalId }).first();
+      if (!customer) {
+        return { activeSubscription: null, pendingSubscription: null };
+      }
+
+      const activeSub = await dbClient('subscriptions')
+        .where({ customer_id: customer.id, status: 'active' })
+        .orderBy('updated_at', 'desc')
+        .first();
+
+      const pendingSub = await dbClient('subscriptions')
+        .where({ customer_id: customer.id })
+        .whereIn('status', ['pending', 'initiating', 'ambiguous_timeout'])
+        .orderBy('created_at', 'desc')
+        .first();
+
+      const parseMeta = (raw: any): Record<string, any> => {
+        if (!raw) return {};
+        if (typeof raw === 'object') return raw;
+        try { return JSON.parse(raw); } catch { return {}; }
+      };
+
+      const pendingMeta = pendingSub ? parseMeta(pendingSub.metadata) : {};
+      const providerDetails = pendingMeta.providerDetails || {};
+
+      return {
+        activeSubscription: activeSub
+          ? {
+              id: activeSub.id,
+              planId: activeSub.plan_id as PlanTier,
+              gateway: activeSub.gateway,
+              cancelAtPeriodEnd: Boolean(activeSub.cancel_at_period_end),
+              currentPeriodStart: activeSub.current_period_start ? Number(activeSub.current_period_start) : null,
+              currentPeriodEnd: activeSub.current_period_end ? Number(activeSub.current_period_end) : null
+            }
+          : null,
+        pendingSubscription: pendingSub
+          ? {
+              id: pendingSub.id,
+              planId: pendingSub.plan_id as PlanTier,
+              gateway: pendingSub.gateway,
+              status: pendingSub.status,
+              amountMinorUnits: Number(pendingSub.amount_minor_units) || 0,
+              currency: pendingSub.currency || 'INR',
+              gatewaySubscriptionStatus: pendingMeta.gateway_subscription_status || providerDetails.subscriptionStatus || null,
+              authorizationStatus: pendingMeta.gateway_auth_status || providerDetails.authorizationStatus || null,
+              nextScheduleDate: pendingMeta.next_schedule_date || providerDetails.nextScheduleDate || null,
+              lastPaymentError: pendingMeta.lastPaymentError || null,
+              createdAt: Number(pendingSub.created_at) || 0
+            }
+          : null
+      };
+    } catch {
+      return { activeSubscription: null, pendingSubscription: null };
+    }
   }
 
   /**
