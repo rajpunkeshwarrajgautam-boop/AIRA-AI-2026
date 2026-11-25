@@ -886,12 +886,53 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         </div>
 
         {/* Status / Error Toast Notice */}
-        {checkoutNotice && (
-          <div className="mx-6 md:mx-8 mt-4 p-3 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-300 text-xs flex items-center justify-between">
-            <span>{checkoutNotice}</span>
-            {isCheckoutBusy && <span className="animate-pulse text-[11px] text-orange-400 font-semibold ml-2">Processing…</span>}
-          </div>
-        )}
+        {checkoutNotice && (() => {
+          const pendingSubId = checkoutNotice.match(/\b((?:pur|sub)_[a-zA-Z0-9_-]{4,80})\b/)?.[1] || null;
+          return (
+            <div className="mx-6 md:mx-8 mt-4 p-3 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-300 text-xs flex flex-wrap items-center justify-between gap-2">
+              <span className="flex-1 min-w-[200px]">{checkoutNotice}</span>
+              <div className="flex items-center gap-2 shrink-0">
+                {pendingSubId && !isCheckoutBusy && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setCheckoutState('REQUESTING');
+                      setCheckoutNotice(`Verifying subscription ${pendingSubId} with payment gateway…`);
+                      try {
+                        const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(pendingSubId)}/reconcile`, {
+                          method: 'POST',
+                          body: JSON.stringify({})
+                        });
+                        const data = await res.json().catch(() => ({} as Record<string, any>));
+                        if (!isMountedRef.current) return;
+                        if (res.ok && data?.reconciled) {
+                          try {
+                            if (typeof sessionStorage !== 'undefined') {
+                              sessionStorage.removeItem('aira_unresolved_checkout');
+                            }
+                          } catch {}
+                          setCheckoutState(data.status === 'active' ? 'COMPLETED' : 'IDLE');
+                          setCheckoutNotice(data.message || 'Subscription status reconciled.');
+                        } else {
+                          setCheckoutState('IDLE');
+                          setCheckoutNotice(data?.message || data?.error || 'Unable to verify subscription status right now. Please try again shortly.');
+                        }
+                      } catch (err: any) {
+                        if (!isMountedRef.current) return;
+                        setCheckoutState('IDLE');
+                        setCheckoutNotice(err?.message || 'Unable to reach billing server for status verification.');
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-orange-500/20 hover:bg-orange-500/30 border border-orange-400/40 text-orange-200 font-semibold text-[11px] whitespace-nowrap transition-colors"
+                  >
+                    Verify / Reconcile Status
+                  </button>
+                )}
+                {isCheckoutBusy && <span className="animate-pulse text-[11px] text-orange-400 font-semibold">Processing…</span>}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Watchdog Actionable Recovery Container */}
         {watchdogRecoveryUrl && (
@@ -988,6 +1029,14 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           <div className="px-6 md:px-8 pt-1">
             <p id="cashfree-phone-error" className="text-[11px] text-red-400 font-medium">
               {phoneError}
+            </p>
+          </div>
+        )}
+
+        {currency === 'INR' && gateway === 'cashfree' && (
+          <div className="px-6 md:px-8 pt-2">
+            <p className="text-[11px] text-stone-400">
+              Cashfree e-mandate setup authorizes a nominal ₹1 mandate verification today; first recurring billing occurs on the scheduled charge date (T+1 day+ per NPCI rules) and paid tier access activates after settlement. Choose Razorpay for immediate Cycle 1 activation.
             </p>
           </div>
         )}

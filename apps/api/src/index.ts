@@ -1,5 +1,10 @@
 import { createBuilderRoutes } from './builder-routes.js';
-import { createBillingRoutes } from './billing-routes.js';
+import {
+  createBillingRoutes,
+  createCashfreeReturnHandler,
+  createWorkerOutboxHandler,
+  createInternalReconcileAmbiguousHandler
+} from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes, createAnnouncementRoutes } from './account-routes.js';
 import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
@@ -146,6 +151,12 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
 // Audit 28: Body size limits and strict CORS with credentials
 app.use((req: Request, res: Response, next: NextFunction) => {
+  // Cashfree browser form-POST return bridge arrives with Origin: payments*.cashfree.com.
+  // It performs zero state mutations or credentialed reads and immediately emits a 303 redirect.
+  if (req.path === '/api/billing/cashfree/return') {
+    return next();
+  }
+
   const forwardedHost = req.headers['x-forwarded-host'];
   const host = typeof forwardedHost === 'string'
     ? forwardedHost.split(',')[0].trim()
@@ -596,6 +607,18 @@ app.get('/api/billing/plans', (_req: Request, res: Response) => {
     featuresCertified: true
   });
 });
+
+// Cashfree gateway POST/GET return bridge and machine-to-machine outbox/reconciliation routes
+// must run before user-session principal enforcement while preserving fail-closed route auth.
+const cashfreeReturnHandler = createCashfreeReturnHandler();
+app.get('/api/billing/cashfree/return', cashfreeReturnHandler);
+app.post('/api/billing/cashfree/return', cashfreeReturnHandler);
+
+const billingWorkerOutboxHandler = createWorkerOutboxHandler();
+app.get('/api/billing/worker/process-outbox', billingWorkerOutboxHandler);
+app.post('/api/billing/worker/process-outbox', billingWorkerOutboxHandler);
+
+app.post('/api/billing/internal/reconcile-ambiguous', createInternalReconcileAmbiguousHandler());
 
 // Announcements delivery and user-isolated dismissal sync (P3 remediation)
 app.use('/api/announcements', createAnnouncementRoutes());

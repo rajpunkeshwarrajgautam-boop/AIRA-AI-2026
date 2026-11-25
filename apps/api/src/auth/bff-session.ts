@@ -607,6 +607,29 @@ export function verifyCsrfAndOrigin(req: Request, session?: BffServerSession | n
     }
   }
 
+  // External payment gateway form-POST return bridge: performs zero state mutations,
+  // emits only an HTTP 303 GET redirect with sanitized billing tab query parameters.
+  if (reqPath === '/api/billing/cashfree/return') {
+    return true;
+  }
+
+  // Machine-to-machine billing worker and internal reconciliation endpoints accept non-browser
+  // requests authenticated via worker key headers (never session cookies or document navigations).
+  if (
+    !session &&
+    (reqPath === '/api/billing/worker/process-outbox' || reqPath === '/api/billing/internal/reconcile-ambiguous')
+  ) {
+    const hasWorkerHeader = Boolean(
+      req.headers['x-internal-worker-key'] ||
+      req.headers['x-worker-key'] ||
+      (typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer '))
+    );
+    const isBrowserNavigation = req.headers['sec-fetch-dest'] === 'document' || req.headers['sec-fetch-mode'] === 'navigate';
+    if (hasWorkerHeader && !isBrowserNavigation) {
+      return true;
+    }
+  }
+
   // 1. Fetch Metadata check: reject cross-site requests unconditionally on mutations
   const secFetchSite = req.headers['sec-fetch-site'];
   if (secFetchSite === 'cross-site') {
@@ -1474,4 +1497,72 @@ export async function handleBffSignOut(req: Request, res: Response): Promise<voi
   }
 
   res.status(200).json({ success: true });
+}
+
+async function forwardPasswordRecoveryRequest(
+  req: Request,
+  res: Response,
+  upstreamPath: 'request-password-reset' | 'reset-password',
+  payload: Record<string, string>,
+  fallbackMessage: string
+): Promise<void> {
+  if (!verifyCsrfAndOrigin(req)) {
+    res.status(403).json({ error: 'CSRF validation failed: missing origin or anti-CSRF header' });
+    return;
+  }
+
+  let baseUrl: string;
+  try {
+    baseUrl = getAuthBaseUrl();
+  } catch {
+    res.status(503).json({ error: 'Password recovery service is not configured in this environment.' });
+    return;
+  }
+
+  const clientOrigin = (req.headers.origin as string) || (req.headers.referer as string) || 'http://localhost:5173';
+  const upstreamRes = await fetch(`${baseUrl}/${upstreamPath}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Origin': clientOrigin
+    },
+    signal: AbortSignal.timeout(10000),
+    body: JSON.stringify(payload)
+  });
+
+  const data = await upstreamRes.json().catch(() => ({}));
+  if (!upstreamRes.ok) {
+    res.status(upstreamRes.status).json({
+      error: data?.message || data?.error || fallbackMessage,
+      message: data?.message || data?.error || fallbackMessage
+    });
+    return;
+  }
+
+  res.status(200).json(data && typeof data === 'object' ? { status: true, ...data } : { status: true });
+}
+
+/**
+ * BFF Endpoint: POST /api/auth/request-password-reset
+ */
+export async function handleBffRequestPasswordReset(req: Request, res: Response): Promise<void> {
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+  if (!email || !email.includes('@')) {
+    res.status(400).json({ error: 'Valid email address is required', message: 'Valid email address is required' });
+    return;
+  }
+  await forwardPasswordRecoveryRequest(req, res, 'request-password-reset', { email }, 'Password reset request failed');
+}
+
+/**
+ * BFF Endpoint: POST /api/auth/reset-password
+ */
+export async function handleBffResetPassword(req: Request, res: Response): Promise<void> {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+  const newPassword = typeof req.body?.newPassword === 'string' ? req.body.newPassword : '';
+  if (!token || !newPassword || newPassword.length < 8) {
+    res.status(400).json({ error: 'Reset token and password (minimum 8 characters) are required', message: 'Reset token and password (minimum 8 characters) are required' });
+    return;
+  }
+  await forwardPasswordRecoveryRequest(req, res, 'reset-password', { token, newPassword }, 'Password reset failed');
 }

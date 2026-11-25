@@ -12,6 +12,8 @@ import {
   handleBffUnlinkProvider,
   handleBffRecoveryRequest,
   handleBffRecoveryGuidance,
+  handleBffRequestPasswordReset,
+  handleBffResetPassword,
   handleBffSession,
   handleBffSignOut
 } from './bff-session.js';
@@ -95,6 +97,16 @@ export function registerBffRoutes(app: Express): void {
   app.post('/api/auth/recovery/request', (req: Request, res: Response) => {
     handleBffRecoveryRequest(req, res).catch((err) => {
       res.status(500).json({ error: err.message || 'Failed to submit recovery request' });
+    });
+  });
+  app.post('/api/auth/request-password-reset', (req: Request, res: Response) => {
+    handleBffRequestPasswordReset(req, res).catch((err) => {
+      res.status(500).json({ error: err.message || 'Password reset request failed' });
+    });
+  });
+  app.post('/api/auth/reset-password', (req: Request, res: Response) => {
+    handleBffResetPassword(req, res).catch((err) => {
+      res.status(500).json({ error: err.message || 'Password reset failed' });
     });
   });
   app.get('/api/auth/session', handleBffSession);
