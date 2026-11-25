@@ -1,6 +1,8 @@
 import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import http from 'node:http';
 import express from 'express';
 
@@ -1043,5 +1045,106 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
     assert.equal(invoices.length, 1, 'Legitimate paid invoice must remain preserved after subsequent subscription cancellation');
     assert.equal(invoices[0].totalAmount, 399);
     assert.equal(invoices[0].status, 'Paid');
+  });
+
+  it('13. Propagates BILLING_INVOICE_QUERY_FAILED and API unavailable status on database/query failures without returning empty array', async () => {
+    const failingMockDb: any = () => {
+      const builder: any = {
+        where: () => builder,
+        orderBy: () => builder,
+        first: async () => ({ id: 'cust_db_down', principal_id: 'usr_db_down' }),
+        select: async () => {
+          throw new Error('Neon connection terminated during financial ledger query');
+        }
+      };
+      return builder;
+    };
+    failingMockDb.schema = {
+      hasTable: async (name: string) => {
+        if (name === 'billing_credit_notes') return false;
+        return true;
+      }
+    };
+
+    const service = new PaymentGatewayService();
+    service.setDbClient(failingMockDb);
+
+    await assert.rejects(
+      async () => service.getInvoices('usr_db_down'),
+      /BILLING_INVOICE_QUERY_FAILED:/
+    );
+
+    paymentGatewayService.setDbClient(failingMockDb);
+    const apiRes = await fetch(`${billingUrl}/api/billing/invoices`, {
+      headers: { 'x-test-principal': 'usr_db_down' }
+    });
+    assert.ok(apiRes.status >= 500, `Expected 5xx on invoice query outage, got ${apiRes.status}`);
+    const body: any = await apiRes.json();
+    assert.match(String(body.error || ''), /BILLING_INVOICE_QUERY_FAILED/);
+    assert.equal(body.billingHistoryUnavailable, true);
+    assert.equal(body.invoices, undefined, 'Unavailable error response must never mimic empty invoices array');
+  });
+
+  it('14. Tolerates genuinely absent optional tables (billing_credit_notes=false) while SettingsModal renders distinct unavailable error state', async () => {
+    const now = Date.now();
+    const customerId = 'cust_opt_tbl';
+    const principalId = 'usr_opt_tbl';
+    const subId = 'pur_opt_tbl_1';
+    const { mockDb } = createMockDb({
+      customers: [{ id: customerId, principal_id: principalId }],
+      subscriptions: [{
+        id: subId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        status: 'active',
+        gateway: 'razorpay',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        metadata: JSON.stringify({ principalId, customerId, initialPaymentId: 'pay_opt_1', lastPaymentId: 'pay_opt_1', fulfilledCycle: 1 }),
+        created_at: now,
+        updated_at: now
+      }],
+      invoices: [{
+        id: 'inv_opt_1',
+        invoice_number: 'INV-2026-7701',
+        customer_id: customerId,
+        subscription_id: subId,
+        cycle_number: 1,
+        billing_event_id: 'pay_opt_1',
+        plan_tier: 'plus',
+        currency: 'INR',
+        total_amount: '399.00',
+        taxable_base: '338.14',
+        gst_amount: '60.86',
+        status: 'Paid',
+        gateway: 'razorpay',
+        created_at: now,
+        updated_at: now
+      }],
+      auditEvents: [{
+        id: 'bae_opt_act',
+        customer_id: customerId,
+        event_type: 'SUBSCRIPTION_ACTIVATED',
+        actor_type: 'gateway_webhook',
+        actor_id: subId,
+        payload: JSON.stringify({ purchaseId: subId, actualPaymentId: 'pay_opt_1', amount: 39900, currency: 'INR' }),
+        created_at: now
+      }]
+    });
+
+    // Simulate genuinely missing billing_credit_notes table (hasTable returns false cleanly, no exception)
+    mockDb.schema = {
+      hasTable: async (name: string) => name !== 'billing_credit_notes'
+    };
+    const service = new PaymentGatewayService();
+    service.setDbClient(mockDb);
+    const invoices = await service.getInvoices(principalId);
+    assert.equal(invoices.length, 1);
+    assert.equal(invoices[0].invoiceNumber, 'INV-2026-7701');
+
+    // Verify SettingsModal distinguishes unavailable billing history error from empty invoice history
+    const settingsSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/components/SettingsModal.tsx'), 'utf8');
+    assert.match(settingsSrc, /invoicesError/, 'SettingsModal must track distinct invoicesError state');
+    assert.match(settingsSrc, /Unable to load billing history/i, 'SettingsModal must render explicit unavailable billing history feedback');
   });
 });

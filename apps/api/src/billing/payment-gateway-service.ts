@@ -6660,8 +6660,13 @@ export class PaymentGatewayService {
         const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
         customerId = existingCust ? (existingCust as any).id : null;
       } else {
-        const customer = await commercialBillingService.getOrCreateCustomer(principalId).catch(() => null);
-        customerId = customer?.id || null;
+        const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
+        if (existingCust) {
+          customerId = (existingCust as any).id;
+        } else {
+          const customer = await commercialBillingService.getOrCreateCustomer(principalId);
+          customerId = customer?.id || null;
+        }
       }
 
       // Fail-closed on unauthorized or missing customer
@@ -6669,24 +6674,28 @@ export class PaymentGatewayService {
 
       const dbClient = this.getDb();
 
-      const loadRows = async (tableName: string, whereClause: Record<string, any>, orderCol?: string): Promise<any[]> => {
-        try {
-          if (typeof (dbClient as any).schema?.hasTable === 'function') {
-            const exists = await (dbClient as any).schema.hasTable(tableName);
-            if (!exists) return [];
+      const loadRows = async (
+        tableName: string,
+        whereClause: Record<string, any>,
+        orderCol?: string,
+        options: { optional?: boolean } = {}
+      ): Promise<any[]> => {
+        if (typeof (dbClient as any).schema?.hasTable === 'function') {
+          const exists = await (dbClient as any).schema.hasTable(tableName);
+          if (!exists) {
+            if (options.optional) return [];
+            throw new Error(`Required billing table '${tableName}' is unavailable.`);
           }
-          let q: any = (dbClient as any)(tableName).where(whereClause);
-          if (orderCol && typeof q.orderBy === 'function') {
-            q = q.orderBy(orderCol, 'desc');
-          }
-          if (typeof q.select === 'function') {
-            return (await q.select('*')) || [];
-          }
-          const awaited = await q;
-          return Array.isArray(awaited) ? awaited : awaited ? [awaited] : [];
-        } catch {
-          return [];
         }
+        let q: any = (dbClient as any)(tableName).where(whereClause);
+        if (orderCol && typeof q.orderBy === 'function') {
+          q = q.orderBy(orderCol, 'desc');
+        }
+        if (typeof q.select === 'function') {
+          return (await q.select('*')) || [];
+        }
+        const awaited = await q;
+        return Array.isArray(awaited) ? awaited : awaited ? [awaited] : [];
       };
 
       // Load customer's subscriptions, audit trail, gateway events, and credit notes for cross-verification
@@ -6749,7 +6758,7 @@ export class PaymentGatewayService {
       }
 
       // Inspect payment_gateway_events for AUTH-only / failed / settled CHARGE classifications
-      const allGatewayEvents = await loadRows('payment_gateway_events', {}, 'created_at');
+      const allGatewayEvents = await loadRows('payment_gateway_events', {}, 'created_at', { optional: true });
       const gwAuthPaymentIds = new Set<string>();
       const gwFailedPaymentIds = new Set<string>();
       const gwSettledCharges = new Map<string, { gateway?: string; currency?: string; amountMinor?: number; subIds: Set<string> }>();
@@ -6812,7 +6821,7 @@ export class PaymentGatewayService {
       const cnByInvNumber = new Map<string, any>();
       const cnBySubId = new Map<string, any>();
 
-      const creditNoteRows = await loadRows('billing_credit_notes', { customer_id: customerId });
+      const creditNoteRows = await loadRows('billing_credit_notes', { customer_id: customerId }, undefined, { optional: true });
       for (const cn of creditNoteRows) {
         const entry = {
           creditNoteNumber: cn.credit_note_number,
@@ -6843,13 +6852,9 @@ export class PaymentGatewayService {
       const findSubscriptionById = async (subscriptionId?: string): Promise<{ sub: any | null; owned: boolean }> => {
         if (!subscriptionId) return { sub: null, owned: true };
         if (subsById.has(subscriptionId)) return { sub: subsById.get(subscriptionId), owned: true };
-        try {
-          const found = await (dbClient as any)('subscriptions').where({ id: subscriptionId }).first();
-          if (!found) return { sub: null, owned: true };
-          return { sub: found, owned: found.customer_id === customerId };
-        } catch {
-          return { sub: null, owned: true };
-        }
+        const found = await (dbClient as any)('subscriptions').where({ id: subscriptionId }).first();
+        if (!found) return { sub: null, owned: true };
+        return { sub: found, owned: found.customer_id === customerId };
       };
 
       const hasVerifiedPaymentEvidence = async (candidate: {
@@ -6982,7 +6987,7 @@ export class PaymentGatewayService {
       const issuedSubscriptionCycles = new Set<string>();
 
       // 1. Primary source: relational billing_invoices table rows backed by verified payment evidence
-      const invRows = await loadRows('billing_invoices', { customer_id: customerId }, 'created_at');
+      const invRows = await loadRows('billing_invoices', { customer_id: customerId }, 'created_at', { optional: true });
       for (const r of invRows) {
         const ok = await hasVerifiedPaymentEvidence({
           invoiceNumber: r.invoice_number,

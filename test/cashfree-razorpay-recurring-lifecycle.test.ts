@@ -401,7 +401,9 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         'usr_cf_sub_01',
         'pro',
         'INR',
-        'cashfree'
+        'cashfree',
+        undefined,
+        { phone: '9876543210' }
       );
 
       assert.equal(checkout.gateway, 'cashfree');
@@ -852,7 +854,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         path: '/api/billing/webhook/cashfree',
         headers: {
           'x-webhook-signature': 'cf_sig_123',
-          'x-webhook-timestamp': '1729350000'
+          'x-webhook-timestamp': String(Math.floor(Date.now() / 1000))
         }
       };
       assert.equal(verifyCsrfAndOrigin(mockReq1 as Request, null), true);
@@ -896,7 +898,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       tables.billing_customers.push({ id: customerId, principal_id: principalId });
 
       const now = Date.now();
-      tables.subscriptions.push({
+      const subRecord = {
         id: 'pur_inv_test_01',
         customer_id: customerId,
         plan_id: 'plus',
@@ -907,9 +909,43 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: now,
         current_period_end: now + 30 * 86400000,
         cancel_at_period_end: false,
-        metadata: JSON.stringify({ customerState: '07' }),
+        metadata: JSON.stringify({
+          principalId,
+          customerId,
+          customerState: '07',
+          initialPaymentId: 'pay_tax_cgst_01',
+          lastPaymentId: 'pay_tax_cgst_01',
+          fulfilledCycle: 1
+        }),
         created_at: now,
         updated_at: now
+      };
+      tables.subscriptions.push(subRecord);
+      tables.billing_audit_events.push({
+        id: 'bae_tax_act_01',
+        customer_id: customerId,
+        event_type: 'SUBSCRIPTION_ACTIVATED',
+        actor_type: 'gateway_webhook',
+        actor_id: subRecord.id,
+        payload: JSON.stringify({
+          purchaseId: subRecord.id,
+          actualPaymentId: 'pay_tax_cgst_01',
+          amount: 39900,
+          currency: 'INR'
+        }),
+        created_at: now
+      });
+
+      await service.issueDurableInvoice({
+        trx: dbClient,
+        customerId,
+        principalId,
+        purchaseRecord: subRecord,
+        planTier: 'plus',
+        gateway: 'razorpay',
+        actualPaymentId: 'pay_tax_cgst_01',
+        cycleNumber: 1,
+        now
       });
 
       const invoices = await service.getInvoices(principalId);
@@ -944,7 +980,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       tables.billing_customers.push({ id: customerId, principal_id: principalId });
 
       const now = Date.now();
-      tables.subscriptions.push({
+      const subRecord = {
         id: 'pur_inv_ka_01',
         customer_id: customerId,
         plan_id: 'pro',
@@ -955,9 +991,43 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: now,
         current_period_end: now + 30 * 86400000,
         cancel_at_period_end: false,
-        metadata: JSON.stringify({ customerState: 'Karnataka' }),
+        metadata: JSON.stringify({
+          principalId,
+          customerId,
+          customerState: 'Karnataka',
+          initialPaymentId: 'cf_tax_igst_01',
+          lastPaymentId: 'cf_tax_igst_01',
+          fulfilledCycle: 1
+        }),
         created_at: now,
         updated_at: now
+      };
+      tables.subscriptions.push(subRecord);
+      tables.billing_audit_events.push({
+        id: 'bae_tax_ka_act_01',
+        customer_id: customerId,
+        event_type: 'SUBSCRIPTION_ACTIVATED',
+        actor_type: 'gateway_webhook',
+        actor_id: subRecord.id,
+        payload: JSON.stringify({
+          purchaseId: subRecord.id,
+          actualPaymentId: 'cf_tax_igst_01',
+          amount: 99900,
+          currency: 'INR'
+        }),
+        created_at: now
+      });
+
+      await service.issueDurableInvoice({
+        trx: dbClient,
+        customerId,
+        principalId,
+        purchaseRecord: subRecord,
+        planTier: 'pro',
+        gateway: 'cashfree',
+        actualPaymentId: 'cf_tax_igst_01',
+        cycleNumber: 1,
+        now
       });
 
       const invoices = await service.getInvoices(principalId);
@@ -984,7 +1054,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       tables.billing_customers.push({ id: customerId, principal_id: principalId });
 
       const now = Date.now();
-      tables.subscriptions.push({
+      const subRecord = {
         id: 'pur_inv_usd_01',
         customer_id: customerId,
         plan_id: 'pro',
@@ -995,9 +1065,43 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: now,
         current_period_end: now + 30 * 86400000,
         cancel_at_period_end: false,
-        metadata: JSON.stringify({ country: 'US' }),
+        metadata: JSON.stringify({
+          principalId,
+          customerId,
+          country: 'US',
+          initialPaymentId: 'pay_tax_usd_01',
+          lastPaymentId: 'pay_tax_usd_01',
+          fulfilledCycle: 1
+        }),
         created_at: now,
         updated_at: now
+      };
+      tables.subscriptions.push(subRecord);
+      tables.billing_audit_events.push({
+        id: 'bae_tax_usd_act_01',
+        customer_id: customerId,
+        event_type: 'SUBSCRIPTION_ACTIVATED',
+        actor_type: 'gateway_webhook',
+        actor_id: subRecord.id,
+        payload: JSON.stringify({
+          purchaseId: subRecord.id,
+          actualPaymentId: 'pay_tax_usd_01',
+          amount: 1999,
+          currency: 'USD'
+        }),
+        created_at: now
+      });
+
+      await service.issueDurableInvoice({
+        trx: dbClient,
+        customerId,
+        principalId,
+        purchaseRecord: subRecord,
+        planTier: 'pro',
+        gateway: 'razorpay',
+        actualPaymentId: 'pay_tax_usd_01',
+        cycleNumber: 1,
+        now
       });
 
       const invoices = await service.getInvoices(principalId);
@@ -1018,35 +1122,113 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       const service = new PaymentGatewayService();
       service.setDbClient(dbClient);
 
-      const customerId = 'cust_gstin_check';
-      const principalId = 'usr_gstin_check';
-      tables.billing_customers.push({ id: customerId, principal_id: principalId });
+      const customerId1 = 'cust_gstin_check_1';
+      const principalId1 = 'usr_gstin_check_1';
+      const customerId2 = 'cust_gstin_check_2';
+      const principalId2 = 'usr_gstin_check_2';
+      tables.billing_customers.push(
+        { id: customerId1, principal_id: principalId1 },
+        { id: customerId2, principal_id: principalId2 }
+      );
 
-      tables.subscriptions.push({
+      const now = Date.now();
+      const sub1 = {
         id: 'pur_gstin_01',
-        customer_id: customerId,
+        customer_id: customerId1,
         plan_id: 'plus',
         status: 'active',
         gateway: 'razorpay',
         currency: 'INR',
         amount_minor_units: 39900,
-        current_period_start: Date.now(),
-        current_period_end: Date.now() + 30 * 86400000,
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
         cancel_at_period_end: false,
-        metadata: JSON.stringify({ customerState: '07' }),
-        created_at: Date.now(),
-        updated_at: Date.now()
-      });
+        metadata: JSON.stringify({
+          principalId: principalId1,
+          customerId: customerId1,
+          customerState: '07',
+          initialPaymentId: 'pay_gstin_01',
+          lastPaymentId: 'pay_gstin_01',
+          fulfilledCycle: 1
+        }),
+        created_at: now,
+        updated_at: now
+      };
+      const sub2 = {
+        id: 'pur_gstin_02',
+        customer_id: customerId2,
+        plan_id: 'plus',
+        status: 'active',
+        gateway: 'razorpay',
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: now,
+        current_period_end: now + 30 * 86400000,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId: principalId2,
+          customerId: customerId2,
+          customerState: '07',
+          initialPaymentId: 'pay_gstin_02',
+          lastPaymentId: 'pay_gstin_02',
+          fulfilledCycle: 1
+        }),
+        created_at: now,
+        updated_at: now
+      };
+      tables.subscriptions.push(sub1, sub2);
+      tables.billing_audit_events.push(
+        {
+          id: 'bae_gstin_act_1',
+          customer_id: customerId1,
+          event_type: 'SUBSCRIPTION_ACTIVATED',
+          actor_type: 'gateway_webhook',
+          actor_id: sub1.id,
+          payload: JSON.stringify({ purchaseId: sub1.id, actualPaymentId: 'pay_gstin_01', amount: 39900, currency: 'INR' }),
+          created_at: now
+        },
+        {
+          id: 'bae_gstin_act_2',
+          customer_id: customerId2,
+          event_type: 'SUBSCRIPTION_ACTIVATED',
+          actor_type: 'gateway_webhook',
+          actor_id: sub2.id,
+          payload: JSON.stringify({ purchaseId: sub2.id, actualPaymentId: 'pay_gstin_02', amount: 39900, currency: 'INR' }),
+          created_at: now
+        }
+      );
 
       // 1. Without AIRA_SUPPLIER_GSTIN configured
       delete process.env.AIRA_SUPPLIER_GSTIN;
-      const invWithoutGstin = await service.getInvoices(principalId);
+      await service.issueDurableInvoice({
+        trx: dbClient,
+        customerId: customerId1,
+        principalId: principalId1,
+        purchaseRecord: sub1,
+        planTier: 'plus',
+        gateway: 'razorpay',
+        actualPaymentId: 'pay_gstin_01',
+        cycleNumber: 1,
+        now
+      });
+      const invWithoutGstin = await service.getInvoices(principalId1);
       assert.equal(invWithoutGstin[0].taxComplianceStatus, 'PROVISIONAL_PENDING_GSTIN');
       assert.equal(invWithoutGstin[0].supplierGstin, undefined);
 
       // 2. With valid 15-character GSTIN configured
       process.env.AIRA_SUPPLIER_GSTIN = '07AAACV2026E1Z5';
-      const invWithGstin = await service.getInvoices(principalId);
+      await service.issueDurableInvoice({
+        trx: dbClient,
+        customerId: customerId2,
+        principalId: principalId2,
+        purchaseRecord: sub2,
+        planTier: 'plus',
+        gateway: 'razorpay',
+        actualPaymentId: 'pay_gstin_02',
+        cycleNumber: 1,
+        now
+      });
+      const invWithGstin = await service.getInvoices(principalId2);
       assert.equal(invWithGstin[0].taxComplianceStatus, 'COMPLIANT');
       assert.equal(invWithGstin[0].supplierGstin, '07AAACV2026E1Z5');
     });

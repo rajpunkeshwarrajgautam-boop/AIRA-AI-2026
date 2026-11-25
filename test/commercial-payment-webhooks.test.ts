@@ -13,6 +13,7 @@ describe('Payment Gateway Webhook & Subscription Lifecycle Tests', () => {
     try {
       const customer = await db('billing_customers').where({ principal_id: testPrincipalId }).first();
       if (customer) {
+        await db('billing_invoices').where({ customer_id: customer.id }).delete().catch(() => {});
         await db('subscriptions').where({ customer_id: customer.id }).delete();
         await db('billing_audit_events').where({ customer_id: customer.id }).delete();
         const account = await db('credit_accounts').where({ customer_id: customer.id }).first();
@@ -23,6 +24,7 @@ describe('Payment Gateway Webhook & Subscription Lifecycle Tests', () => {
         }
         await db('billing_customers').where({ id: customer.id }).delete();
       }
+      await db('idempotent_operations').where({ principal_id: testPrincipalId }).delete().catch(() => {});
       await db('payment_gateway_events').whereILike('event_id', '%test_evt_%').delete();
     } catch {
       // Ignored if local PostgreSQL daemon is not active in unit test mode
@@ -59,7 +61,7 @@ describe('Payment Gateway Webhook & Subscription Lifecycle Tests', () => {
 
   it('4. Verifies Cashfree HMAC-SHA256 signature with timestamp', () => {
     const cashfreeSecret = 'test_webhook_secret_cashfree_2026';
-    const timestamp = '1729350000';
+    const timestamp = String(Math.floor(Date.now() / 1000));
     const rawBody = JSON.stringify({ type: 'SUBSCRIPTION_PAYMENT_SUCCESS' });
     const expected = crypto.createHmac('sha256', cashfreeSecret).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -83,16 +85,60 @@ describe('Payment Gateway Webhook & Subscription Lifecycle Tests', () => {
       t.skip('Local PostgreSQL connection not available; covered by offline lifecycle suite');
       return;
     }
-    const eventId = `test_evt_${Date.now()}`;
+    // Ensure customer + initial 100 welcome credits and authoritative pending purchase exist in PostgreSQL
+    await commercialBillingService.getEntitlements(testPrincipalId);
+    const customer = await db('billing_customers').where({ principal_id: testPrincipalId }).first();
+    assert.ok(customer, 'Customer must exist in PostgreSQL');
+
+    const now = Date.now();
+    const rzpSubId = `sub_rzp_${now}`;
+    const subId = `pur_rzp_wh_${now}`;
+    const eventId = `test_evt_${now}`;
+    const paymentId = `pay_rzp_wh_${now}`;
+
+    await db('subscriptions').insert({
+      id: subId,
+      customer_id: customer.id,
+      plan_id: 'plus',
+      price_id: 'price_plus_inr',
+      status: 'pending',
+      gateway: 'razorpay',
+      gateway_subscription_id: rzpSubId,
+      currency: 'INR',
+      amount_minor_units: 39900,
+      current_period_start: now,
+      current_period_end: now + 30 * 86400000,
+      cancel_at_period_end: false,
+      metadata: JSON.stringify({
+        principalId: testPrincipalId,
+        customerId: customer.id,
+        planTier: 'plus',
+        customerState: '07'
+      }),
+      created_at: now,
+      updated_at: now
+    });
+
     const payload = {
+      id: eventId,
       event_id: eventId,
-      event: 'subscription.activated',
-      subscription: {
-        id: `sub_rzp_${Date.now()}`,
-        currency: 'INR',
-        notes: {
-          principal_id: testPrincipalId,
-          plan_tier: 'plus'
+      event: 'subscription.charged',
+      payload: {
+        subscription: {
+          entity: {
+            id: rzpSubId,
+            current_start: Math.floor(now / 1000),
+            current_end: Math.floor((now + 30 * 86400000) / 1000),
+            paid_count: 1
+          }
+        },
+        payment: {
+          entity: {
+            id: paymentId,
+            amount: 39900,
+            currency: 'INR',
+            status: 'captured'
+          }
         }
       }
     };
