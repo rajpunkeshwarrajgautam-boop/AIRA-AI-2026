@@ -1206,16 +1206,38 @@ export class PaymentGatewayService {
       )) ||
       (eventType === 'payment.captured' && payload.payload?.payment?.entity?.notes?.type !== 'credit_topup')
     ) {
-      const subEntity = payload.data?.subscription_details || payload.payload?.subscription?.entity || payload.subscription || payload.data?.subscription || {};
+      const cfFlatData = payload.data && (
+        payload.data.cf_payment_id !== undefined ||
+        payload.data.payment_amount !== undefined ||
+        payload.data.payment_status !== undefined ||
+        payload.data.subscription_id !== undefined ||
+        payload.data.cf_subscription_id !== undefined
+      ) ? payload.data : undefined;
+      const subEntity = payload.data?.subscription_details ||
+        payload.payload?.subscription?.entity ||
+        payload.subscription ||
+        payload.data?.subscription ||
+        (cfFlatData ? {
+          subscription_id: cfFlatData.subscription_id,
+          cf_subscription_id: cfFlatData.cf_subscription_id,
+          current_cycle: cfFlatData.current_cycle
+        } : {});
       const planEntity = payload.data?.plan_details || payload.plan || {};
       const invoiceEntity = payload.payload?.invoice?.entity || payload.invoice || {};
-      const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
+      const paymentEntity = payload.payload?.payment?.entity ||
+        payload.payment ||
+        payload.data?.payment ||
+        payload.data?.payment_details ||
+        cfFlatData ||
+        {};
       const orderEntity = payload.payload?.order?.entity || payload.order || payload.data?.order || {};
 
       const actualPaymentId = paymentEntity.id ||
         paymentEntity.cf_payment_id ||
         payload.data?.payment?.cf_payment_id ||
         payload.data?.payment?.payment_id ||
+        paymentEntity.payment_id ||
+        payload.data?.payment_gateway_details?.gateway_payment_id ||
         invoiceEntity.payment_id;
 
       const cycleNumber = subEntity.paid_count !== undefined ? Number(subEntity.paid_count)
@@ -1239,6 +1261,9 @@ export class PaymentGatewayService {
         payload.data?.subscription_details?.subscription_id ||
         payload.data?.subscription_details?.cf_subscription_id ||
         payload.data?.subscription?.subscription_id ||
+        payload.data?.subscription_id ||
+        payload.data?.cf_subscription_id ||
+        payload.data?.payment_gateway_details?.gateway_subscription_id ||
         subEntity.subscription_id ||
         subEntity.cf_subscription_id ||
         (subEntity.id && typeof subEntity.id === 'string' && subEntity.id.startsWith('sub_') ? subEntity.id : undefined) ||
@@ -1410,16 +1435,76 @@ export class PaymentGatewayService {
         throw new TerminalRejectionError(`INVALID_STATE_TRANSITION: Cannot activate or renew cancelled subscription ${purchaseRecord.id}.`);
       }
 
+      const cashfreePaymentType = String(
+        paymentEntity.payment_type || payload.data?.payment_type || ''
+      ).toUpperCase();
+      const isCashfreeMandateAuth = gateway === 'cashfree' && cashfreePaymentType === 'AUTH';
+
+      if (isCashfreeMandateAuth && (paymentEntity.payment_status === 'SUCCESS' || !paymentEntity.payment_status)) {
+        const rawAuthAmount = paymentEntity.payment_amount !== undefined
+          ? Number(paymentEntity.payment_amount)
+          : (payload.data?.authorization_details?.authorization_amount !== undefined
+            ? Number(payload.data.authorization_details.authorization_amount)
+            : 1);
+
+        let existingMeta: any = {};
+        try {
+          existingMeta = typeof purchaseRecord.metadata === 'string'
+            ? JSON.parse(purchaseRecord.metadata)
+            : (purchaseRecord.metadata || {});
+        } catch {}
+
+        await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+          metadata: JSON.stringify({
+            ...existingMeta,
+            auth_payment_id: actualPaymentId || existingMeta.auth_payment_id,
+            authorization_amount: rawAuthAmount,
+            gateway_auth_status: payload.data?.authorization_details?.authorization_status || 'ACTIVE',
+            gateway_subscription_status: existingMeta.gateway_subscription_status || 'ACTIVE',
+            cf_subscription_id: payload.data?.cf_subscription_id || subEntity.cf_subscription_id || existingMeta.cf_subscription_id,
+            auth_recorded_at: now
+          }),
+          updated_at: now
+        });
+
+        await trx('billing_audit_events').insert({
+          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+          customer_id: purchaseRecord.account_id || purchaseRecord.customer_id,
+          event_type: 'SUBSCRIPTION_MANDATE_AUTH_RECORDED',
+          actor_type: 'system',
+          actor_id: purchaseRecord.id,
+          payload: JSON.stringify({
+            subscriptionId: purchaseRecord.id,
+            gatewaySubscriptionId: gatewayOrderId,
+            authPaymentId: actualPaymentId,
+            authorizationAmount: rawAuthAmount,
+            eventType,
+            gateway,
+            note: 'Mandate authorization verification (payment_type=AUTH) recorded. No entitlements granted or invoice issued until subscription charge settles.'
+          }),
+          created_at: now
+        });
+
+        return; // Recorded mandate verification cleanly; await recurring subscription charge before activating paid access
+      }
+
       const hasPaymentEvidence = Boolean(
         actualPaymentId &&
         (paymentEntity.payment_status === 'SUCCESS' || paymentEntity.status === 'captured' || paymentEntity.status === 'paid')
       );
+      const hasLegacyCashfreeChargeAmount = eventType === 'SUBSCRIPTION_ACTIVATED' &&
+        !isCashfreeMandateAuth &&
+        subEntity.amount !== undefined &&
+        Number(subEntity.amount) > 0 &&
+        Boolean(subEntity.currency || subEntity.plan_currency);
 
       // Handle status-only notification:
-      // Cashfree: SUBSCRIPTION_STATUS_CHANGE / SUBSCRIPTION_STATUS_CHANGED without payment evidence.
+      // Cashfree: SUBSCRIPTION_STATUS_CHANGE / SUBSCRIPTION_STATUS_CHANGED without payment evidence,
+      // or SUBSCRIPTION_ACTIVATED carrying status fields only without payment/charge evidence.
       // Razorpay: subscription.activated without payment evidence.
       if (
         ((eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') && !hasPaymentEvidence) ||
+        (eventType === 'SUBSCRIPTION_ACTIVATED' && !hasPaymentEvidence && !hasLegacyCashfreeChargeAmount) ||
         (eventType === 'subscription.activated' && !hasPaymentEvidence)
       ) {
         const rawStatus = (
@@ -2610,8 +2695,8 @@ export class PaymentGatewayService {
               };
             }
           } else {
-            // Overlapping mandate protection across tiers or gateways
-            throw new Error(`CONCURRENT_CHECKOUT_IN_PROGRESS: A pending subscription checkout (${anyPending.id}) for plan '${anyPending.plan_id}' is already in progress for your account. Please complete or cancel your existing session before starting a new checkout.`);
+            // Overlapping mandate or stale expired pending checkout: fail closed until reconciled
+            throw new Error(`CONCURRENT_CHECKOUT_IN_PROGRESS: A pending subscription checkout (${anyPending.id}) for plan '${anyPending.plan_id}' is already in progress for your account. Please complete or reconcile your existing session before starting a new checkout.`);
           }
         }
       } catch (pendingErr: any) {
@@ -2834,7 +2919,8 @@ export class PaymentGatewayService {
         const canonicalDomain = isSandbox
           ? (process.env.AUTHORIZED_STAGING_CANONICAL_DOMAIN || 'staging.virexaaiventures.com')
           : (process.env.AIRA_CANONICAL_DOMAIN || 'aira-ai-2026.vercel.app');
-        const returnUrl = `https://${canonicalDomain}/?tab=billing&sub_id=${encodeURIComponent(purchaseId)}&gateway=cashfree`;
+        const returnUrl = `https://${canonicalDomain}/api/billing/cashfree/return?sub_id=${encodeURIComponent(purchaseId)}&gateway=cashfree`;
+        const firstChargeTime = this.formatIstIsoTimestamp(Date.now() + 25 * 60 * 60 * 1000);
 
         const cfSubRes = await fetch(cfBaseUrl, {
           method: 'POST',
@@ -2862,6 +2948,7 @@ export class PaymentGatewayService {
               customer_email: customerEmail,
               customer_name: customerName
             },
+            subscription_first_charge_time: firstChargeTime,
             subscription_meta: {
               return_url: returnUrl,
               notification_channel: ['EMAIL', 'SMS']
@@ -3261,6 +3348,212 @@ export class PaymentGatewayService {
    * Prohibits unverified manualResolution transitions: requires signed webhook payloads or authorized operator audit trail.
    * Persists structured billing_audit_events on every reconciliation attempt and state transition.
    */
+  private formatIstIsoTimestamp(epochMs: number): string {
+    // Convert UTC epoch to +05:30 IST ISO 8601 format expected by Cashfree Subscriptions API.
+    const istEpochMs = epochMs + (5 * 60 + 30) * 60 * 1000;
+    return `${new Date(istEpochMs).toISOString().slice(0, 19)}+05:30`;
+  }
+
+  private sanitizeProviderDetails(gateway: string, rawData: any): Record<string, unknown> | undefined {
+    if (!rawData || typeof rawData !== 'object') return undefined;
+    if (gateway === 'cashfree') {
+      return {
+        subscriptionId: rawData.subscription_id ?? null,
+        cfSubscriptionId: rawData.cf_subscription_id ?? null,
+        subscriptionStatus: rawData.subscription_status ?? null,
+        subscriptionFirstChargeTime: rawData.subscription_first_charge_time ?? null,
+        nextScheduleDate: rawData.next_schedule_date ?? null,
+        subscriptionExpiryTime: rawData.subscription_expiry_time ?? null,
+        planId: rawData.plan_details?.plan_id ?? null,
+        planRecurringAmount: rawData.plan_details?.plan_recurring_amount ?? null,
+        authorizationStatus: rawData.authorization_details?.authorization_status ?? null,
+        authorizationAmount: rawData.authorization_details?.authorization_amount ?? null
+      };
+    }
+    return {
+      id: rawData.id ?? null,
+      status: rawData.status ?? null,
+      paidCount: rawData.paid_count ?? null,
+      currentStart: rawData.current_start ?? null,
+      currentEnd: rawData.current_end ?? null
+    };
+  }
+
+  private async queryProviderSubscriptionStatus(sub: any): Promise<{
+    queried: boolean;
+    exists: boolean;
+    rawStatus: string;
+    paidEvidence?: boolean;
+    gatewaySubscriptionId?: string;
+    rawData?: any;
+    providerDetails?: Record<string, unknown>;
+    error?: string;
+  }> {
+    if (this.customGatewayTransport) {
+      const check = await this.customGatewayTransport({
+        gateway: sub.gateway,
+        orderId: sub.id,
+        amountMinorUnits: Number(sub.amount_minor_units),
+        currency: sub.currency,
+        planTier: sub.plan_id,
+        action: 'query_subscription',
+        gatewaySubscriptionId: sub.gateway_subscription_id
+      });
+      if (!check || check.exists === false) {
+        return { queried: true, exists: false, rawStatus: 'NOT_FOUND' };
+      }
+      const checkExtra = check as Record<string, any>;
+      const rawStatus = String(checkExtra.subscription_status || check.status || 'UNKNOWN').toUpperCase();
+      return {
+        queried: true,
+        exists: true,
+        rawStatus,
+        paidEvidence: Boolean(checkExtra.paid),
+        gatewaySubscriptionId: check.gatewaySubscriptionId || sub.gateway_subscription_id,
+        rawData: check,
+        providerDetails: check
+      };
+    }
+
+    if (sub.gateway === 'razorpay' && sub.gateway_subscription_id && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
+      const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
+      const resp = await fetch(`https://api.razorpay.com/v1/subscriptions/${sub.gateway_subscription_id}`, {
+        method: 'GET',
+        headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(5000)
+      });
+      if (resp.status === 404) {
+        return { queried: true, exists: false, rawStatus: 'NOT_FOUND' };
+      }
+      if (!resp.ok) {
+        return { queried: false, exists: true, rawStatus: 'HTTP_ERROR', error: `Razorpay returned HTTP ${resp.status}` };
+      }
+      const data: any = await resp.json().catch(() => ({}));
+      const rawStatus = String(data.status || 'UNKNOWN').toUpperCase();
+      return {
+        queried: true,
+        exists: true,
+        rawStatus,
+        paidEvidence: Number(data.paid_count || 0) > 0,
+        gatewaySubscriptionId: data.id || sub.gateway_subscription_id,
+        rawData: data,
+        providerDetails: this.sanitizeProviderDetails('razorpay', data)
+      };
+    }
+
+    if (sub.gateway === 'cashfree' && sub.gateway_subscription_id && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY) {
+      const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' ||
+        isStagingSandboxRehearsalActive() ||
+        process.env.NODE_ENV === 'test' ||
+        process.env.CASHFREE_ENV === 'TEST' ||
+        process.env.CASHFREE_APP_ID?.startsWith('TEST');
+      const cfBaseUrl = isSandbox ? 'https://sandbox.cashfree.com/pg/subscriptions' : 'https://api.cashfree.com/pg/subscriptions';
+      const resp = await fetch(`${cfBaseUrl}/${sub.gateway_subscription_id}`, {
+        method: 'GET',
+        headers: {
+          'x-client-id': process.env.CASHFREE_APP_ID,
+          'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+          'x-api-version': '2023-08-01',
+          'Content-Type': 'application/json'
+        },
+        signal: AbortSignal.timeout(5000)
+      });
+      if (resp.status === 404) {
+        return { queried: true, exists: false, rawStatus: 'NOT_FOUND' };
+      }
+      if (!resp.ok) {
+        return { queried: false, exists: true, rawStatus: 'HTTP_ERROR', error: `Cashfree returned HTTP ${resp.status}` };
+      }
+      const data: any = await resp.json().catch(() => ({}));
+      const rawStatus = String(data.subscription_status || 'UNKNOWN').toUpperCase();
+      return {
+        queried: true,
+        exists: true,
+        rawStatus,
+        paidEvidence: false,
+        gatewaySubscriptionId: data.subscription_id || sub.gateway_subscription_id,
+        rawData: data,
+        providerDetails: this.sanitizeProviderDetails('cashfree', data)
+      };
+    }
+
+    return { queried: false, exists: true, rawStatus: 'UNCONFIGURED', error: `Provider credentials for ${sub.gateway} are not configured.` };
+  }
+
+  private async transitionUnpaidSubscriptionStatus(
+    db: any,
+    sub: any,
+    nextStatus: 'failed' | 'expired' | 'canceled',
+    reason: string,
+    providerStatus: string | undefined,
+    providerDetails?: Record<string, unknown>,
+    actorId = 'system:reconciliation'
+  ): Promise<void> {
+    const now = Date.now();
+    let existingMeta: any = {};
+    try {
+      existingMeta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+    } catch {}
+
+    await db('subscriptions').where({ id: sub.id }).update({
+      status: nextStatus,
+      metadata: JSON.stringify({
+        ...existingMeta,
+        reconciliationStatus: nextStatus === 'expired' ? 'PROVIDER_CONFIRMED_UNPAID_EXPIRED' : `PROVIDER_${nextStatus.toUpperCase()}`,
+        gateway_subscription_status: providerStatus || existingMeta.gateway_subscription_status,
+        reconciledAt: now,
+        reconciliationReason: reason,
+        ...(providerDetails ? { providerDetails } : {})
+      }),
+      updated_at: now
+    });
+    await db('idempotent_operations')
+      .where({ key: `checkout:sub:${sub.customer_id}` })
+      .update({ status: `RESOLVED_${nextStatus.toUpperCase()}`, locked_until: 0, updated_at: now });
+
+    try {
+      await db('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: sub.customer_id,
+        event_type: 'SUBSCRIPTION_AUTHORITATIVELY_RECONCILED',
+        actor_type: actorId === 'system:reconciliation' ? 'system' : 'principal',
+        actor_id: actorId,
+        payload: JSON.stringify({
+          subscriptionId: sub.id,
+          previousStatus: sub.status,
+          resolvedStatus: nextStatus,
+          providerStatus: providerStatus || null,
+          reason
+        }),
+        created_at: now
+      });
+    } catch {}
+  }
+
+  async reconcileCustomerPendingSubscription(
+    principalId: string,
+    subscriptionId: string,
+    clientOrTrx?: any
+  ): Promise<{ reconciled: boolean; status: string; message: string; providerStatus?: string; providerDetails?: Record<string, unknown> }> {
+    const db = (clientOrTrx && typeof clientOrTrx === 'function') ? clientOrTrx : this.getDb();
+    const sub = await db('subscriptions').where({ id: subscriptionId }).first();
+    if (!sub) {
+      throw new Error(`NOT_FOUND: Subscription ${subscriptionId} not found.`);
+    }
+
+    const customer = await db('billing_customers').where({ id: sub.customer_id }).first();
+    let meta: any = {};
+    try {
+      meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+    } catch {}
+    const ownerPrincipalId = customer?.principal_id || meta.principalId;
+    if (!ownerPrincipalId || ownerPrincipalId !== principalId) {
+      throw new Error(`OWNERSHIP_MISMATCH: Principal ${principalId} does not own subscription ${subscriptionId}.`);
+    }
+
+    return this.reconcileAmbiguousSubscription(subscriptionId, db);
+  }
+
   async reconcileAmbiguousSubscription(
     subscriptionId: string,
     clientOrTrx?: any,
@@ -3275,7 +3568,7 @@ export class PaymentGatewayService {
         evidenceReference: string;
       };
     }
-  ): Promise<{ reconciled: boolean; status: string; message: string }> {
+  ): Promise<{ reconciled: boolean; status: string; message: string; providerStatus?: string; providerDetails?: Record<string, unknown> }> {
     const db = (clientOrTrx && typeof clientOrTrx === 'function') ? clientOrTrx : this.getDb();
     const sub = await db('subscriptions').where({ id: subscriptionId }).first();
     if (!sub) {
@@ -3305,7 +3598,8 @@ export class PaymentGatewayService {
       });
     } catch {}
 
-    if (sub.status !== 'ambiguous_timeout' && sub.status !== 'initiating') {
+    const unresolvedStatuses = new Set(['ambiguous_timeout', 'initiating', 'pending']);
+    if (!unresolvedStatuses.has(sub.status)) {
       return { reconciled: true, status: sub.status, message: `Subscription is already resolved with status '${sub.status}'.` };
     }
 
@@ -3394,123 +3688,166 @@ export class PaymentGatewayService {
     }
 
     // 3. Provider-side query reconciliation
-    if (this.customGatewayTransport) {
-      try {
-        const check = await this.customGatewayTransport({
-          gateway: sub.gateway,
-          orderId: sub.id,
-          amountMinorUnits: Number(sub.amount_minor_units),
-          currency: sub.currency,
-          planTier: sub.plan_id,
-          action: 'query_subscription',
-          gatewaySubscriptionId: sub.gateway_subscription_id
+    try {
+      const check = await this.queryProviderSubscriptionStatus(sub);
+      if (!check.queried) {
+        return {
+          reconciled: false,
+          status: sub.status,
+          providerStatus: check.rawStatus,
+          message: check.error || 'Provider query unavailable; preserving current status.'
+        };
+      }
+
+      if (!check.exists) {
+        await this.transitionUnpaidSubscriptionStatus(
+          db,
+          sub,
+          'failed',
+          'Provider confirmed order was never created.',
+          check.rawStatus
+        );
+        return {
+          reconciled: true,
+          status: 'failed',
+          providerStatus: check.rawStatus,
+          message: 'Authoritatively reconciled: Provider confirmed order was never created.'
+        };
+      }
+
+      const terminalExpiredStates = new Set([
+        'EXPIRED',
+        'FAILED',
+        'BANK_APPROVAL_FAILED',
+        'ON_HOLD',
+        'COMPLETED',
+        'HALTED'
+      ]);
+      const cancelledStates = new Set(['CANCELLED', 'CANCELED', 'CUSTOMER_CANCELLED']);
+
+      if (cancelledStates.has(check.rawStatus)) {
+        await this.transitionUnpaidSubscriptionStatus(
+          db,
+          sub,
+          'canceled',
+          `Provider reported ${check.rawStatus}.`,
+          check.rawStatus,
+          check.providerDetails
+        );
+        return {
+          reconciled: true,
+          status: 'canceled',
+          providerStatus: check.rawStatus,
+          providerDetails: check.providerDetails,
+          message: `Authoritatively reconciled: Provider confirmed subscription ${check.rawStatus}.`
+        };
+      }
+
+      if (terminalExpiredStates.has(check.rawStatus)) {
+        await this.transitionUnpaidSubscriptionStatus(
+          db,
+          sub,
+          'expired',
+          `Provider reported terminal state ${check.rawStatus}.`,
+          check.rawStatus,
+          check.providerDetails
+        );
+        return {
+          reconciled: true,
+          status: 'expired',
+          providerStatus: check.rawStatus,
+          providerDetails: check.providerDetails,
+          message: `Authoritatively reconciled: Provider confirmed subscription ${check.rawStatus}.`
+        };
+      }
+
+      // Expired unpaid mandate initialization (> 15 minutes old with zero payment or authorization)
+      const ageMs = now - Number(sub.created_at || 0);
+      if ((check.rawStatus === 'INITIALIZED' || check.rawStatus === 'CREATED') && sub.status === 'pending' && ageMs >= 15 * 60 * 1000) {
+        await this.transitionUnpaidSubscriptionStatus(
+          db,
+          sub,
+          'expired',
+          `Unpaid ${sub.gateway} checkout session expired after remaining ${check.rawStatus} > 15m.`,
+          check.rawStatus,
+          check.providerDetails
+        );
+        return {
+          reconciled: true,
+          status: 'expired',
+          providerStatus: check.rawStatus,
+          providerDetails: check.providerDetails,
+          message: `Expired unpaid pending checkout (${check.rawStatus}) so a replacement session can be started safely.`
+        };
+      }
+
+      if (check.rawStatus === 'ACTIVE' || check.rawStatus === 'AUTHENTICATED') {
+        // Never grant active tier on a 'pending' subscription without confirmed paid charge evidence.
+        if (sub.status === 'pending' && !check.paidEvidence) {
+          let existingMeta: any = {};
+          try {
+            existingMeta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
+          } catch {}
+          await db('subscriptions').where({ id: sub.id }).update({
+            metadata: JSON.stringify({
+              ...existingMeta,
+              gateway_subscription_status: check.rawStatus,
+              providerDetails: check.providerDetails || existingMeta.providerDetails,
+              status_checked_at: now
+            }),
+            updated_at: now
+          });
+          return {
+            reconciled: false,
+            status: sub.status,
+            providerStatus: check.rawStatus,
+            providerDetails: check.providerDetails,
+            message: `Provider mandate status is ${check.rawStatus}; awaiting settled full subscription charge webhook before activation.`
+          };
+        }
+
+        await db('subscriptions').where({ id: sub.id }).update({
+          status: 'active',
+          gateway_subscription_id: check.gatewaySubscriptionId || sub.gateway_subscription_id,
+          updated_at: now
         });
 
-        if (check && check.exists === false) {
-          await db('subscriptions').where({ id: sub.id }).update({
-            status: 'failed',
-            updated_at: now
+        try {
+          await db('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: sub.customer_id,
+            event_type: 'SUBSCRIPTION_AUTHORITATIVELY_RECONCILED',
+            actor_type: 'system',
+            actor_id: sub.id,
+            payload: JSON.stringify({
+              subscriptionId: sub.id,
+              resolvedStatus: 'active',
+              providerStatus: check.rawStatus,
+              gatewaySubscriptionId: check.gatewaySubscriptionId || sub.gateway_subscription_id
+            }),
+            created_at: now
           });
-          await db('idempotent_operations')
-            .where({ key: `checkout:sub:${sub.customer_id}` })
-            .update({ status: 'RESOLVED_FAILED', locked_until: 0, updated_at: now });
+        } catch {}
 
-          try {
-            await db('billing_audit_events').insert({
-              id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-              customer_id: sub.customer_id,
-              event_type: 'SUBSCRIPTION_AUTHORITATIVELY_RECONCILED',
-              actor_type: 'system',
-              actor_id: sub.id,
-              payload: JSON.stringify({
-                subscriptionId: sub.id,
-                resolvedStatus: 'failed',
-                reason: 'Provider confirmed order was never created.'
-              }),
-              created_at: now
-            });
-          } catch {}
-
-          return { reconciled: true, status: 'failed', message: 'Authoritatively reconciled: Provider confirmed order was never created.' };
-        } else if (check && (check.status === 'active' || check.status === 'authenticated')) {
-          await db('subscriptions').where({ id: sub.id }).update({
-            status: 'active',
-            gateway_subscription_id: check.gatewaySubscriptionId || sub.gateway_subscription_id,
-            updated_at: now
-          });
-
-          try {
-            await db('billing_audit_events').insert({
-              id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-              customer_id: sub.customer_id,
-              event_type: 'SUBSCRIPTION_AUTHORITATIVELY_RECONCILED',
-              actor_type: 'system',
-              actor_id: sub.id,
-              payload: JSON.stringify({
-                subscriptionId: sub.id,
-                resolvedStatus: 'active',
-                gatewaySubscriptionId: check.gatewaySubscriptionId || sub.gateway_subscription_id
-              }),
-              created_at: now
-            });
-          } catch {}
-
-          return { reconciled: true, status: 'active', message: 'Authoritatively reconciled: Provider confirmed subscription is active.' };
-        }
-      } catch (err: any) {
-        return { reconciled: false, status: sub.status, message: `Reconciliation query failed: ${err.message}` };
+        return {
+          reconciled: true,
+          status: 'active',
+          providerStatus: check.rawStatus,
+          providerDetails: check.providerDetails,
+          message: 'Authoritatively reconciled: Provider confirmed paid subscription is active.'
+        };
       }
-    } else {
-      try {
-        if (sub.gateway === 'razorpay' && sub.gateway_subscription_id && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-          const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
-          const resp = await fetch(`https://api.razorpay.com/v1/subscriptions/${sub.gateway_subscription_id}`, {
-            method: 'GET',
-            headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(5000)
-          });
-          if (resp.status === 404) {
-            await db('subscriptions').where({ id: sub.id }).update({ status: 'failed', updated_at: now });
-            await db('idempotent_operations').where({ key: `checkout:sub:${sub.customer_id}` }).update({ status: 'RESOLVED_FAILED', locked_until: 0, updated_at: now });
-            return { reconciled: true, status: 'failed', message: 'Authoritatively reconciled: Razorpay confirmed subscription not found.' };
-          } else if (resp.ok) {
-            const data: any = await resp.json().catch(() => ({}));
-            if (data.status === 'active' || data.status === 'authenticated') {
-              await db('subscriptions').where({ id: sub.id }).update({ status: 'active', updated_at: now });
-              return { reconciled: true, status: 'active', message: 'Authoritatively reconciled: Razorpay confirmed subscription active.' };
-            }
-          }
-        } else if (sub.gateway === 'cashfree' && sub.gateway_subscription_id && process.env.CASHFREE_APP_ID && process.env.CASHFREE_SECRET_KEY) {
-          const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test' || process.env.CASHFREE_ENV === 'TEST' || process.env.CASHFREE_APP_ID?.startsWith('TEST');
-          const cfBaseUrl = isSandbox ? 'https://sandbox.cashfree.com/pg/subscriptions' : 'https://api.cashfree.com/pg/subscriptions';
-          const resp = await fetch(`${cfBaseUrl}/${sub.gateway_subscription_id}`, {
-            method: 'GET',
-            headers: {
-              'x-client-id': process.env.CASHFREE_APP_ID,
-              'x-client-secret': process.env.CASHFREE_SECRET_KEY,
-              'x-api-version': '2023-08-01',
-              'Content-Type': 'application/json'
-            },
-            signal: AbortSignal.timeout(5000)
-          });
-          if (resp.status === 404) {
-            await db('subscriptions').where({ id: sub.id }).update({ status: 'failed', updated_at: now });
-            await db('idempotent_operations').where({ key: `checkout:sub:${sub.customer_id}` }).update({ status: 'RESOLVED_FAILED', locked_until: 0, updated_at: now });
-            return { reconciled: true, status: 'failed', message: 'Authoritatively reconciled: Cashfree confirmed subscription not found.' };
-          } else if (resp.ok) {
-            const data: any = await resp.json().catch(() => ({}));
-            if (data.subscription_status === 'ACTIVE' || data.subscription_status === 'INITIALIZED') {
-              await db('subscriptions').where({ id: sub.id }).update({ status: 'active', updated_at: now });
-              return { reconciled: true, status: 'active', message: 'Authoritatively reconciled: Cashfree confirmed subscription active.' };
-            }
-          }
-        }
-      } catch (directErr: any) {
-        return { reconciled: false, status: sub.status, message: `Direct provider reconciliation query failed: ${directErr.message}` };
-      }
+
+      return {
+        reconciled: false,
+        status: sub.status,
+        providerStatus: check.rawStatus,
+        providerDetails: check.providerDetails,
+        message: `Subscription remains '${sub.status}' (provider status: ${check.rawStatus}).`
+      };
+    } catch (err: any) {
+      return { reconciled: false, status: sub.status, message: `Reconciliation query failed: ${err.message}` };
     }
-
-    return { reconciled: false, status: sub.status, message: 'Subscription remains pending reconciliation.' };
   }
 
   /**

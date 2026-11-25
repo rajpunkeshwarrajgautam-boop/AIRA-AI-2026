@@ -297,7 +297,7 @@ describe('Cashfree Subscription Checkout Redirect & Session Suite', () => {
         assert.ok(capturedPayload.subscription_meta, 'subscription_meta must be present in request');
         assert.strictEqual(
           capturedPayload.subscription_meta.return_url,
-          `https://staging.virexaaiventures.com/?tab=billing&sub_id=${encodeURIComponent(checkout.purchaseId)}&gateway=cashfree`
+          `https://staging.virexaaiventures.com/api/billing/cashfree/return?sub_id=${encodeURIComponent(checkout.purchaseId)}&gateway=cashfree`
         );
         assert.deepStrictEqual(capturedPayload.subscription_meta.notification_channel, ['EMAIL', 'SMS']);
 
