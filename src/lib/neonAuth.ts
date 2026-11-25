@@ -1052,25 +1052,49 @@ export class NeonAuthClient {
   }
 
   /**
-   * Request password reset instructions for an account.
+   * Proxy password recovery mutations through first-party BFF in browser/BFF mode,
+   * falling back directly to Neon Managed Better Auth in direct integration mode.
    */
-  public async requestPasswordReset(email: string): Promise<{ status: boolean; message: string }> {
+  private async postAuthRecoveryEndpoint(pathSuffix: 'request-password-reset' | 'reset-password', body: Record<string, string>): Promise<Response> {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
+    if (this.isBffMode()) {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-aira-csrf-protection': '1'
+      };
+      if (typeof window === 'undefined') {
+        headers['Origin'] = origin;
+      }
+      return fetch(`${this.getApiBase()}/api/auth/${pathSuffix}`, {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify(body)
+      });
+    }
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json'
     };
     if (typeof window === 'undefined') {
       headers['Origin'] = origin;
     }
-    const response = await fetch(`${this.baseUrl}/request-password-reset`, {
+    return fetch(`${this.baseUrl}/${pathSuffix}`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ email: email.trim() })
+      body: JSON.stringify(body)
     });
+  }
+
+  /**
+   * Request password reset instructions for an account.
+   */
+  public async requestPasswordReset(email: string): Promise<{ status: boolean; message: string }> {
+    const response = await this.postAuthRecoveryEndpoint('request-password-reset', { email: email.trim() });
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({ message: 'Password reset request failed' }));
-      throw new Error(err.message || `Password reset request failed (${response.status})`);
+      throw new Error(err.message || err.error || `Password reset request failed (${response.status})`);
     }
 
     const data = await response.json();
@@ -1084,22 +1108,11 @@ export class NeonAuthClient {
    * Reset account password using recovery token.
    */
   public async resetPassword(params: { token: string; newPassword: string }): Promise<{ status: boolean; message?: string }> {
-    const origin = (typeof window !== 'undefined' && window.location?.origin) || 'http://localhost:5173';
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
-    };
-    if (typeof window === 'undefined') {
-      headers['Origin'] = origin;
-    }
-    const response = await fetch(`${this.baseUrl}/reset-password`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(params)
-    });
+    const response = await this.postAuthRecoveryEndpoint('reset-password', params);
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({ message: 'Password reset failed' }));
-      throw new Error(err.message || `Password reset failed (${response.status})`);
+      throw new Error(err.message || err.error || `Password reset failed (${response.status})`);
     }
 
     const data = await response.json().catch(() => ({ status: true }));

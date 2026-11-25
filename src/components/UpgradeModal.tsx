@@ -316,15 +316,15 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
       return;
     }
 
-    if (onOpenPlanSettings) {
-      onClose();
-      onOpenPlanSettings();
-      return;
-    }
-
     if (onOpenPricing) {
       onClose();
       onOpenPricing();
+      return;
+    }
+
+    if (onOpenPlanSettings) {
+      onClose();
+      onOpenPlanSettings();
       return;
     }
 
@@ -438,10 +438,10 @@ export const UpgradeModal: React.FC<UpgradeModalProps> = ({
               type="button"
               onClick={() => {
                 onClose();
-                if (onOpenPlanSettings) {
-                  onOpenPlanSettings();
-                } else if (onOpenPricing) {
+                if (onOpenPricing) {
                   onOpenPricing();
+                } else if (onOpenPlanSettings) {
+                  onOpenPlanSettings();
                 }
               }}
               className="w-full sm:w-auto px-3.5 py-2 rounded-xl text-xs font-semibold text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white transition-colors text-center order-2 sm:order-1"

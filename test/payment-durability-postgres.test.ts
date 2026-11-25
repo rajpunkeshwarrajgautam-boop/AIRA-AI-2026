@@ -28,25 +28,59 @@ test.describe('Real PostgreSQL Payment-Integrity & Failure Scenarios Matrix (T1â
     service.setCashfreeSecret(testSecret);
   });
 
-  test.beforeEach(async () => {
-    process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
-    process.env.NODE_ENV = 'test';
-    delete process.env.VERCEL_ENV;
-  });
+  async function cleanupTestData() {
+    // Clean up test data in strict foreign-key dependency order
+    try {
+      if (await db.schema.hasTable('billing_credit_notes')) {
+        await db('billing_credit_notes')
+          .where('customer_id', 'like', 'cust_t%')
+          .orWhere('subscription_id', 'like', 'sub_t%')
+          .delete();
+      }
+    } catch {}
 
-  test.afterEach(async () => {
-    // Clean up test data
+    try {
+      if (await db.schema.hasTable('billing_invoices')) {
+        await db('billing_invoices')
+          .where('customer_id', 'like', 'cust_t%')
+          .orWhere('subscription_id', 'like', 'sub_t%')
+          .delete();
+      }
+    } catch {}
+
     await db('billing_audit_events').where('customer_id', 'like', 'cust_t%').delete();
-    await db('idempotent_operations').where('principal_id', 'like', 'usr_t%').delete();
+    await db('idempotent_operations')
+      .where('principal_id', 'like', 'usr_t%')
+      .orWhere('principal_id', 'like', 'cust_t%')
+      .orWhere('key', 'like', '%cust_t%')
+      .orWhere('key', 'like', '%sub_t%')
+      .orWhere('operation_id', 'like', '%t%')
+      .delete();
     await db('credit_transactions').where('description', 'like', '%Credit Grant%').delete();
+    await db('credit_transactions').where('account_id', 'like', 'acc_cust_t%').delete();
     await db('credit_grants').where('id', 'like', 'grant_%').delete();
     await db('subscriptions').where('id', 'like', 'sub_t%').delete();
     await db('credit_accounts').where('customer_id', 'like', 'cust_t%').delete();
     await db('billing_customers').where('id', 'like', 'cust_t%').delete();
-    await db('payment_gateway_events').where('event_id', 'like', 'evt_t%').delete();
+    await db('payment_gateway_events')
+      .where('event_id', 'like', 'evt_t%')
+      .orWhere('id', 'like', 'pge_t%')
+      .delete();
+  }
+
+  test.beforeEach(async () => {
+    process.env.AIRA_COMMERCIAL_BILLING_ENABLED = 'true';
+    process.env.NODE_ENV = 'test';
+    delete process.env.VERCEL_ENV;
+    await cleanupTestData();
+  });
+
+  test.afterEach(async () => {
+    await cleanupTestData();
   });
 
   test.after(async () => {
+    await cleanupTestData();
     process.env = { ...origEnv };
     await closeDb();
   });
@@ -781,6 +815,95 @@ test.describe('Real PostgreSQL Payment-Integrity & Failure Scenarios Matrix (T1â
       assert.doesNotThrow(
         () => assertCommercialFulfillmentAllowed(event, 'razorpay', {})
       );
+    }
+  });
+
+  // T11: Dependency-safe fixture cleanup under strict PostgreSQL foreign keys
+  test('T11: Regression â€” Subscriptions referenced by billing_invoices and billing_credit_notes are cleanly removable via dependency-safe cleanup without FK violation', async () => {
+    const custId = 'cust_t11_fk';
+    const princId = 'usr_t11_fk';
+    const subId = 'sub_t11_fk';
+    const now = Date.now();
+
+    await seedPurchase({
+      subId,
+      gatewaySubId: 'sub_gw_t11_fk',
+      customerId: custId,
+      principalId: princId,
+      planId: 'plus',
+      amountMinor: 39900,
+      currency: 'INR',
+      status: 'active'
+    });
+
+    // Insert an invoice referencing subscription
+    const hasInvTable = await db.schema.hasTable('billing_invoices');
+    if (hasInvTable) {
+      await db('billing_invoices').insert({
+        id: 'inv_t11_fk_001',
+        invoice_number: `INV-2026-T11-${Date.now()}`,
+        customer_id: custId,
+        subscription_id: subId,
+        cycle_number: 1,
+        billing_event_id: `evt_t11_fk_inv_${Date.now()}`,
+        plan_tier: 'plus',
+        currency: 'INR',
+        total_amount: 399.00,
+        taxable_base: 338.14,
+        gst_amount: 60.86,
+        sac_code: '998431',
+        supplier_name: 'Virexa AI Ventures Private Limited',
+        tax_compliance_status: 'TAX_INVOICE_ISSUED',
+        place_of_supply: '07',
+        status: 'Paid',
+        gateway: 'razorpay',
+        pdf_download_available: false,
+        created_at: now,
+        updated_at: now
+      });
+
+      // Insert a credit note referencing both invoice and subscription
+      const hasCnTable = await db.schema.hasTable('billing_credit_notes');
+      if (hasCnTable) {
+        await db('billing_credit_notes').insert({
+          id: 'cn_t11_fk_001',
+          credit_note_number: `CN-2026-T11-${Date.now()}`,
+          original_invoice_number: 'inv_t11_fk_001',
+          customer_id: custId,
+          subscription_id: subId,
+          refund_id: `rfnd_t11_fk_${Date.now()}`,
+          refund_amount: 399.00,
+          currency: 'INR',
+          is_partial_refund: false,
+          supplier_name: 'Virexa AI Ventures Private Limited',
+          status: 'Refunded',
+          gateway: 'razorpay',
+          created_at: now,
+          updated_at: now
+        });
+      }
+
+      // Proving PostgreSQL FK RESTRICT: deleting subscription directly MUST throw foreign key violation
+      await assert.rejects(
+        async () => {
+          await db('subscriptions').where({ id: subId }).delete();
+        },
+        (err: any) => {
+          return err.code === '23503' || err.code === '23001' || String(err.message).includes('foreign key constraint');
+        },
+        'Direct deletion of subscription referenced by billing_invoices must fail closed via PostgreSQL foreign key'
+      );
+    }
+
+    // Now run dependency-safe cleanup: must succeed without error
+    await cleanupTestData();
+
+    // Verify all rows were cleanly removed
+    const remainingSub = await db('subscriptions').where({ id: subId }).first();
+    assert.strictEqual(remainingSub, undefined, 'Subscription must be cleanly deleted');
+    if (hasInvTable) {
+      const remainingInv = await db('billing_invoices').where({ id: 'inv_t11_fk_001' }).first();
+      assert.strictEqual(remainingInv, undefined, 'Invoice must be cleanly deleted');
     }
   });
 });

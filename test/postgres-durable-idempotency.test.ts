@@ -23,6 +23,17 @@ test.describe('AIRA ONE — Real PostgreSQL Durable Idempotency & Concurrency Su
   test.after(async () => {
     // Keep test database clean
     await db('idempotent_operations').where('principal_id', 'like', 'test-%').delete();
+    // Restore fencing columns if dropped by migration023 down()
+    if (await db.schema.hasTable('idempotent_operations')) {
+      const hasOwnerToken = await db.schema.hasColumn('idempotent_operations', 'owner_token');
+      if (!hasOwnerToken) {
+        await db.schema.alterTable('idempotent_operations', (table) => {
+          table.string('owner_token', 64).nullable();
+          table.bigInteger('generation').notNullable().defaultTo(0);
+          table.index(['key', 'owner_token', 'generation'], 'idx_idempotent_fencing');
+        });
+      }
+    }
     await closeDb();
   });
 

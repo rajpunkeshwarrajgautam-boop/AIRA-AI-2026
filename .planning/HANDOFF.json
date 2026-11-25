@@ -1,137 +1,56 @@
 {
-  "version": "1.0",
-  "timestamp": "2026-10-18T19:16:24.903Z",
-  "phase": "P1.6.7",
-  "phase_name": "production-ttft-provider-routing-verification",
-  "phase_dir": ".planning",
-  "plan": 1,
-  "task": 12,
-  "total_tasks": 14,
-  "status": "paused",
-  "completed_tasks": [
-    {
-      "id": 1,
-      "name": "Verify baseline immutability against origin/prod-release at 80367e1",
-      "status": "done",
-      "commit": "80367e1"
+  "schema": "handoff/v2",
+  "updated_at": "2026-11-23T05:15:00.000Z",
+  "phase": "GATE-4-FINAL-COMPLETION-PAYMENT-CERTIFICATION",
+  "staging_baseline": {
+    "commit": "06aa2d2f7fff7a7e4077226544e9855fb0d4a6c5",
+    "pr": 200,
+    "status": "OPEN",
+    "head_sha": "3f5a9afccf1a1872441de0cfb4c91ab19436b549",
+    "code_sha": "c8627143eb8a3e9336535bcdf511d27274b8e5ba",
+    "vercel_deployment_id": "dpl_4ouJFFgxn8um9z9bojKErVqaR8jp",
+    "host": "https://staging.virexaaiventures.com",
+    "staging_neon_branch": "br-snowy-bonus-b32thjlz",
+    "staging_neon_endpoint": "ep-twilight-cherry-b3iz2oqv"
+  },
+  "verified_investigation_findings": {
+    "pr_200_certification": {
+      "verdict": "CERTIFIED",
+      "ci_run_id": "45062355898",
+      "fast_ci": "PASS",
+      "pg18_durability": "PASS",
+      "pg16_regression": "PASS",
+      "semantic_search_ci": "PASS",
+      "main_pr_certification": "PASS",
+      "gitguardian": "PASS",
+      "local_tests": "115/115 PASS",
+      "typecheck": "PASS",
+      "build": "PASS"
     },
-    {
-      "id": 2,
-      "name": "Execute empirical production baseline benchmark (20 requests: 10 Guest + 10 Auth) against https://aira-ai-2026.vercel.app",
-      "status": "done",
-      "commit": "9c61591"
+    "browser_verification": {
+      "deployment": "https://aira-ai-2026-flgv7y4po-rajpunkeshwarrajgautam-boops-projects.vercel.app",
+      "subagent_id": "aad88c64-026d-4f4c-85ae-8982e9e82cfd",
+      "pricing_modal_direct_open": "PASS",
+      "circular_navigation_eliminated": "PASS",
+      "currency_toggle_usd_inr": "PASS",
+      "gateway_toggle_razorpay_cashfree": "PASS",
+      "checkout_disabled_honest_state": "PASS"
     },
-    {
-      "id": 3,
-      "name": "Isolate upstream provider inference latency from pre-provider database latency and cold-start overhead",
-      "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 4,
-      "name": "Diagnose root cause of allam-2-7b selection (Groq daily token quota exhaustion + misconfigured candidate ordering)",
-      "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 5,
-      "name": "Fix routing policy: elevate gemini-3.5-flash-lite to Candidate #2 and set allam-2-7b to allowed: false (TERTIARY_ONLY)",
-      "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 6,
-      "name": "Preserve P1.6.5 capacity invariants and P1.6.6 guest-mode database pool safety",
-      "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 7,
-      "name": "Author test/p1-6-7-ttft-routing-verification.test.ts covering 18 failure and routing scenarios",
-      "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 8,
-      "name": "Update test/p1-6-routing-policy.test.ts and package.json test scripts",
-      "status": "done",
-      "commit": "5940e68"
-    },
-    {
-      "id": 9,
-      "name": "Enhance scripts/measure-p1-6-7-production.ts with target CLI argument and JSON export",
-      "status": "done",
-      "commit": "9c61591"
-    },
-    {
-      "id": 10,
-      "name": "Push release candidate commits 5940e68 and 9c61591 to branch fix/p1-6-7-production-ttft-routing-verification-20261018",
-      "status": "done",
-      "commit": "9c61591"
-    },
-    {
-      "id": 11,
-      "name": "Create PR #90 against prod-release on GitHub",
-      "status": "done",
-      "commit": "9c61591"
-    },
-    {
-      "id": 12,
-      "name": "Execute candidate preview certification benchmark (20 requests: 10 Guest + 10 Auth) on Vercel preview deployment dpl_9inTXcbebKTiUaGXvxouwDBCGq6n",
-      "status": "done",
-      "commit": "9c61591"
+    "staging_isolation": {
+      "commercial_billing": "DISABLED",
+      "sandbox_rehearsal": "DISABLED",
+      "authorized_test_principal": "neon_user_fc6f9c72-6ebb-4fd2-960a-5a8779e59cb7"
     }
-  ],
-  "remaining_tasks": [
-    {
-      "id": 13,
-      "name": "Obtain explicit human GO LIVE instruction from repository owner rajpunkeshwarrajgautam-boop for exact candidate SHA 9c61591a2af85bf4ac09f85b08157bdfba4b8ce3",
-      "status": "not_started"
-    },
-    {
-      "id": 14,
-      "name": "Execute authorized production release: merge PR #90, monitor Vercel production deployment, and run post-deploy production smoke verification",
-      "status": "not_started"
-    }
-  ],
-  "blockers": [
-    {
-      "description": "Production release authority gate: AGENTS.md mandates explicit human GO LIVE instruction from rajpunkeshwarrajgautam-boop before merging PR #90 into prod-release",
-      "type": "human_action",
-      "workaround": "Release candidate fully verified on preview (PR #90) with passing CI; awaiting human authorization"
-    }
-  ],
-  "async_jobs": [],
-  "human_actions_pending": [
-    {
-      "action": "Provide explicit human GO LIVE authorization for PR #90 candidate SHA 9c61591a2af85bf4ac09f85b08157bdfba4b8ce3",
-      "context": "AGENTS.md release protocol requires fresh, explicit human authorization before merging to prod-release",
-      "blocking": true
-    }
-  ],
-  "decisions": [
-    {
-      "decision": "Promote gemini:gemini-3.5-flash-lite to Candidate #2 in routing-policy.ts",
-      "rationale": "Ensures circuit trip failovers immediately fall back to Gemini rather than jumping to tertiary low-tier models",
-      "phase": "P1.6.7"
-    },
-    {
-      "decision": "Set groq:allam-2-7b to allowed: false with rejectionReason: 'TERTIARY_ONLY'",
-      "rationale": "Prevents selectFastExecutionPlan from selecting allam-2-7b under any secondary failover condition",
-      "phase": "P1.6.7"
-    },
-    {
-      "decision": "Preserve P1.6.5 capacity limits and P1.6.6 guest DB pool safety",
-      "rationale": "Maintains 2 concurrent, 14 RPM global capacity and single-connection ephemeral guest Knex instances to prevent pool exhaustion",
-      "phase": "P1.6.7"
-    },
-    {
-      "decision": "Distinguish pre-provider distributed DB WAN latency (~880ms on Neon) from upstream provider inference time (~281ms)",
-      "rationale": "Provides truthful decomposition of production TTFT; confirms warm server TTFT (P50=1390ms, P95=1805ms) meets <=3000ms SLA",
-      "phase": "P1.6.7"
-    }
-  ],
-  "uncommitted_files": [],
-  "next_action": "Request explicit human GO LIVE instruction from rajpunkeshwarrajgautam-boop for PR #90 candidate SHA 9c61591a2af85bf4ac09f85b08157bdfba4b8ce3, then merge PR #90 and verify production deployment",
-  "context_notes": "All P1.6.7 technical tasks, live empirical reproductions, code fixes, regression test suites, PR creation, CI checks, and Preview candidate certifications are complete and green. Candidate Preview achieved 100% success, Server TTFT P50=576ms, P95=687ms, 0 Knex timeouts, 0 5xx, and 0 allam-2-7b occurrences. Repository is completely clean and waiting for human GO LIVE approval."
+  },
+  "candidate_pr_production": {
+    "number": 196,
+    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/196",
+    "branch": "feat/cashfree-razorpay-subscriptions-20261120",
+    "target": "prod-release",
+    "head_sha": "29b66870c36fa57bf9bbb63f71b9953e0d8be0f3",
+    "state": "OPEN",
+    "status": "STRICT_HOLD"
+  },
+  "gate_4_verdict": "OPEN_AWAITING_PR200_STAGING_MERGE",
+  "commercial_billing": "STRICT_HOLD"
 }

@@ -34,6 +34,8 @@ test('extracted BFF registration preserves the exact first-party route surface',
     'POST /api/auth/providers/:provider/unlink',
     'GET /api/auth/recovery/guidance',
     'POST /api/auth/recovery/request',
+    'POST /api/auth/request-password-reset',
+    'POST /api/auth/reset-password',
     'GET /api/auth/session',
     'POST /api/auth/sign-out',
   ]);
