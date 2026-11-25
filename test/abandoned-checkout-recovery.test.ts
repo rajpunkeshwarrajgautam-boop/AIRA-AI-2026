@@ -676,7 +676,7 @@ describe('Abandoned Checkout Cancellation, Recovery & Plan-Switching Suite (PG18
     assert.ok(!settingsSrc.includes('whitespace-nowrap') || settingsSrc.includes('Cancel Pending Checkout'), 'SettingsModal must expose Cancel Pending Checkout');
     assert.ok(settingsSrc.includes('Cancel Pending Checkout'), 'SettingsModal must expose Cancel Pending Checkout');
     assert.ok(settingsSrc.includes('Upgrade to Plus') || settingsSrc.includes('Upgrade to Pro'), 'SettingsModal comparison buttons must use non-clipping concise labels');
-    assert.ok(!settingsSrc.includes('overflow-x-auto gap-1 pt-2'), 'SettingsModal must avoid showing ugly horizontal scrollbar on tab strip');
+    assert.ok(!settingsSrc.includes('overflow-x-auto gap-1 pt-2') && !settingsSrc.includes('lg:flex-nowrap'), 'SettingsModal must wrap tabs cleanly with zero horizontal scrollbar or clipped tabs');
     assert.ok(!settingsSrc.includes('{usageData.pendingSubscription.id}'), 'SettingsModal must not display raw internal pur_ ID in visible customer UI');
 
     // PricingModal fixes

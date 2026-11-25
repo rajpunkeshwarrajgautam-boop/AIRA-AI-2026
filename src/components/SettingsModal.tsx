@@ -645,8 +645,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </select>
             </div>
 
-            {/* Desktop Tab Strip (strict 6 tabs, no unsightly horizontal scrollbar) */}
-            <div role="tablist" aria-label="Settings categories" data-testid="settings-desktop-tabs" className="hidden sm:flex flex-wrap lg:flex-nowrap shrink-0 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-4 sm:px-6 overflow-x-hidden gap-0.5 pt-2">
+            {/* Desktop Tab Strip (all tabs wrap cleanly with zero horizontal scrollbar) */}
+            <div role="tablist" aria-label="Settings categories" data-testid="settings-desktop-tabs" className="hidden sm:flex flex-wrap shrink-0 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-4 sm:px-6 gap-1 pt-2 pb-1">
               {tabs.map(tab => (
                 <button
                   key={tab.id}
