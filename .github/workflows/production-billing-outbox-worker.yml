@@ -1,0 +1,71 @@
+name: Production Billing Outbox Worker Scheduler
+
+on:
+  schedule:
+    # Always-on recurring execution every 5 minutes (only activates on prod-release when explicitly enabled)
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: "Batch size for outbox task processing (1-25)"
+        required: false
+        default: "10"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-billing-outbox-worker
+  cancel-in-progress: false
+
+jobs:
+  trigger-production-outbox-worker:
+    name: Trigger Always-On Production Outbox Worker
+    # Strict safety gate: runs ONLY on protected prod-release branch AND only after operator sets
+    # AIRA_PRODUCTION_WORKER_SCHEDULE_ENABLED=true alongside AIRA_PRODUCTION_INTERNAL_WORKER_KEY.
+    if: github.ref == 'refs/heads/prod-release' && vars.AIRA_PRODUCTION_WORKER_SCHEDULE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Invoke Production Outbox Worker
+        env:
+          WORKER_KEY: ${{ secrets.AIRA_PRODUCTION_INTERNAL_WORKER_KEY }}
+          PRODUCTION_URL: "https://aira-ai-2026.vercel.app"
+          RAW_BATCH_SIZE: ${{ inputs.batch_size }}
+        run: |
+          if [ -z "$WORKER_KEY" ]; then
+            echo "ERROR: AIRA_PRODUCTION_INTERNAL_WORKER_KEY secret is not configured."
+            exit 1
+          fi
+
+          BATCH_SIZE=10
+          if [ -n "$RAW_BATCH_SIZE" ]; then
+            if ! [[ "$RAW_BATCH_SIZE" =~ ^[0-9]+$ ]]; then
+              echo "ERROR: batch_size must be a positive integer."
+              exit 1
+            fi
+            if [ "$RAW_BATCH_SIZE" -gt 25 ]; then
+              BATCH_SIZE=25
+            elif [ "$RAW_BATCH_SIZE" -lt 1 ]; then
+              BATCH_SIZE=1
+            else
+              BATCH_SIZE="$RAW_BATCH_SIZE"
+            fi
+          fi
+
+          PAYLOAD=$(printf '{"batchSize":%d,"budgetMs":9000}' "$BATCH_SIZE")
+          HTTP_STATUS=$(curl -s -o worker-response.json -w "%{http_code}" \
+            -X POST "${PRODUCTION_URL}/api/billing/worker/process-outbox" \
+            -H "Content-Type: application/json" \
+            -H "x-internal-worker-key: ${WORKER_KEY}" \
+            -H "x-environment-target: production" \
+            -d "${PAYLOAD}")
+
+          echo "Worker response status: ${HTTP_STATUS}"
+          cat worker-response.json
+          echo ""
+
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Production worker execution failed with HTTP ${HTTP_STATUS}"
+            exit 1
+          fi

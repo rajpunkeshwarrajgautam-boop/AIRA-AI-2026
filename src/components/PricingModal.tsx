@@ -430,6 +430,23 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         setCheckoutAvailable(false);
       });
 
+    authenticatedApiFetch('/api/billing/summary')
+      .then(r => (r.ok ? r.json() : null))
+      .then(summary => {
+        if (!active || !summary?.pendingSubscription) return;
+        const p = summary.pendingSubscription;
+        const scheduleStr = p.nextScheduleDate
+          ? new Date(p.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) + ' IST'
+          : null;
+        const baseNotice = p.lastPaymentError
+          ? `Previous checkout attempt (${p.id}) reported: ${p.lastPaymentError}. Verify status to clear or retry.`
+          : p.gateway === 'cashfree' && (p.gatewaySubscriptionStatus === 'ACTIVE' || p.authorizationStatus === 'ACTIVE')
+            ? `Cashfree mandate authorized (${p.id}) for ${p.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus'}. ${scheduleStr ? `First subscription charge is scheduled for ${scheduleStr}; paid tier activates upon settlement.` : 'Awaiting first recurring debit settlement.'}`
+            : `A pending checkout session (${p.id}) for ${p.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus'} via ${p.gateway} is awaiting completion or reconciliation.`;
+        setCheckoutNotice(prev => prev || baseNotice);
+      })
+      .catch(() => {});
+
     return () => {
       active = false;
     };
@@ -1134,7 +1151,9 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 disabled={loadingPlan !== null}
                 className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-claude-terracotta hover:bg-claude-terracotta-hover text-white transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {activePlanTier === 'plus' && isCheckoutBusy ? 'Initiating Checkout…' : 'Upgrade to Plus'}
+                {activePlanTier === 'plus' && isCheckoutBusy
+                  ? 'Initiating Checkout…'
+                  : (currentPlan === 'pro' ? 'Downgrade to Plus' : 'Upgrade to Plus')}
               </button>
             )}
           </div>
