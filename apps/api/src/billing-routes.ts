@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { Router, Request, Response } from 'express';
 import { commercialBillingService } from './billing/commercial-billing-service.js';
-import { paymentGatewayService, isTerminalError, validateAndNormalizeIndianPhone } from './billing/payment-gateway-service.js';
+import { paymentGatewayService, isTerminalError, validateAndNormalizeIndianPhone, isInternationalUsdBillingEnabled } from './billing/payment-gateway-service.js';
 import { productionReadinessService } from './billing/production-readiness.js';
 import { COMMERCIAL_PLANS } from '../../../packages/contracts/src/commercial.js';
 import { isStagingSandboxRehearsalActive } from './billing/staging-sandbox-rehearsal-guard.js';
@@ -226,6 +226,7 @@ export function createBillingRoutes(): Router {
       topupPacks: [],
       billingStatus,
       checkoutAvailable: isCheckoutAvailable || isRehearsal,
+      internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
       featuresCertified: true
     });
   });
@@ -249,6 +250,7 @@ export function createBillingRoutes(): Router {
       res.json({
         ...entitlements,
         checkoutAvailable: isCheckoutAvailable || isRehearsal,
+        internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
         billingStatus,
         featuresCertified: true
       });
@@ -290,6 +292,7 @@ export function createBillingRoutes(): Router {
         reasoningBoostsUsed: entitlements.reasoningBoostsLimit - entitlements.reasoningBoostsRemaining,
         reasoningBoostLimit: entitlements.reasoningBoostsLimit,
         checkoutAvailable: isCheckoutAvailable || isRehearsal,
+        internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
         billingStatus,
         featuresCertified: true,
         activeSubscription: lifecycle.activeSubscription,

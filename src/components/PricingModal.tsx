@@ -350,6 +350,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
   const [pendingCheckout, setPendingCheckout] = useState<PendingCheckoutSummary | null>(null);
   const [checkoutAvailable, setCheckoutAvailable] = useState<boolean>(false);
+  const [internationalUsdEnabled, setInternationalUsdEnabled] = useState<boolean>(true);
   const [_billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -468,6 +469,12 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         if (!active) return;
         if (typeof data.checkoutAvailable === 'boolean') {
           setCheckoutAvailable(data.checkoutAvailable);
+        }
+        if (typeof data.internationalUsdEnabled === 'boolean') {
+          setInternationalUsdEnabled(data.internationalUsdEnabled);
+          if (!data.internationalUsdEnabled) {
+            setCurrency('INR');
+          }
         }
         if (data.billingStatus) {
           setBillingStatus(data.billingStatus);
@@ -1112,15 +1119,17 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               >
                 ₹ INR (India)
               </button>
-              <button
-                type="button"
-                disabled={isCheckoutBusy}
-                onClick={() => setCurrency('USD')}
-                aria-pressed={currency === 'USD'}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                $ USD (Global)
-              </button>
+              {internationalUsdEnabled && (
+                <button
+                  type="button"
+                  disabled={isCheckoutBusy}
+                  onClick={() => setCurrency('USD')}
+                  aria-pressed={currency === 'USD'}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  $ USD (Global)
+                </button>
+              )}
             </div>
 
             <button

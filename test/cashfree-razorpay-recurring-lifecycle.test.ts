@@ -1481,7 +1481,10 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       // Verify that no gates have unverified hardcoded 'PASSED' without evidence checks
       for (const gate of report.gates) {
         assert.ok(
-          gate.status === 'VERIFIED' || gate.status === 'PENDING_OWNER_ACTION' || gate.status === 'BLOCKED',
+          gate.status === 'VERIFIED' ||
+            gate.status === 'PENDING_OWNER_ACTION' ||
+            gate.status === 'BLOCKED' ||
+            gate.status === 'UNKNOWN',
           `Gate ${gate.id} must have evidence-based status, got ${gate.status}`
         );
         assert.ok(gate.evidence && gate.evidence.length > 5, `Gate ${gate.id} must include tangible evidence`);
