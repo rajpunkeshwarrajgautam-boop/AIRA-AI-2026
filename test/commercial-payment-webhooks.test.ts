@@ -59,7 +59,7 @@ describe('Payment Gateway Webhook & Subscription Lifecycle Tests', () => {
 
   it('4. Verifies Cashfree HMAC-SHA256 signature with timestamp', () => {
     const cashfreeSecret = 'test_webhook_secret_cashfree_2026';
-    const timestamp = '1729350000';
+    const timestamp = String(Math.floor(Date.now() / 1000));
     const rawBody = JSON.stringify({ type: 'SUBSCRIPTION_PAYMENT_SUCCESS' });
     const expected = crypto.createHmac('sha256', cashfreeSecret).update(`${timestamp}${rawBody}`).digest('base64');
 

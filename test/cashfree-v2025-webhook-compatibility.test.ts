@@ -11,6 +11,7 @@ import { productionReadinessService } from '../apps/api/src/billing/production-r
 
 describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Suite', () => {
   const origEnv = { ...process.env };
+  const cfTs = (offsetSec = 0) => String(Math.floor(Date.now() / 1000) - 1200 + offsetSec);
 
   function createMockDb() {
     const parentTables: Record<string, any[]> = {
@@ -191,7 +192,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
   // =========================================================================
   it('Scenario 1: Valid Cashfree Payment Gateway signature (Base64 HMAC-SHA256)', () => {
     const service = new PaymentGatewayService();
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify({ type: 'PAYMENT_SUCCESS_WEBHOOK', data: { order: { order_id: 'ord_123' } } });
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!)
       .update(`${timestamp}${rawBody}`)
@@ -207,7 +208,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
     const service = new PaymentGatewayService();
     service.setDbClient(dbClient);
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify({ type: 'PAYMENT_SUCCESS_WEBHOOK', data: { order: { order_id: 'ord_123' } } });
     const invalidSignature = 'invalid_tampered_signature_base64==';
 
@@ -225,7 +226,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
     const service = new PaymentGatewayService();
     service.setDbClient(dbClient);
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify({ type: 'PAYMENT_SUCCESS_WEBHOOK', data: { order: { order_id: 'ord_123' } } });
 
     const verifyRes = service.verifyCashfreeWebhook(rawBody, '', timestamp);
@@ -239,14 +240,14 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
 
   it('Scenario 4: Timestamp / raw-body tampering rejection', () => {
     const service = new PaymentGatewayService();
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify({ type: 'PAYMENT_SUCCESS_WEBHOOK', data: { order: { order_id: 'ord_123' } } });
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!)
       .update(`${timestamp}${rawBody}`)
       .digest('base64');
 
     // Case A: Tampered timestamp
-    const tamperedTimestamp = '1729355999';
+    const tamperedTimestamp = cfTs(999);
     const resA = service.verifyCashfreeWebhook(rawBody, signature, tamperedTimestamp);
     assert.equal(resA.valid, false);
 
@@ -261,7 +262,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
     process.env.CASHFREE_SECRET_KEY = 'secret_key_used_as_signing_key_999';
 
     const service = new PaymentGatewayService();
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify({ type: 'PAYMENT_SUCCESS_WEBHOOK' });
     const signature = crypto.createHmac('sha256', 'secret_key_used_as_signing_key_999')
       .update(`${timestamp}${rawBody}`)
@@ -276,7 +277,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
     process.env.CASHFREE_WEBHOOK_SECRET = 'explicit_cf_webhook_secret_key';
 
     const service = new PaymentGatewayService();
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify({ type: 'PAYMENT_SUCCESS_WEBHOOK' });
     const signature = crypto.createHmac('sha256', 'explicit_cf_webhook_secret_key')
       .update(`${timestamp}${rawBody}`)
@@ -334,7 +335,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -386,7 +387,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -431,7 +432,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -481,7 +482,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -556,7 +557,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -618,7 +619,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -653,7 +654,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -704,7 +705,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -755,7 +756,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -814,7 +815,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -877,7 +878,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestampA = '1729355000';
+    const timestampA = cfTs(0);
     const rawBodyA = JSON.stringify(payloadA);
     const signatureA = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestampA}${rawBodyA}`).digest('base64');
 
@@ -904,7 +905,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestampB = '1729355001';
+    const timestampB = cfTs(1);
     const rawBodyB = JSON.stringify(payloadB);
     const signatureB = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestampB}${rawBodyB}`).digest('base64');
 
@@ -961,7 +962,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const signature = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBody}`).digest('base64');
 
@@ -1027,7 +1028,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
       }
     };
 
-    const timestamp = '1729355000';
+    const timestamp = cfTs(0);
     const rawBodyPaid = JSON.stringify(paidPayload);
     const sigPaid = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${timestamp}${rawBodyPaid}`).digest('base64');
 
@@ -1167,7 +1168,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         }
       }
     };
-    const ts1 = '1729355000';
+    const ts1 = cfTs(0);
     const rawBody1 = JSON.stringify(payloadActive);
     const sig1 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts1}${rawBody1}`).digest('base64');
 
@@ -1190,7 +1191,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         }
       }
     };
-    const ts2 = '1729356000';
+    const ts2 = cfTs(1000);
     const rawBody2 = JSON.stringify(payloadCancel);
     const sig2 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts2}${rawBody2}`).digest('base64');
 
@@ -1243,7 +1244,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         }
       }
     };
-    const ts = '1729355000';
+    const ts = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const sig = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts}${rawBody}`).digest('base64');
 
@@ -1305,7 +1306,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         }
       }
     };
-    const ts1 = '1729355000';
+    const ts1 = cfTs(0);
     const body1 = JSON.stringify(payloadFail);
     const sig1 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts1}${body1}`).digest('base64');
 
@@ -1333,7 +1334,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         }
       }
     };
-    const ts2 = '1729356000';
+    const ts2 = cfTs(1000);
     const body2 = JSON.stringify(payloadSuccess);
     const sig2 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts2}${body2}`).digest('base64');
 
@@ -1384,7 +1385,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         payment: { cf_payment_id: 'cf_pay_dup_01', payment_status: 'SUCCESS', payment_amount: 399.00, payment_currency: 'INR' }
       }
     };
-    const ts = '1729355000';
+    const ts = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const sig = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts}${rawBody}`).digest('base64');
 
@@ -1440,7 +1441,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         payment: { cf_payment_id: 'cf_pay_hdr_01', payment_status: 'SUCCESS', payment_amount: 399.00, payment_currency: 'INR' }
       }
     };
-    const ts = '1729355000';
+    const ts = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const sig = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts}${rawBody}`).digest('base64');
 
@@ -1465,7 +1466,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         note: 'Generic payment failure event with no order or payment identifiers'
       }
     };
-    const ts = '1729355000';
+    const ts = cfTs(0);
     const rawBody = JSON.stringify(payload);
     const sig = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts}${rawBody}`).digest('base64');
 
@@ -1525,7 +1526,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         }
       }
     };
-    const ts1 = '1729355000';
+    const ts1 = cfTs(0);
     const body1 = JSON.stringify(payloadSub);
     const sig1 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts1}${body1}`).digest('base64');
 
@@ -1550,7 +1551,7 @@ describe('Cashfree v2025-01-01 Webhook Compatibility & Security Certification Su
         }
       }
     };
-    const ts2 = '1729355001';
+    const ts2 = cfTs(1);
     const body2 = JSON.stringify(payloadPG);
     const sig2 = crypto.createHmac('sha256', process.env.CASHFREE_SECRET_KEY!).update(`${ts2}${body2}`).digest('base64');
 

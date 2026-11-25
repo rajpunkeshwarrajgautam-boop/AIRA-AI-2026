@@ -311,7 +311,11 @@ export function createBillingRoutes(): Router {
       const invoices = await paymentGatewayService.getInvoices(principal.userId);
       res.json({ invoices });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || 'Failed to fetch invoices.' });
+      res.status(500).json({
+        error: err.message || 'BILLING_INVOICE_QUERY_FAILED: Failed to fetch invoices.',
+        code: 'BILLING_INVOICE_QUERY_FAILED',
+        billingHistoryUnavailable: true
+      });
     }
   });
 

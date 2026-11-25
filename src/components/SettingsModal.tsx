@@ -310,6 +310,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const [invoices, setInvoices] = useState<any[]>([]);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
+  const [invoicesError, setInvoicesError] = useState<string | null>(null);
   const [isCancellingSub, setIsCancellingSub] = useState(false);
   const [cancelMessage, setCancelMessage] = useState<string | null>(null);
   const [isReconcilingPending, setIsReconcilingPending] = useState(false);
@@ -387,14 +388,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const fetchInvoices = useCallback(async () => {
     if (isGuestUser) return;
     setIsLoadingInvoices(true);
+    setInvoicesError(null);
     try {
       const res = await authenticatedApiFetch('/api/billing/invoices');
-      if (res.ok) {
-        const data = await res.json();
-        setInvoices(data.invoices || []);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({} as Record<string, any>));
+        throw new Error(errData?.error || 'Unable to load billing history right now.');
       }
-    } catch {
+      const data = await res.json();
+      setInvoices(Array.isArray(data?.invoices) ? data.invoices : []);
+    } catch (err: any) {
       setInvoices([]);
+      setInvoicesError(err?.message || 'Unable to load billing history right now.');
     } finally {
       setIsLoadingInvoices(false);
     }
@@ -1293,6 +1298,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {isLoadingInvoices ? (
                         <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark text-center">
                           Loading invoices...
+                        </div>
+                      ) : invoicesError ? (
+                        <div className="p-4 rounded-xl border border-red-500/30 bg-red-500/5 text-xs text-red-700 dark:text-red-300 text-center space-y-2">
+                          <p className="font-medium">Unable to load billing history right now.</p>
+                          <p className="text-[11px] opacity-80">{invoicesError}</p>
+                          <button
+                            type="button"
+                            onClick={() => void fetchInvoices()}
+                            className="px-3 py-1 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-[11px] font-semibold transition-colors"
+                          >
+                            Retry
+                          </button>
                         </div>
                       ) : invoices.length === 0 ? (
                         <div className="p-4 rounded-xl border border-dashed border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark text-center space-y-1">
