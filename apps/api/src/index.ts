@@ -8,7 +8,7 @@ import {
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes, createAnnouncementRoutes } from './account-routes.js';
 import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
-import { paymentGatewayService, isTerminalError } from './billing/payment-gateway-service.js';
+import { paymentGatewayService, isTerminalError, isInternationalUsdBillingEnabled } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -604,6 +604,7 @@ app.get('/api/billing/plans', (_req: Request, res: Response) => {
     topupPacks: [],
     billingStatus,
     checkoutAvailable: isCheckoutAvailable || isRehearsal,
+    internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
     featuresCertified: true
   });
 });

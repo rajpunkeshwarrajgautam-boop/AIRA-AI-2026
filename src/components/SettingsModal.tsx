@@ -941,7 +941,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               ? 'Guest Trial (No Billing Active)'
                               : (!usageData?.billingStatus || usageData.billingStatus === 'sandbox_rehearsal')
                                 ? 'Sandbox Mode (Isolated)'
-                                : usageData.billingStatus === 'live'
+                                : (usageData.billingStatus === 'active' || usageData.billingStatus === 'live')
                                   ? 'Live Billing Active'
                                   : usageData.billingStatus.replace(/^Billing:\s*/i, '')}
                           </span>

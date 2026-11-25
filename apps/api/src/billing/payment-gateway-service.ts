@@ -295,7 +295,14 @@ export const CANDIDATE_PRICE_CATALOG: Record<PlanTier, Record<CurrencyCode, { id
   }
 };
 
+export function isInternationalUsdBillingEnabled(): boolean {
+  return process.env.AIRA_INTERNATIONAL_USD_BILLING_ENABLED === 'true';
+}
+
 export function isPriceApprovedForProduction(tier: PlanTier, currency: CurrencyCode): boolean {
+  if (currency === 'USD' && !isInternationalUsdBillingEnabled()) {
+    return false;
+  }
   const plan = COMMERCIAL_PLANS[tier];
   if (!plan || !plan.prices || plan.prices.length === 0) {
     return false;
@@ -2808,10 +2815,19 @@ export class PaymentGatewayService {
 
       // 3. Active Pending Session Deduplication & Cross-Tier Protection
       try {
-        const anyPending = await (database as Knex)('subscriptions')
+        const activeSubForPendingCheck = await (database as Knex)('subscriptions')
+          .where({ customer_id: customerId, status: 'active' })
+          .orderBy('updated_at', 'desc')
+          .first();
+
+        const rawPending = await (database as Knex)('subscriptions')
           .where({ customer_id: customerId, status: 'pending' })
           .orderBy('created_at', 'desc')
           .first();
+
+        const anyPending = rawPending && !this.isSupersededStalePendingSubscription(rawPending, activeSubForPendingCheck)
+          ? rawPending
+          : null;
 
         if (anyPending) {
           // If customer requests the identical plan tier and gateway within the 15-minute window, reuse the active session
@@ -4619,8 +4635,10 @@ export class PaymentGatewayService {
       if (opts.deadlineEpochMs && Date.now() + 5000 >= opts.deadlineEpochMs) {
         break;
       }
+      const currentFencingToken = Number(task.fencing_token || 0);
+      const nextFencingToken = currentFencingToken + 1;
       const claimedCount = await db('subscription_cancellation_outbox')
-        .where({ id: task.id })
+        .where({ id: task.id, fencing_token: currentFencingToken })
         .andWhere(function (this: any) {
           this.where('state', 'PENDING')
             .orWhere(function (this: any) {
@@ -4631,7 +4649,7 @@ export class PaymentGatewayService {
           state: 'CLAIMED',
           claimed_by: workerId,
           lease_until: now + leaseDuration,
-          fencing_token: Number(task.fencing_token || 0) + 1,
+          fencing_token: nextFencingToken,
           updated_at: now
         });
 
@@ -4707,12 +4725,18 @@ export class PaymentGatewayService {
 
       const updateNow = Date.now();
       if (taskSuccess) {
-        await db('subscription_cancellation_outbox').where({ id: task.id }).update({
-          state: 'COMPLETED',
-          attempts: nextAttempts,
-          completed_at: updateNow,
-          updated_at: updateNow
-        });
+        const completedCount = await db('subscription_cancellation_outbox')
+          .where({ id: task.id, claimed_by: workerId, fencing_token: nextFencingToken })
+          .update({
+            state: 'COMPLETED',
+            attempts: nextAttempts,
+            completed_at: updateNow,
+            updated_at: updateNow
+          });
+        if (completedCount !== 1) {
+          results.push({ id: task.id, status: 'STALE_LEASE_LOST' });
+          continue;
+        }
         try {
           await db('billing_audit_events').insert({
             id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -4735,13 +4759,19 @@ export class PaymentGatewayService {
       } else {
         const terminalFailure = nextAttempts >= Number(task.max_attempts || 5);
         const backoffMs = Math.pow(2, nextAttempts) * 1000;
-        await db('subscription_cancellation_outbox').where({ id: task.id }).update({
-          state: terminalFailure ? 'FAILED' : 'PENDING',
-          attempts: nextAttempts,
-          next_attempt_at: terminalFailure ? null : updateNow + backoffMs,
-          last_error: errorMsg.slice(0, 500),
-          updated_at: updateNow
-        });
+        const rescheduledCount = await db('subscription_cancellation_outbox')
+          .where({ id: task.id, claimed_by: workerId, fencing_token: nextFencingToken })
+          .update({
+            state: terminalFailure ? 'FAILED' : 'PENDING',
+            attempts: nextAttempts,
+            next_attempt_at: terminalFailure ? null : updateNow + backoffMs,
+            last_error: errorMsg.slice(0, 500),
+            updated_at: updateNow
+          });
+        if (rescheduledCount !== 1) {
+          results.push({ id: task.id, status: 'STALE_LEASE_LOST', error: errorMsg });
+          continue;
+        }
         try {
           await db('billing_audit_events').insert({
             id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -4826,8 +4856,10 @@ export class PaymentGatewayService {
       if (opts.deadlineEpochMs && Date.now() + 5000 >= opts.deadlineEpochMs) {
         break;
       }
+      const currentFencingToken = Number(task.fencing_token || 0);
+      const nextFencingToken = currentFencingToken + 1;
       const claimedCount = await db('billing_invoice_reconciliation_outbox')
-        .where({ id: task.id })
+        .where({ id: task.id, fencing_token: currentFencingToken })
         .andWhere(function (this: any) {
           this.where('state', 'PENDING')
             .orWhere(function (this: any) {
@@ -4838,7 +4870,7 @@ export class PaymentGatewayService {
           state: 'CLAIMED',
           claimed_by: workerId,
           lease_until: now + leaseDuration,
-          fencing_token: Number(task.fencing_token || 0) + 1,
+          fencing_token: nextFencingToken,
           updated_at: now
         });
 
@@ -4874,24 +4906,36 @@ export class PaymentGatewayService {
 
       const updateNow = Date.now();
       if (invoiceRecord) {
-        await db('billing_invoice_reconciliation_outbox').where({ id: task.id }).update({
-          state: 'COMPLETED',
-          attempts: nextAttempts,
-          completed_at: updateNow,
-          updated_at: updateNow
-        });
+        const completedCount = await db('billing_invoice_reconciliation_outbox')
+          .where({ id: task.id, claimed_by: workerId, fencing_token: nextFencingToken })
+          .update({
+            state: 'COMPLETED',
+            attempts: nextAttempts,
+            completed_at: updateNow,
+            updated_at: updateNow
+          });
+        if (completedCount !== 1) {
+          results.push({ id: task.id, status: 'STALE_LEASE_LOST' });
+          continue;
+        }
         succeeded++;
         results.push({ id: task.id, status: 'COMPLETED', invoiceNumber: invoiceRecord.invoiceNumber });
       } else {
         const terminalFailure = nextAttempts >= Number(task.max_attempts || 5);
         const backoffMs = Math.pow(2, nextAttempts) * 1000;
-        await db('billing_invoice_reconciliation_outbox').where({ id: task.id }).update({
-          state: terminalFailure ? 'FAILED' : 'PENDING',
-          attempts: nextAttempts,
-          next_attempt_at: terminalFailure ? null : updateNow + backoffMs,
-          last_error: errorMsg.slice(0, 500),
-          updated_at: updateNow
-        });
+        const rescheduledCount = await db('billing_invoice_reconciliation_outbox')
+          .where({ id: task.id, claimed_by: workerId, fencing_token: nextFencingToken })
+          .update({
+            state: terminalFailure ? 'FAILED' : 'PENDING',
+            attempts: nextAttempts,
+            next_attempt_at: terminalFailure ? null : updateNow + backoffMs,
+            last_error: errorMsg.slice(0, 500),
+            updated_at: updateNow
+          });
+        if (rescheduledCount !== 1) {
+          results.push({ id: task.id, status: 'STALE_LEASE_LOST', error: errorMsg });
+          continue;
+        }
         failed++;
         results.push({ id: task.id, status: terminalFailure ? 'FAILED' : 'RETRY_SCHEDULED', error: errorMsg });
       }
@@ -6537,6 +6581,25 @@ export class PaymentGatewayService {
     return { reconciled, failed };
   }
 
+  private isSupersededStalePendingSubscription(pendingSub: any, activeSub: any): boolean {
+    if (!pendingSub || !activeSub) return false;
+    const pendingCreatedAt = Number(pendingSub.created_at || 0);
+    const activeCreatedAt = Number(activeSub.created_at || 0);
+    if (!pendingCreatedAt || !activeCreatedAt || pendingCreatedAt > activeCreatedAt) {
+      return false;
+    }
+    const meta = this.parseJsonRecordSafe(pendingSub.metadata);
+    const providerDetails = meta.providerDetails || {};
+    const gwStatus = String(meta.gateway_subscription_status || providerDetails.subscriptionStatus || '').toUpperCase();
+    const authStatus = String(meta.gateway_auth_status || providerDetails.authorizationStatus || '').toUpperCase();
+    const hasAuthorizedMandate = Boolean(
+      authStatus === 'ACTIVE' ||
+      gwStatus === 'AUTHENTICATED' ||
+      (pendingSub.gateway === 'cashfree' && gwStatus === 'ACTIVE')
+    );
+    return !hasAuthorizedMandate;
+  }
+
   async getCustomerBillingLifecycleState(principalId: string): Promise<{
     activeSubscription: {
       id: string;
@@ -6574,11 +6637,15 @@ export class PaymentGatewayService {
         .orderBy('updated_at', 'desc')
         .first();
 
-      const pendingSub = await dbClient('subscriptions')
+      const rawPendingSub = await dbClient('subscriptions')
         .where({ customer_id: customer.id })
         .whereIn('status', ['pending', 'initiating', 'ambiguous_timeout'])
         .orderBy('created_at', 'desc')
         .first();
+
+      const pendingSub = rawPendingSub && !this.isSupersededStalePendingSubscription(rawPendingSub, activeSub)
+        ? rawPendingSub
+        : null;
 
       const parseMeta = (raw: any): Record<string, any> => {
         if (!raw) return {};

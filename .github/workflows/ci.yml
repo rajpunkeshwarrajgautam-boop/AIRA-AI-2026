@@ -107,6 +107,9 @@ jobs:
       - name: Cashfree recurring plan dynamic provisioning and safety verification
         run: npx tsx --test test/cashfree-recurring-plan-provisioning.test.ts test/cashfree-checkout-contact-details.test.ts
 
+      - name: Production readiness closure, INR-only USD gating & outbox CAS fencing
+        run: npx tsx --test test/production-readiness-closure.test.ts
+
       - name: Staging target validation and fail-closed isolation (F5)
         run: npx tsx --test test/staging-target-validation-security.test.ts
 
