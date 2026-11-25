@@ -86,6 +86,9 @@ jobs:
       - name: Commercial billing, webhook lifecycle, and security matrix (F1-F4)
         run: npx tsx --test test/billing-remediation-security-matrix.test.ts
 
+      - name: Invoice payment evidence and cancellation lifecycle regression (12 cases)
+        run: npx tsx --test test/invoice-payment-evidence-regression.test.ts
+
       - name: Cashfree recurring plan dynamic provisioning and safety verification
         run: npx tsx --test test/cashfree-recurring-plan-provisioning.test.ts test/cashfree-checkout-contact-details.test.ts
 
