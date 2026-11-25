@@ -476,6 +476,16 @@ export function createBillingRoutes(): Router {
         });
       }
 
+      const concurrentLifecycle = isConcurrent
+        ? await paymentGatewayService.getCustomerBillingLifecycleState(principal.userId).catch(() => null)
+        : null;
+      const pendingSub = concurrentLifecycle?.pendingSubscription || null;
+      const friendlyConcurrentMsg = pendingSub
+        ? (pendingSub.hasAuthorizedMandate
+            ? `You already have an authorized e-mandate for ${pendingSub.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus'} via ${pendingSub.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay'}. Verify its status or cancel that pending mandate before starting another checkout.`
+            : `You have an unfinished ${pendingSub.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus'} checkout with ${pendingSub.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay'}. Verify its status or cancel the pending checkout to switch plans or payment methods.`)
+        : 'Another checkout session is already open for your account. Verify or cancel it before starting a new checkout.';
+
       res.status(status).json({
         error: isIdempotencyConflict
           ? 'IDEMPOTENCY_CONFLICT'
@@ -490,7 +500,8 @@ export function createBillingRoutes(): Router {
                   : (isAmbiguous ? 'GATEWAY_AMBIGUOUS_OUTCOME' : 'CHECKOUT_FAILED'))))),
         message: status === 500
           ? 'Unable to initiate subscription checkout with the payment provider. Please try again later or contact support.'
-          : err.message
+          : err.message,
+        ...(isConcurrent ? { customerMessage: friendlyConcurrentMsg, pendingSubscription: pendingSub } : {})
       });
     }
   });
@@ -639,6 +650,40 @@ export function createBillingRoutes(): Router {
           ? 404
           : 400;
       res.status(status).json({ error: err.message || 'Reconciliation failed.' });
+    }
+  });
+
+  /**
+   * Protected: Safely cancel an abandoned/unpaid pending checkout after authoritative provider verification.
+   * Distinct from cancelling an active paid subscription; preserves transaction history and aborts on payment evidence.
+   */
+  router.post('/subscriptions/:subscriptionId/cancel-pending', async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    const subscriptionId = typeof req.params.subscriptionId === 'string' ? req.params.subscriptionId.trim() : '';
+    if (!subscriptionId) {
+      return res.status(400).json({ error: 'VALIDATION_ERROR: subscriptionId is required.' });
+    }
+
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.slice(0, 120) : undefined;
+    const allowCancelAuthorizedMandate = req.body?.allowCancelAuthorizedMandate === true;
+
+    try {
+      const result = await paymentGatewayService.cancelPendingCheckout(
+        principal.userId,
+        subscriptionId,
+        { reason, allowCancelAuthorizedMandate }
+      );
+      const status = result.cancelled ? 200 : 409;
+      res.status(status).json(result);
+    } catch (err: any) {
+      const status = err?.message?.startsWith('OWNERSHIP_MISMATCH')
+        ? 403
+        : err?.message?.startsWith('NOT_FOUND')
+          ? 404
+          : 400;
+      res.status(status).json({ error: err.message || 'Failed to cancel pending checkout.' });
     }
   });
 

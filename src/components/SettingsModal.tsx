@@ -218,6 +218,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     authorizationStatus: string | null;
     nextScheduleDate: string | null;
     lastPaymentError: string | null;
+    hasAuthorizedMandate?: boolean;
+    canCancelPending?: boolean;
     createdAt: number;
   }
 
@@ -243,9 +245,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [usageError, setUsageError] = useState(false);
 
   const fetchUsage = useCallback(async () => {
-    setIsUsageLoading(true);
+    setIsUsageLoading((prev) => (usageData ? prev : true));
     setUsageError(false);
-    setUsageData(null);
     try {
       const [res, summaryRes] = await Promise.all([
         authenticatedApiFetch('/api/billing/entitlements'),
@@ -312,6 +313,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isCancellingSub, setIsCancellingSub] = useState(false);
   const [cancelMessage, setCancelMessage] = useState<string | null>(null);
   const [isReconcilingPending, setIsReconcilingPending] = useState(false);
+  const [isCancellingPending, setIsCancellingPending] = useState(false);
   const [reconcileMessage, setReconcileMessage] = useState<string | null>(null);
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
 
@@ -331,6 +333,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setReconcileMessage(err?.message || 'Unable to contact billing reconciliation service.');
     } finally {
       setIsReconcilingPending(false);
+    }
+  };
+
+  const handleCancelPending = async (subscriptionId: string, allowCancelAuthorizedMandate = false) => {
+    setIsCancellingPending(true);
+    setReconcileMessage(null);
+    try {
+      const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(subscriptionId)}/cancel-pending`, {
+        method: 'POST',
+        body: JSON.stringify({
+          reason: allowCancelAuthorizedMandate ? 'user_cancel_authorized_mandate' : 'user_cancel_pending',
+          allowCancelAuthorizedMandate
+        })
+      });
+      const data = await res.json().catch(() => ({} as Record<string, any>));
+      setReconcileMessage(data?.message || data?.error || 'Pending checkout updated.');
+      await fetchUsage();
+      await fetchInvoices();
+    } catch (err: any) {
+      setReconcileMessage(err?.message || 'Unable to cancel pending checkout right now.');
+    } finally {
+      setIsCancellingPending(false);
     }
   };
 
@@ -574,7 +598,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ type: "spring", stiffness: 350, damping: 28 }}
             style={{ maxHeight: Math.max(0, viewport.height - (viewport.width >= 640 ? 48 : 16)) }}
-            className={`aira-settings-dialog w-full min-w-0 max-w-2xl h-full max-h-full sm:h-auto sm:max-h-[min(90dvh,900px)] rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-2xl dark:shadow-lg flex flex-col relative z-10 ${compactHeight ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden'}`}
+            className={`aira-settings-dialog w-full min-w-0 max-w-3xl h-full max-h-full sm:h-auto sm:max-h-[min(90dvh,900px)] rounded-2xl sm:rounded-[1.75rem] border border-claude-border-light dark:border-claude-border-dark bg-claude-surface-light dark:bg-claude-surface-dark shadow-2xl dark:shadow-lg flex flex-col relative z-10 ${compactHeight ? 'overflow-y-auto overscroll-contain' : 'overflow-hidden'}`}
           >
             {/* Header */}
             <header 
@@ -621,8 +645,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </select>
             </div>
 
-            {/* Desktop Tab Strip (strict 6 tabs) */}
-            <div role="tablist" aria-label="Settings categories" data-testid="settings-desktop-tabs" className="hidden sm:flex shrink-0 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-5 sm:px-7 overflow-x-auto gap-1 pt-2">
+            {/* Desktop Tab Strip (strict 6 tabs, no unsightly horizontal scrollbar) */}
+            <div role="tablist" aria-label="Settings categories" data-testid="settings-desktop-tabs" className="hidden sm:flex flex-wrap lg:flex-nowrap shrink-0 border-b border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/60 dark:bg-claude-surface2-dark/60 px-4 sm:px-6 overflow-x-hidden gap-0.5 pt-2">
               {tabs.map(tab => (
                 <button
                   key={tab.id}
@@ -632,7 +656,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   onClick={() => setActiveTab(tab.id)}
                   id={`aira-settings-tab-${tab.id}`} data-testid={`settings-tab-${tab.id}`}
                   aria-controls="aira-settings-panel"
-                  className={`shrink-0 flex items-center gap-2 px-3 py-2.5 text-xs font-semibold rounded-t-xl transition-colors motion-reduce:transition-none border-b-2 whitespace-nowrap ${
+                  className={`shrink-0 flex items-center gap-1.5 px-2.5 py-2 text-xs font-semibold rounded-t-xl transition-colors motion-reduce:transition-none border-b-2 whitespace-nowrap ${
                     activeTab === tab.id
                       ? 'border-claude-terracotta text-claude-accentInk bg-claude-surface-light dark:bg-claude-surface-dark shadow-sm'
                       : 'border-transparent text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
@@ -906,49 +930,79 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       </div>
                       <div className="flex items-center gap-2 text-claude-muted-light dark:text-claude-muted-dark sm:justify-end">
                         <Shield className="w-4 h-4 text-emerald-500 shrink-0" />
-                        <span>Billing: <span className="text-claude-text-light dark:text-white font-medium">{activePlanId === 'guest' ? 'Guest Trial (No Billing Active)' : (usageData?.billingStatus ? `Billing: ${usageData.billingStatus}` : 'Sandbox Mode (Isolated)')}</span></span>
+                        <span>
+                          Billing: <span className="text-claude-text-light dark:text-white font-medium">
+                            {activePlanId === 'guest'
+                              ? 'Guest Trial (No Billing Active)'
+                              : (!usageData?.billingStatus || usageData.billingStatus === 'sandbox_rehearsal')
+                                ? 'Sandbox Mode (Isolated)'
+                                : usageData.billingStatus === 'live'
+                                  ? 'Live Billing Active'
+                                  : usageData.billingStatus.replace(/^Billing:\s*/i, '')}
+                          </span>
+                        </span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Pending Subscription & Scheduled Payment Banner */}
-                  {usageData?.pendingSubscription && (
+                  {/* Pending Subscription & Abandoned Checkout Recovery Banner */}
+                  {(usageData?.pendingSubscription || reconcileMessage) && (
                     <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 space-y-2.5 text-xs">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 font-bold text-claude-text-light dark:text-white">
-                            <Clock className="w-4 h-4 text-amber-500 shrink-0" />
-                            <span>
-                              Pending Subscription ({usageData.pendingSubscription.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus'} via {usageData.pendingSubscription.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay'})
-                            </span>
-                            <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/10">
-                              {usageData.pendingSubscription.id}
-                            </span>
+                      {usageData?.pendingSubscription && (() => {
+                        const pending = usageData.pendingSubscription;
+                        const hasMandate = Boolean(
+                          pending.hasAuthorizedMandate ||
+                          (pending.gateway === 'cashfree' && (pending.gatewaySubscriptionStatus === 'ACTIVE' || pending.authorizationStatus === 'ACTIVE'))
+                        );
+                        const planLabel = pending.planId === 'pro' ? 'AIRA Pro' : 'AIRA Plus';
+                        const gwLabel = pending.gateway === 'cashfree' ? 'Cashfree' : 'Razorpay';
+                        return (
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-2 font-bold text-claude-text-light dark:text-white">
+                                <Clock className="w-4 h-4 text-amber-500 shrink-0" />
+                                <span>
+                                  {hasMandate
+                                    ? `Authorized Mandate Pending Settlement (${planLabel} via ${gwLabel})`
+                                    : `Pending Checkout (${planLabel} via ${gwLabel})`}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-relaxed">
+                                {pending.lastPaymentError ? (
+                                  <>Last gateway notice: <span className="text-red-500 font-medium">{pending.lastPaymentError}</span>. Verify status or cancel this pending checkout to retry.</>
+                                ) : hasMandate ? (
+                                  <>
+                                    Mandate authorized (₹1 verification). Paid tier activates only after Cycle 1 settlement
+                                    {pending.nextScheduleDate ? (
+                                      <> — first scheduled debit: <strong className="text-claude-text-light dark:text-white">{new Date(pending.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST</strong>.</>
+                                    ) : '.'}
+                                  </>
+                                ) : (
+                                  <>No completed payment is recorded for this {gwLabel} checkout yet. Verify payment status if you completed it, or cancel it to choose another plan or gateway.</>
+                                )}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => void handleReconcilePending(pending.id)}
+                                disabled={isReconcilingPending || isCancellingPending}
+                                className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-800 dark:text-amber-200 font-semibold text-xs whitespace-nowrap transition-colors disabled:opacity-50"
+                              >
+                                {isReconcilingPending ? 'Checking...' : 'Verify / Reconcile Status'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void handleCancelPending(pending.id, hasMandate)}
+                                disabled={isReconcilingPending || isCancellingPending}
+                                className="px-3 py-1.5 rounded-lg bg-claude-surface-light dark:bg-white/10 hover:bg-red-500/10 border border-claude-border-light dark:border-white/20 text-claude-text-light dark:text-white font-semibold text-xs whitespace-nowrap transition-colors disabled:opacity-50"
+                              >
+                                {isCancellingPending ? 'Cancelling...' : (hasMandate ? 'Cancel Authorized Mandate' : 'Cancel Pending Checkout')}
+                              </button>
+                            </div>
                           </div>
-                          <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-relaxed">
-                            {usageData.pendingSubscription.lastPaymentError ? (
-                              <>Last gateway notice: <span className="text-red-500 font-medium">{usageData.pendingSubscription.lastPaymentError}</span>. Verify status to clear or retry.</>
-                            ) : usageData.pendingSubscription.gateway === 'cashfree' && (usageData.pendingSubscription.gatewaySubscriptionStatus === 'ACTIVE' || usageData.pendingSubscription.authorizationStatus === 'ACTIVE') ? (
-                              <>
-                                Mandate authorized (₹1 verification). Paid tier activates only after Cycle 1 settlement
-                                {usageData.pendingSubscription.nextScheduleDate ? (
-                                  <> — first scheduled debit: <strong className="text-claude-text-light dark:text-white">{new Date(usageData.pendingSubscription.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST</strong>.</>
-                                ) : '.'}
-                              </>
-                            ) : (
-                              <>Awaiting mandate/payment completion with {usageData.pendingSubscription.gateway}. Click Verify / Reconcile Status after payment or if checkout was closed early.</>
-                            )}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleReconcilePending(usageData.pendingSubscription!.id)}
-                          disabled={isReconcilingPending}
-                          className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-800 dark:text-amber-200 font-semibold text-xs whitespace-nowrap transition-colors disabled:opacity-50 shrink-0"
-                        >
-                          {isReconcilingPending ? 'Checking...' : 'Verify / Reconcile Status'}
-                        </button>
-                      </div>
+                        );
+                      })()}
                       {reconcileMessage && (
                         <div className="p-2 rounded-lg bg-black/5 dark:bg-white/5 text-[11px] text-claude-text-light dark:text-white">
                           {reconcileMessage}
@@ -1171,12 +1225,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                       onTriggerUpgrade(tierKey === 'pro' ? 'plus_to_pro_tool' : 'free_to_plus_model');
                                     }
                                   }}
-                                  className="w-full py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-bold transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
+                                  className="w-full px-2.5 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-bold text-center leading-tight transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99]"
                                 >
                                   {tierKey === 'free'
                                     ? 'Get Started'
                                     : (usageData?.checkoutAvailable
-                                      ? `${activePlanId === 'pro' && tierKey === 'plus' ? 'Downgrade' : 'Upgrade'} to ${plan.name}`
+                                      ? `${activePlanId === 'pro' && tierKey === 'plus' ? 'Downgrade' : 'Upgrade'} to ${tierKey === 'pro' ? 'Pro' : 'Plus'}`
                                       : 'View Plan Details')}
                                 </button>
                               )}
