@@ -8,7 +8,7 @@ import {
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes, createAnnouncementRoutes } from './account-routes.js';
 import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
-import { paymentGatewayService, isTerminalError } from './billing/payment-gateway-service.js';
+import { paymentGatewayService, isTerminalError, extractRawWebhookBody } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -538,9 +538,10 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 // -----------------------------------------------------------------------
 app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) => {
   const signature = req.headers['x-razorpay-signature'] as string;
-  const rawBody = typeof (req as any).rawBody === 'string'
-    ? (req as any).rawBody
-    : JSON.stringify(req.body);
+  const rawBody = extractRawWebhookBody(req);
+  if (rawBody === null) {
+    return res.status(400).json({ error: 'WEBHOOK_RAW_BODY_REQUIRED: Unparsed raw request body is required for cryptographic HMAC verification.' });
+  }
 
   try {
     const result = await paymentGatewayService.processRazorpayWebhook(rawBody, signature);
@@ -565,9 +566,10 @@ app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) =>
     req.headers['x-webhook-event-id'] ||
     req.headers['x-event-id']
   ) as string | undefined;
-  const rawBody = typeof (req as any).rawBody === 'string'
-    ? (req as any).rawBody
-    : JSON.stringify(req.body);
+  const rawBody = extractRawWebhookBody(req);
+  if (rawBody === null) {
+    return res.status(400).json({ error: 'WEBHOOK_RAW_BODY_REQUIRED: Unparsed raw request body is required for cryptographic HMAC verification.' });
+  }
 
   try {
     const result = await paymentGatewayService.processCashfreeWebhook(
