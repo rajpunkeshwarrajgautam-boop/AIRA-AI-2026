@@ -461,7 +461,9 @@ export class PaymentGatewayService {
     const q: any = dbOrTrx('subscriptions').where(filter);
     const raw: any = typeof q.select === 'function'
       ? await q.select('*')
-      : (typeof q.orderBy === 'function' ? await q.orderBy('created_at', 'desc') : await q);
+      : (typeof q.orderBy === 'function'
+          ? await q.orderBy('created_at', 'desc')
+          : (typeof q.first === 'function' ? await q.first() : await q));
     const rows = Array.isArray(raw)
       ? raw
       : raw && typeof raw === 'object' && 'id' in raw
@@ -2836,10 +2838,8 @@ export class PaymentGatewayService {
 
       // 3. Active Pending Session Deduplication, Superseded Verification & Cross-Tier Protection
       try {
-        const activeSubForPendingCheck = await (database as Knex)('subscriptions')
-          .where({ customer_id: customerId, status: 'active' })
-          .orderBy('updated_at', 'desc')
-          .first();
+        const activeSubForPendingCheck = (await this.querySubscriptions(database, { customer_id: customerId, status: 'active' }))
+          .sort((a: any, b: any) => Number(b?.updated_at || 0) - Number(a?.updated_at || 0))[0] || null;
 
         const pendingRows = (await this.querySubscriptions(database, { customer_id: customerId, status: 'pending' }))
           .sort((a: any, b: any) => Number(b?.created_at || 0) - Number(a?.created_at || 0));
