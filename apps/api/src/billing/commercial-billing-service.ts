@@ -20,6 +20,57 @@ function parseJsonSafe(val: any): Record<string, any> {
   }
 }
 
+/**
+ * Determine whether a subscription row represents a paid fulfillment (vs. an unpaid/abandoned checkout).
+ */
+export function hasPaidSubscriptionEvidence(sub: any): boolean {
+  if (!sub) return false;
+  const meta = parseJsonSafe(sub.metadata);
+  if (meta.refunded === true || meta.authRefunded === true || sub.status === 'refunded') {
+    return false;
+  }
+  if (meta.hadPaidSubscription === false || meta.lifecycleStage === 'UNPAID_CHECKOUT_CANCELLED' || meta.lifecycleStage === 'UNPAID_CHECKOUT_EXPIRED') {
+    return false;
+  }
+  if (sub.status === 'active' || sub.status === 'authenticated') {
+    return true;
+  }
+  return Boolean(
+    meta.hadPaidSubscription === true ||
+    Number(meta.fulfilledCycle || 0) >= 1 ||
+    meta.lifecycleStage === 'PAID_SUBSCRIPTION_CANCELLED' ||
+    meta.initialPaymentId ||
+    meta.lastPaymentId
+  );
+}
+
+/**
+ * Paid subscription period entitlement check.
+ * Separates gateway recurring mandate cancellation from already-paid period-end access.
+ */
+export function hasPaidPeriodEntitlement(sub: any, now = Date.now()): boolean {
+  if (!sub) return false;
+  if (sub.plan_id !== 'plus' && sub.plan_id !== 'pro') return false;
+  const periodEnd = Number(sub.current_period_end || 0);
+  if (!Number.isFinite(periodEnd) || periodEnd <= now) return false;
+
+  const status = String(sub.status || '').toLowerCase();
+  if (status === 'refunded' || status === 'superseded' || status === 'pending' || status === 'initiating' || status === 'ambiguous_timeout' || status === 'expired' || status === 'failed' || status === 'halted' || status === 'created') {
+    return false;
+  }
+  const meta = parseJsonSafe(sub.metadata);
+  if (meta.refunded === true || meta.authRefunded === true) {
+    return false;
+  }
+  if (status === 'active' || status === 'authenticated') {
+    return true;
+  }
+  if (status === 'cancelled' || status === 'canceled') {
+    return hasPaidSubscriptionEvidence(sub);
+  }
+  return false;
+}
+
 export class InsufficientCreditsError extends Error {
   readonly code = 'INSUFFICIENT_CREDITS';
   readonly requiredCredits: number;
@@ -174,6 +225,126 @@ export class CommercialBillingService {
   }
 
   /**
+   * Select the highest-priority paid subscription conferring period-end entitlements
+   * (either renewing active/authenticated OR cancelled mandate still inside its paid period).
+   */
+  async selectEntitledPaidSubscription(
+    customerId: string,
+    now = Date.now(),
+    client: any = db,
+    lockMode: 'none' | 'share' = 'none'
+  ): Promise<any | null> {
+    let query = client('subscriptions')
+      .where({ customer_id: customerId })
+      .whereIn('status', ['active', 'authenticated', 'cancelled', 'canceled'])
+      .where('current_period_end', '>', now)
+      .orderBy('current_period_end', 'desc');
+    if (lockMode === 'share' && typeof query.forShare === 'function') {
+      query = query.forShare();
+    }
+    const candidates = await query.select('*');
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      return null;
+    }
+    const entitled = candidates.filter((sub: any) => hasPaidPeriodEntitlement(sub, now));
+    if (entitled.length === 0) return null;
+    // Prefer renewing 'active'/'authenticated' first, then cancelled with highest tier/latest period end.
+    entitled.sort((a: any, b: any) => {
+      const aActive = a.status === 'active' || a.status === 'authenticated' ? 1 : 0;
+      const bActive = b.status === 'active' || b.status === 'authenticated' ? 1 : 0;
+      if (aActive !== bActive) return bActive - aActive;
+      return Number(b.current_period_end || 0) - Number(a.current_period_end || 0);
+    });
+    return entitled[0];
+  }
+
+  /**
+   * Atomically expire stale credit grants (expires_at <= now) without disturbing
+   * unexpired welcome, top-up, or held reservation credits.
+   */
+  private async expireStaleCreditGrants(
+    accountId: string,
+    now: number,
+    trx: any
+  ): Promise<number> {
+    // Lock account first to serialize concurrent expiry/reserve/grant sweeps cleanly.
+    const account = await trx('credit_accounts').where({ id: accountId }).forUpdate().first();
+    if (!account) return 0;
+
+    let grantQuery = trx('credit_grants')
+      .where({ account_id: accountId })
+      .where('remaining_credits', '>', 0)
+      .whereNotNull('expires_at')
+      .where('expires_at', '<=', now)
+      .orderBy('expires_at', 'asc');
+    if (typeof grantQuery.forUpdate === 'function') {
+      grantQuery = grantQuery.forUpdate();
+    }
+    const expiredGrants = await grantQuery.select('*');
+
+    if (!Array.isArray(expiredGrants) || expiredGrants.length === 0) {
+      return 0;
+    }
+
+    let totalExpiredGrantCredits = 0;
+    for (const gr of expiredGrants) {
+      const rem = Number(gr.remaining_credits || 0);
+      if (rem > 0) {
+        totalExpiredGrantCredits += rem;
+      }
+    }
+    if (totalExpiredGrantCredits <= 0) {
+      return 0;
+    }
+
+    const currentBalance = Number(account.balance_credits || 0);
+    const currentReserved = Number(account.reserved_credits || 0);
+    const unreservedBalance = Math.max(0, currentBalance - currentReserved);
+    const actualExpire = Math.min(unreservedBalance, totalExpiredGrantCredits);
+    if (actualExpire <= 0) {
+      return 0;
+    }
+
+    // Only decrement credit_grants up to actualExpire so any portion blocked by held reservations
+    // remains sweepable once the reservation settles or releases.
+    let remainingToZero = actualExpire;
+    const touchedIds: string[] = [];
+    for (const gr of expiredGrants) {
+      if (remainingToZero <= 0) break;
+      const rem = Number(gr.remaining_credits || 0);
+      const take = Math.min(rem, remainingToZero);
+      if (take > 0) {
+        await trx('credit_grants').where({ id: gr.id }).update({ remaining_credits: rem - take });
+        remainingToZero -= take;
+        touchedIds.push(gr.id);
+      }
+    }
+
+    const newBalance = Math.max(0, currentBalance - actualExpire);
+    await trx('credit_accounts')
+      .where({ id: account.id })
+      .update({
+        balance_credits: newBalance,
+        updated_at: now
+      });
+
+    await trx('credit_transactions').insert({
+      id: `ctx_${crypto.randomUUID().replace(/-/g, '')}`,
+      account_id: account.id,
+      transaction_type: 'EXPIRE',
+      amount_credits: -actualExpire,
+      balance_before: currentBalance,
+      balance_after: newBalance,
+      idempotency_key: `expire_${account.id}_${touchedIds.slice().sort().join(',').slice(0, 80)}_${newBalance}`,
+      description: `Expired ${touchedIds.length} credit grant(s)`,
+      metadata: JSON.stringify({ expiredGrantIds: touchedIds, expiredGrantSum: totalExpiredGrantCredits, actualExpire }),
+      created_at: now
+    });
+
+    return actualExpire;
+  }
+
+  /**
    * Get active subscription for a customer, defaulting to 'free' or 'guest'.
    */
   async getActiveSubscription(customerId: string): Promise<{
@@ -192,25 +363,23 @@ export class CommercialBillingService {
       };
     }
 
-    const activeSub = await db('subscriptions')
-      .where({ customer_id: customerId })
-      .whereIn('status', ['active', 'authenticated'])
-      .orderBy('current_period_end', 'desc')
-      .first();
+    const now = Date.now();
+    const activeSub = await this.selectEntitledPaidSubscription(customerId, now, db);
 
-    if (activeSub && activeSub.current_period_end > Date.now()) {
+    if (activeSub) {
+      const isCancelledMandate = activeSub.status === 'cancelled' || activeSub.status === 'canceled';
       return {
         planId: activeSub.plan_id as PlanTier,
         status: activeSub.status,
         currentPeriodEnd: Number(activeSub.current_period_end),
-        cancelAtPeriodEnd: Boolean(activeSub.cancel_at_period_end)
+        cancelAtPeriodEnd: Boolean(activeSub.cancel_at_period_end) || isCancelledMandate
       };
     }
 
     return {
       planId: 'free',
       status: 'active',
-      currentPeriodEnd: Date.now() + 30 * 24 * 60 * 60 * 1000,
+      currentPeriodEnd: now + 30 * 24 * 60 * 60 * 1000,
       cancelAtPeriodEnd: false
     };
   }
@@ -219,12 +388,7 @@ export class CommercialBillingService {
    * Helper to resolve the billing period start date ('YYYY-MM-DD') for a customer.
    */
   private async getBillingPeriodStartDate(customerId: string, client: any = db): Promise<string> {
-    const subRow = await client('subscriptions')
-      .where({ customer_id: customerId })
-      .whereIn('status', ['active', 'authenticated'])
-      .where('current_period_end', '>', Date.now())
-      .orderBy('current_period_end', 'desc')
-      .first();
+    const subRow = await this.selectEntitledPaidSubscription(customerId, Date.now(), client);
 
     if (subRow && subRow.current_period_start) {
       return new Date(Number(subRow.current_period_start)).toISOString().slice(0, 10);
@@ -270,7 +434,22 @@ export class CommercialBillingService {
     const sub = await this.getActiveSubscription(customer.id);
     const plan = COMMERCIAL_PLANS[sub.planId] || (isGuest ? COMMERCIAL_PLANS.guest : COMMERCIAL_PLANS.free);
 
-    const account = await db('credit_accounts').where({ customer_id: customer.id }).first();
+    let account = await db('credit_accounts').where({ customer_id: customer.id }).first();
+    if (account && !isGuest) {
+      const now = Date.now();
+      const staleGrant = await db('credit_grants')
+        .where({ account_id: account.id })
+        .where('remaining_credits', '>', 0)
+        .whereNotNull('expires_at')
+        .where('expires_at', '<=', now)
+        .first();
+      if (staleGrant) {
+        await db.transaction(async (trx) => {
+          await this.expireStaleCreditGrants(account.id, now, trx);
+        });
+        account = await db('credit_accounts').where({ customer_id: customer.id }).first();
+      }
+    }
     const balanceCredits = account ? Number(account.balance_credits) : 0;
     const reservedCredits = account ? Number(account.reserved_credits) : 0;
     const availableCredits = Math.max(0, balanceCredits - reservedCredits);
@@ -436,17 +615,12 @@ export class CommercialBillingService {
         .where({ id: customer.id }).forUpdate().first();
       if (!lockedCustomer) throw new Error('Billing customer disappeared during quota reservation.');
 
-      const liveSub = await trx('subscriptions')
-        .where({ customer_id: customer.id })
-        .whereIn('status', ['active', 'authenticated'])
-        .orderBy('current_period_end', 'desc')
-        .forShare().first();
       // Compute time only after locks: queued requests may cross plan expiry
       // or midnight while waiting for another account reservation.
       const now = Date.now();
       const today = new Date(now).toISOString().slice(0, 10);
-      const paidTier = liveSub && Number(liveSub.current_period_end) > now &&
-        (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
+      const liveSub = await this.selectEntitledPaidSubscription(customer.id, now, trx, 'share');
+      const paidTier = liveSub && (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
         ? liveSub.plan_id as PlanTier : 'free';
       const effectiveTier: PlanTier = (isGuestPrincipal(principalId) || isGuestPrincipal(lockedCustomer.principal_id)) ? 'guest' : paidTier;
       const plan = COMMERCIAL_PLANS[effectiveTier];
@@ -637,11 +811,7 @@ export class CommercialBillingService {
       if (!lockedCustomer) throw new Error('Billing customer disappeared during reasoning quota consumption.');
       const now = Date.now();
       const today = new Date(now).toISOString().slice(0, 10);
-      const liveSub = await trx('subscriptions')
-        .where({ customer_id: customer.id })
-        .whereIn('status', ['active', 'authenticated'])
-        .where('current_period_end', '>', now)
-        .orderBy('current_period_end', 'desc').first();
+      const liveSub = await this.selectEntitledPaidSubscription(customer.id, now, trx, 'share');
       const paidTier: PlanTier = liveSub && (liveSub.plan_id === 'plus' || liveSub.plan_id === 'pro')
         ? liveSub.plan_id as PlanTier : 'free';
       const tier = (isGuestPrincipal(principalId) || isGuestPrincipal(lockedCustomer.principal_id)) ? 'guest' : paidTier;
@@ -719,13 +889,18 @@ export class CommercialBillingService {
         throw new InsufficientCreditsError(amountCredits, 0);
       }
 
-      const account = await trx('credit_accounts')
+      let account = await trx('credit_accounts')
         .where({ customer_id: customer.id })
         .forUpdate()
         .first();
 
       if (!account) {
         throw new Error(`Credit account not found for customer ${customer.id}`);
+      }
+
+      const expiredNow = await this.expireStaleCreditGrants(account.id, now, trx);
+      if (expiredNow > 0) {
+        account = await trx('credit_accounts').where({ id: account.id }).forUpdate().first();
       }
 
       const balance = Number(account.balance_credits);
@@ -827,6 +1002,27 @@ export class CommercialBillingService {
         });
 
       if (actualDebit > 0) {
+        // Deduct settled debit across active non-expired grants (soonest-expiring first)
+        let remainingToDebit = actualDebit;
+        const activeGrants = await trx('credit_grants')
+          .where({ account_id: account.id })
+          .where('remaining_credits', '>', 0)
+          .where(function (this: any) {
+            this.whereNull('expires_at').orWhere('expires_at', '>', now);
+          })
+          .orderByRaw('expires_at ASC NULLS LAST, created_at ASC')
+          .forUpdate()
+          .select('*');
+        for (const gr of activeGrants || []) {
+          if (remainingToDebit <= 0) break;
+          const rem = Number(gr.remaining_credits || 0);
+          const take = Math.min(rem, remainingToDebit);
+          if (take > 0) {
+            await trx('credit_grants').where({ id: gr.id }).update({ remaining_credits: rem - take });
+            remainingToDebit -= take;
+          }
+        }
+
         await trx('credit_transactions').insert({
           id: `ctx_${crypto.randomUUID().replace(/-/g, '')}`,
           account_id: account.id,
@@ -899,6 +1095,9 @@ export class CommercialBillingService {
           updated_at: now
         });
 
+      // Now that reserved_credits decreased, sweep any expired grants held back earlier.
+      await this.expireStaleCreditGrants(account.id, now, trx);
+
       return { releasedAmount: holdAmount };
     });
   }
@@ -926,13 +1125,18 @@ export class CommercialBillingService {
     const grantId = `grant_${crypto.randomUUID().replace(/-/g, '')}`;
 
     const execute = async (trx: any) => {
-      const account = await trx('credit_accounts')
+      let account = await trx('credit_accounts')
         .where({ customer_id: customer.id })
         .forUpdate()
         .first();
 
       if (!account) {
         throw new Error(`Account not found for customer ${customer.id}`);
+      }
+
+      const expiredNow = await this.expireStaleCreditGrants(account.id, now, trx);
+      if (expiredNow > 0) {
+        account = await trx('credit_accounts').where({ id: account.id }).forUpdate().first();
       }
 
       const currentBalance = Number(account.balance_credits);

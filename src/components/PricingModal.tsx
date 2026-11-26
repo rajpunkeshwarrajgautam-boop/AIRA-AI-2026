@@ -349,6 +349,12 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const [activatedSummary, setActivatedSummary] = useState<ActivatedConfirmationSummary | null>(null);
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
   const [pendingCheckout, setPendingCheckout] = useState<PendingCheckoutSummary | null>(null);
+  const [activeSubSummary, setActiveSubSummary] = useState<{
+    planId: PlanTier;
+    cancelAtPeriodEnd: boolean;
+    cancellationPending: boolean;
+    currentPeriodEnd: number | null;
+  } | null>(null);
   const [checkoutAvailable, setCheckoutAvailable] = useState<boolean>(false);
   const [_billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
   const [customerPhone, setCustomerPhone] = useState<string>('');
@@ -482,6 +488,16 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       .then(r => (r.ok ? r.json() : null))
       .then(summary => {
         if (!active) return;
+        if (summary?.activeSubscription) {
+          setActiveSubSummary({
+            planId: summary.activeSubscription.planId,
+            cancelAtPeriodEnd: Boolean(summary.activeSubscription.cancelAtPeriodEnd),
+            cancellationPending: Boolean(summary.activeSubscription.cancellationPending),
+            currentPeriodEnd: summary.activeSubscription.currentPeriodEnd ? Number(summary.activeSubscription.currentPeriodEnd) : null
+          });
+        } else {
+          setActiveSubSummary(null);
+        }
         if (summary?.pendingSubscription) {
           const p = summary.pendingSubscription as PendingCheckoutSummary;
           activePendingSubIdRef.current = p.id;
@@ -719,16 +735,21 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         } else if (res.status === 403) {
           setCheckoutNotice(data.message || 'Access restricted: only authorized test principals can initiate sandbox checkout.');
         } else if (res.status === 409) {
-          setCheckoutState('RECONCILIATION_REQUIRED');
-          if (data.pendingSubscription) {
-            activePendingSubIdRef.current = data.pendingSubscription.id;
-            setPendingCheckout(data.pendingSubscription);
+          if (data.error === 'PAID_PERIOD_STILL_ACTIVE') {
+            setCheckoutState('DEFINITIVE_FAILURE');
+            setCheckoutNotice(data.message || 'Your current paid subscription period is still active.');
+          } else {
+            setCheckoutState('RECONCILIATION_REQUIRED');
+            if (data.pendingSubscription) {
+              activePendingSubIdRef.current = data.pendingSubscription.id;
+              setPendingCheckout(data.pendingSubscription);
+            }
+            setCheckoutNotice(
+              data.customerMessage ||
+              (data.pendingSubscription ? buildFriendlyPendingNotice(data.pendingSubscription) : null) ||
+              'Another checkout session is already open for your account. Verify its status or cancel it before starting a new checkout.'
+            );
           }
-          setCheckoutNotice(
-            data.customerMessage ||
-            (data.pendingSubscription ? buildFriendlyPendingNotice(data.pendingSubscription) : null) ||
-            'Another checkout session is already open for your account. Verify its status or cancel it before starting a new checkout.'
-          );
         } else if (res.status === 504 || data.error === 'GATEWAY_AMBIGUOUS_OUTCOME') {
           setCheckoutState('AMBIGUOUS_OUTCOME');
           setCheckoutNotice(data.message || 'Payment gateway timed out. Authoritative reconciliation is pending. Please do not reattempt.');
@@ -1328,6 +1349,26 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         )}
 
         <div className="px-6 md:px-8 pt-2">
+          {activeSubSummary?.cancelAtPeriodEnd && (currentPlan === 'plus' || currentPlan === 'pro') && (
+            <div className="mb-3 rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-xs text-amber-100 space-y-1">
+              <div className="font-bold text-white flex flex-wrap items-center gap-2">
+                <span>
+                  {currentPlan === 'pro' ? 'AIRA Pro' : 'AIRA Plus'} — Active until{' '}
+                  {activeSubSummary.currentPeriodEnd
+                    ? new Date(activeSubSummary.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })
+                    : 'period end'}
+                </span>
+                <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/30 text-[10px] font-semibold text-amber-200">
+                  {activeSubSummary.cancellationPending ? 'Cancellation Pending Confirmation' : 'Automatic renewal: Cancelled'}
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-200/90">
+                {activeSubSummary.cancellationPending
+                  ? 'Cancellation request is pending gateway confirmation. Paid plan features and credits remain active.'
+                  : 'No further recurring payments will be charged for this subscription. Paid plan features and remaining credits remain active through the paid billing period.'}
+              </p>
+            </div>
+          )}
           <div className="rounded-xl border border-white/10 bg-stone-950/60 px-3.5 py-2.5 text-[11px] text-stone-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div>
               {currency === 'INR' ? (

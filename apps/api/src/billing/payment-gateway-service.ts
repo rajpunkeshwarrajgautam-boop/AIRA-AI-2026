@@ -6,7 +6,11 @@ import {
   PlanTier,
   CurrencyCode
 } from '../../../../packages/contracts/src/commercial.js';
-import { commercialBillingService } from './commercial-billing-service.js';
+import {
+  commercialBillingService,
+  hasPaidPeriodEntitlement,
+  hasPaidSubscriptionEvidence
+} from './commercial-billing-service.js';
 import { taxDeterminationService, TaxDeterminationResult } from './tax-determination.js';
 import {
   isStagingSandboxRehearsalActive,
@@ -1906,16 +1910,37 @@ export class PaymentGatewayService {
           eventType === 'SUBSCRIPTION_PAYMENT_SUCCESS'
         );
 
-        // Duplicate Cycle 1 Payment Protection BEFORE cycleNumber companion check:
-        // 1) Distinct payment for same/earlier or unspecified cycle while Cycle 1 immediate auth is active, OR
-        // 2) Distinct payment >5 days before Cycle 1 end when Cashfree reported a premature next_schedule_date.
         const periodEndMs = Number(purchaseRecord.current_period_end || 0);
-        const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
         const isDistinctPayment = Boolean(
           actualPaymentId &&
           actualPaymentId !== meta.initialPaymentId &&
           actualPaymentId !== meta.lastPaymentId
         );
+        const hasCancelledRenewal =
+          Boolean(purchaseRecord.cancel_at_period_end) ||
+          meta.cancellation_status === 'CANCELLATION_REQUESTED' ||
+          meta.cancellation_status === 'CANCELLATION_CONFIRMED';
+
+        // Enforce commercial cancellation policy: never accept or grant renewal credits (whether via
+        // subscription.charged, invoice.paid, payment.captured, or order.paid) after renewal cancellation.
+        if (
+          hasCancelledRenewal &&
+          (
+            isClaimedRenewalEvent ||
+            isDistinctPayment ||
+            (explicitPeriodEnd && explicitPeriodEnd > periodEndMs) ||
+            (cycleNumber !== undefined && cycleNumber > (meta.fulfilledCycle || 1))
+          )
+        ) {
+          throw new TerminalRejectionError(
+            `INVALID_STATE_TRANSITION: Cannot process recurring renewal charge for subscription ${purchaseRecord.id} with cancelled automatic renewal.`
+          );
+        }
+
+        // Duplicate Cycle 1 Payment Protection BEFORE cycleNumber companion check:
+        // 1) Distinct payment for same/earlier or unspecified cycle while Cycle 1 immediate auth is active, OR
+        // 2) Distinct payment >5 days before Cycle 1 end when Cashfree reported a premature next_schedule_date.
+        const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
         const isSameOrUnnumberedCycle = cycleNumber === undefined || cycleNumber <= (meta.fulfilledCycle || 1);
         const isMismatchEarlyCharge = Boolean(meta.cashfreeScheduleMismatch) && periodEndMs > now + fiveDaysMs;
         const isPrematureCycle1Payment = Boolean(
@@ -2282,10 +2307,16 @@ export class PaymentGatewayService {
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No authoritative subscription record found for cancellation ${gatewaySubId}.`);
       }
 
-      let meta: any = {};
-      try {
-        meta = typeof existingSub.metadata === 'string' ? JSON.parse(existingSub.metadata) : (existingSub.metadata || {});
-      } catch {}
+      // Serialize cancellation against concurrent refund / activation transitions on the same customer & row.
+      await this.acquireCustomerTransactionLock(trx, existingSub.customer_id);
+      let cancelLockQuery: any = trx('subscriptions').where({ id: existingSub.id });
+      if (typeof cancelLockQuery.forUpdate === 'function') cancelLockQuery = cancelLockQuery.forUpdate();
+      const freshCancelSub = await cancelLockQuery.first();
+      if (freshCancelSub) {
+        existingSub = freshCancelSub;
+      }
+
+      let meta: any = this.parseJsonRecordSafe(existingSub.metadata);
 
       let hasPaidFulfillment =
         existingSub.status === 'active' ||
@@ -2325,15 +2356,24 @@ export class PaymentGatewayService {
         } catch {}
       }
 
+      const isAlreadyRefunded = existingSub.status === 'refunded' || meta.refunded === true;
       const nextLifecycleStage = hasPaidFulfillment ? 'PAID_SUBSCRIPTION_CANCELLED' : 'UNPAID_CHECKOUT_CANCELLED';
       const nextStatus = existingSub.status === 'superseded'
         ? 'superseded'
-        : (existingSub.status === 'canceled' ? 'canceled' : 'cancelled');
+        : (isAlreadyRefunded
+          ? 'refunded'
+          : (existingSub.status === 'canceled' ? 'canceled' : 'cancelled'));
+      const preservePeriodEndAccess =
+        hasPaidFulfillment &&
+        !isAlreadyRefunded &&
+        existingSub.status !== 'superseded';
 
       meta.cancellation_status = 'CANCELLATION_CONFIRMED';
-      meta.cancelled_at = now;
+      meta.gateway_subscription_status = 'CANCELLED';
+      meta.cancelled_at = meta.cancelled_at || now;
       meta.hadPaidSubscription = hasPaidFulfillment;
       meta.lifecycleStage = nextLifecycleStage;
+      delete meta.lastCancellationError;
       if (!hasPaidFulfillment && meta.reconciliationStatus !== 'PROVIDER_CONFIRMED_UNPAID_EXPIRED') {
         meta.reconciliationStatus = 'UNPAID_CHECKOUT_CANCELLED';
       }
@@ -2341,7 +2381,7 @@ export class PaymentGatewayService {
       await trx('subscriptions').where({ id: existingSub.id }).update({
         status: nextStatus,
         cancelled_at: existingSub.cancelled_at || now,
-        cancel_at_period_end: false,
+        cancel_at_period_end: preservePeriodEndAccess,
         metadata: JSON.stringify(meta),
         updated_at: now
       });
@@ -2356,6 +2396,8 @@ export class PaymentGatewayService {
           subscriptionId: existingSub.id,
           cancellation_status: 'CANCELLATION_CONFIRMED',
           hadPaidSubscription: hasPaidFulfillment,
+          cancelAtPeriodEnd: preservePeriodEndAccess,
+          effectiveUntil: existingSub.current_period_end || null,
           lifecycleStage: nextLifecycleStage,
           subscriptionStatus: nextStatus,
           cancelled_at: now
@@ -2752,6 +2794,26 @@ export class PaymentGatewayService {
     const now = Date.now();
     const database = this.getDb();
     const hasTransaction = typeof (database as any).transaction === 'function';
+
+    // Prevent duplicate purchase of the exact same tier while a paid period is still active
+    // (whether automatic renewal is active OR cancelled-at-period-end). Plan upgrades (e.g. plus -> pro) remain allowed.
+    const existingSubs = await this.querySubscriptions(database, { customer_id: customerId });
+    const sameTierPaid = existingSubs.find((s: any) => s.plan_id === planTier && hasPaidPeriodEntitlement(s, now));
+    if (sameTierPaid) {
+      const isRenewalCancelled =
+        Boolean(sameTierPaid.cancel_at_period_end) ||
+        sameTierPaid.status === 'cancelled' ||
+        sameTierPaid.status === 'canceled';
+      const formattedEnd = sameTierPaid.current_period_end
+        ? new Date(Number(sameTierPaid.current_period_end)).toLocaleDateString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            dateStyle: 'medium'
+          })
+        : 'the end of your billing cycle';
+      throw new Error(
+        `PAID_PERIOD_STILL_ACTIVE: Your ${plan.name} plan is already paid and active until ${formattedEnd} (${isRenewalCancelled ? 'automatic renewal is cancelled' : 'automatic renewal is active'}).`
+      );
+    }
 
     const clientKey = clientOpKey || `op_${customerId}_${planTier}_${currency}_${gateway}`;
     const leaseKey = `checkout:sub:${customerId}`;
@@ -3731,9 +3793,9 @@ export class PaymentGatewayService {
     const freshPurchase = (await trx('subscriptions').where({ id: purchaseRecord.id }).first()) || purchaseRecord;
     const plan = COMMERCIAL_PLANS[planTier] || COMMERCIAL_PLANS.plus;
 
-    // Fetch existing active subscriptions under customer lock to guard against out-of-order / late activations
-    const existingActiveSubs = (await this.querySubscriptions(trx, { customer_id: customerId, status: 'active' }))
-      .filter((s: any) => s.id !== purchaseRecord.id);
+    // Fetch existing paid-entitled subscriptions under customer lock to guard against out-of-order / late activations
+    const existingActiveSubs = (await this.querySubscriptions(trx, { customer_id: customerId }))
+      .filter((s: any) => s.id !== purchaseRecord.id && (s.status === 'active' || hasPaidPeriodEntitlement(s, now)));
 
     const currentCreatedAt = Number(freshPurchase.created_at || 0);
     const newerActiveSub = existingActiveSubs.find((s: any) => Number(s.created_at || 0) > currentCreatedAt);
@@ -5221,8 +5283,8 @@ export class PaymentGatewayService {
               .where({ principal_id: principalId, operation_id: fulfillmentOpId })
               .first();
             if (existingOp && existingOp.status === 'COMPLETED') {
-              const newerActive = (await this.querySubscriptions(trx, { customer_id: sub.customer_id, status: 'active' }))
-                .find((s: any) => s.id !== freshSub.id && Number(s.created_at || 0) > Number(freshSub.created_at || 0));
+              const newerActive = (await this.querySubscriptions(trx, { customer_id: sub.customer_id }))
+                .find((s: any) => s.id !== freshSub.id && (s.status === 'active' || hasPaidPeriodEntitlement(s, now)) && Number(s.created_at || 0) > Number(freshSub.created_at || 0));
               if (
                 existingOp.operation_type === 'late_payment_superseded_recovery' ||
                 freshSub.status === 'superseded' ||
@@ -5314,8 +5376,8 @@ export class PaymentGatewayService {
         }
 
         await this.acquireCustomerTransactionLock(db, sub.customer_id);
-        const newerActiveFallback = (await this.querySubscriptions(db, { customer_id: sub.customer_id, status: 'active' }))
-          .find((s: any) => s.id !== sub.id && Number(s.created_at || 0) > Number(sub.created_at || 0));
+        const newerActiveFallback = (await this.querySubscriptions(db, { customer_id: sub.customer_id }))
+          .find((s: any) => s.id !== sub.id && (s.status === 'active' || hasPaidPeriodEntitlement(s, now)) && Number(s.created_at || 0) > Number(sub.created_at || 0));
         if (newerActiveFallback) {
           return {
             reconciled: false,
@@ -5790,7 +5852,7 @@ export class PaymentGatewayService {
       const existingCust = await this.getDb()('billing_customers').where({ principal_id: principalId }).first();
       customerId = existingCust ? (existingCust as any).id : null;
     } else {
-      const customer = await commercialBillingService.getOrCreateCustomer(principalId).catch(() => null);
+      const customer = await commercialBillingService.getOrCreateCustomer(principalId);
       customerId = customer?.id || null;
     }
 
@@ -5798,11 +5860,24 @@ export class PaymentGatewayService {
       return { success: false, message: 'No billing customer found for principal.', gatewayCancelled: false };
     }
 
-    const sub = await this.getDb()('subscriptions')
-      .where({ customer_id: customerId, status: 'active' })
-      .first();
+    const customerSubs = await this.querySubscriptions(this.getDb(), { customer_id: customerId });
+    const nowCheck = Date.now();
+    const activeSubs = customerSubs
+      .filter((s: any) => s.status === 'active' || s.status === 'authenticated')
+      .sort((a: any, b: any) => Number(b.current_period_end || 0) - Number(a.current_period_end || 0));
+    const sub = activeSubs[0];
 
     if (!sub) {
+      const alreadyCancelledPaid = customerSubs
+        .filter((s: any) => hasPaidPeriodEntitlement(s, nowCheck))
+        .sort((a: any, b: any) => Number(b.current_period_end || 0) - Number(a.current_period_end || 0))[0];
+      if (alreadyCancelledPaid) {
+        return {
+          success: true,
+          message: 'Automatic renewal is already cancelled. Paid entitlements remain active until the end of the current billing period.',
+          gatewayCancelled: true
+        };
+      }
       return { success: false, message: 'No active subscription found.', gatewayCancelled: false };
     }
 
@@ -5820,6 +5895,7 @@ export class PaymentGatewayService {
       process.env.CASHFREE_ENV === 'TEST' ||
       process.env.CASHFREE_APP_ID?.startsWith('TEST');
     let gatewayCancelled = false;
+    let gatewayConfirmedImmediately = false;
     let gatewayError: string | null = null;
 
     if (this.customGatewayTransport && sub.gateway_subscription_id) {
@@ -5849,7 +5925,8 @@ export class PaymentGatewayService {
         const rzpRes = await fetch(`https://api.razorpay.com/v1/subscriptions/${sub.gateway_subscription_id}/cancel`, {
           method: 'POST',
           headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cancel_at_cycle_end: 1 })
+          body: JSON.stringify({ cancel_at_cycle_end: 1 }),
+          signal: AbortSignal.timeout(8000)
         });
         if (rzpRes.ok) {
           gatewayCancelled = true;
@@ -5876,10 +5953,18 @@ export class PaymentGatewayService {
           body: JSON.stringify({
             subscription_id: sub.gateway_subscription_id,
             action: 'CANCEL'
-          })
+          }),
+          signal: AbortSignal.timeout(8000)
         });
         if (cfRes.ok) {
           gatewayCancelled = true;
+          try {
+            const cfData: any = await cfRes.clone().json();
+            const cfStatus = String(cfData?.subscription_status || cfData?.status || '').toUpperCase();
+            if (cfStatus === 'CANCELLED' || cfStatus === 'CANCELED') {
+              gatewayConfirmedImmediately = true;
+            }
+          } catch {}
         } else {
           gatewayError = `Cashfree returned HTTP ${cfRes.status}: ${await cfRes.text()}`;
         }
@@ -5894,50 +5979,113 @@ export class PaymentGatewayService {
       gatewayError = `Live API keys for gateway '${sub.gateway}' are not configured. Provider cancellation cannot proceed safely.`;
     }
 
-    if (!gatewayCancelled) {
-      return {
-        success: false,
-        message: `Provider-side cancellation failed: ${gatewayError || 'Unknown gateway rejection'}. Subscription remains active.`,
-        gatewayCancelled: false
-      };
-    }
-
     const now = Date.now();
-    let meta: any = {};
-    try {
-      meta = typeof sub.metadata === 'string' ? JSON.parse(sub.metadata) : (sub.metadata || {});
-    } catch {}
-    meta.cancellation_status = 'CANCELLATION_REQUESTED';
-    meta.cancellation_requested_at = now;
+    const database = this.getDb() as any;
+    const runPersist = async (trx: any) => {
+      await this.acquireCustomerTransactionLock(trx, customerId!);
+      let freshQ: any = trx('subscriptions').where({ id: sub.id });
+      if (typeof freshQ.forUpdate === 'function') freshQ = freshQ.forUpdate();
+      const freshSub = (await freshQ.first()) || sub;
+      const freshMeta: any = this.parseJsonRecordSafe(freshSub.metadata);
 
-    await this.getDb()('subscriptions').where({ id: sub.id }).update({
-      cancel_at_period_end: true,
-      metadata: JSON.stringify(meta),
-      updated_at: now
-    });
+      if (!gatewayCancelled) {
+        // Never overwrite refunded/cancelled webhook state on cancellation failure
+        if (freshSub.status === 'active' || freshSub.status === 'authenticated') {
+          freshMeta.cancellation_status = 'CANCELLATION_FAILED';
+          freshMeta.lastCancellationError = gatewayError || 'Unknown gateway rejection';
+          freshMeta.lastCancellationAttemptAt = now;
+          await trx('subscriptions').where({ id: freshSub.id }).update({
+            metadata: JSON.stringify(freshMeta),
+            updated_at: now
+          });
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: customerId,
+            event_type: 'SUBSCRIPTION_CANCEL_FAILED',
+            actor_type: 'principal',
+            actor_id: principalId,
+            payload: JSON.stringify({
+              subscriptionId: freshSub.id,
+              gateway: freshSub.gateway,
+              gatewaySubscriptionId: freshSub.gateway_subscription_id,
+              error: freshMeta.lastCancellationError
+            }),
+            created_at: now
+          });
+        }
+        return {
+          success: false,
+          message: `Provider-side cancellation failed: ${gatewayError || 'Unknown gateway rejection'}. Subscription remains active.`,
+          gatewayCancelled: false
+        };
+      }
 
-    await this.getDb()('billing_audit_events').insert({
-      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-      customer_id: customerId,
-      event_type: 'SUBSCRIPTION_CANCEL_SCHEDULED',
-      actor_type: 'principal',
-      actor_id: principalId,
-      payload: JSON.stringify({
-        subscriptionId: sub.id,
-        gateway: sub.gateway,
-        gatewaySubscriptionId: sub.gateway_subscription_id,
-        cancellation_status: 'CANCELLATION_REQUESTED',
-        gatewayCancelled,
-        effectiveEnd: sub.current_period_end
-      }),
-      created_at: now
-    });
+      // If a concurrent refund/supersede landed while awaiting the gateway call, preserve terminal state safely.
+      if (freshSub.status === 'refunded' || freshMeta.refunded === true || freshSub.status === 'superseded') {
+        return {
+          success: true,
+          message: 'Subscription already transitioned due to refund or upgrade.',
+          gatewayCancelled: true
+        };
+      }
 
-    return {
-      success: true,
-      message: 'Subscription marked to cancel at the end of the current billing period. Entitlements remain active until then.',
-      gatewayCancelled: true
+      delete freshMeta.lastCancellationError;
+      const alreadyConfirmedByWebhook =
+        freshSub.status === 'cancelled' ||
+        freshSub.status === 'canceled' ||
+        freshMeta.cancellation_status === 'CANCELLATION_CONFIRMED';
+
+      freshMeta.cancellation_status = (alreadyConfirmedByWebhook || gatewayConfirmedImmediately)
+        ? 'CANCELLATION_CONFIRMED'
+        : 'CANCELLATION_REQUESTED';
+      freshMeta.cancellation_requested_at = freshMeta.cancellation_requested_at || now;
+      if (gatewayConfirmedImmediately || alreadyConfirmedByWebhook) {
+        freshMeta.gateway_subscription_status = 'CANCELLED';
+        freshMeta.hadPaidSubscription = true;
+        freshMeta.lifecycleStage = 'PAID_SUBSCRIPTION_CANCELLED';
+        freshMeta.cancelled_at = freshMeta.cancelled_at || now;
+      }
+
+      const nextStatus = (gatewayConfirmedImmediately || alreadyConfirmedByWebhook)
+        ? (freshSub.status === 'canceled' ? 'canceled' : 'cancelled')
+        : freshSub.status;
+
+      await trx('subscriptions').where({ id: freshSub.id }).update({
+        status: nextStatus,
+        ...(nextStatus === 'cancelled' || nextStatus === 'canceled' ? { cancelled_at: freshSub.cancelled_at || now } : {}),
+        cancel_at_period_end: true,
+        metadata: JSON.stringify(freshMeta),
+        updated_at: now
+      });
+
+      await trx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: customerId,
+        event_type: 'SUBSCRIPTION_CANCEL_SCHEDULED',
+        actor_type: 'principal',
+        actor_id: principalId,
+        payload: JSON.stringify({
+          subscriptionId: freshSub.id,
+          gateway: freshSub.gateway,
+          gatewaySubscriptionId: freshSub.gateway_subscription_id,
+          cancellation_status: freshMeta.cancellation_status,
+          gatewayCancelled,
+          effectiveEnd: freshSub.current_period_end
+        }),
+        created_at: now
+      });
+
+      return {
+        success: true,
+        message: 'Subscription marked to cancel at the end of the current billing period. Entitlements remain active until then.',
+        gatewayCancelled: true
+      };
     };
+
+    if (typeof database.transaction === 'function') {
+      return await database.transaction(runPersist);
+    }
+    return await runPersist(database);
   }
 
   /**
@@ -7230,130 +7378,197 @@ export class PaymentGatewayService {
       return;
     }
 
-    const newCumulativeMinor = currentCumulativeMinor + norm.refundAmountMinor;
-    if (newCumulativeMinor > totalSettledMinor) {
-      throw new Error(
-        `REFUND_EXCEEDS_SETTLED_AMOUNT: Cumulative refunded amount (${newCumulativeMinor} minor units) exceeds settled amount (${totalSettledMinor} minor units)`
-      );
-    }
-
     let creditNoteResult: any = null;
 
+    const revokeSubscriptionGrantCredits = async (revParams: {
+      trx: any;
+      customerId: string;
+      subscriptionId: string;
+      refundRatio?: number;
+      idempotencyKey: string;
+      description: string;
+      refundId: string;
+      refundAmountMinor: number;
+    }): Promise<void> => {
+      if (this.customDbClient) return;
+      const acct = await revParams.trx('credit_accounts')
+        .where({ customer_id: revParams.customerId })
+        .forUpdate()
+        .first();
+      if (!acct) return;
+
+      let grantQ = revParams.trx('credit_grants')
+        .where({ account_id: acct.id })
+        .where('remaining_credits', '>', 0)
+        .orderBy('created_at', 'desc');
+      if (typeof grantQ.forUpdate === 'function') grantQ = grantQ.forUpdate();
+      const grantRows: any[] = await grantQ.select('*');
+
+      const activeMatchingGrants = (grantRows || []).filter((gr: any) => {
+        const gm = this.parseJsonRecordSafe(gr.metadata);
+        if (gm.purchaseId !== revParams.subscriptionId) return false;
+        // Skip already-expired grants so expired credits are not double-deducted from unrelated balance
+        return !gr.expires_at || Number(gr.expires_at) > now;
+      });
+      const totalMatchingRem = activeMatchingGrants.reduce((s, g) => s + Number(g.remaining_credits || 0), 0);
+      if (totalMatchingRem <= 0) return;
+
+      const planCredits = COMMERCIAL_PLANS[params.subRecord.plan_id as PlanTier]?.monthlyPremiumCredits || 0;
+      const desiredRevoke = revParams.refundRatio !== undefined
+        ? Math.min(totalMatchingRem, Math.floor((planCredits > 0 ? planCredits : totalMatchingRem) * revParams.refundRatio))
+        : totalMatchingRem;
+
+      const currentBalance = Number(acct.balance_credits || 0);
+      const reserved = Number(acct.reserved_credits || 0);
+      const safeDeduct = Math.min(Math.max(0, currentBalance - reserved), desiredRevoke);
+      if (safeDeduct <= 0) return;
+
+      let remainingToDeduct = safeDeduct;
+      for (const gr of activeMatchingGrants) {
+        if (remainingToDeduct <= 0) break;
+        const rem = Number(gr.remaining_credits || 0);
+        const take = Math.min(rem, remainingToDeduct);
+        if (take > 0) {
+          await revParams.trx('credit_grants').where({ id: gr.id }).update({ remaining_credits: rem - take });
+          remainingToDeduct -= take;
+        }
+      }
+
+      const newBalance = Math.max(0, currentBalance - safeDeduct);
+      await revParams.trx('credit_accounts')
+        .where({ id: acct.id })
+        .update({ balance_credits: newBalance, updated_at: now });
+      await revParams.trx('credit_transactions').insert({
+        id: `ctx_${crypto.randomUUID().replace(/-/g, '')}`,
+        account_id: acct.id,
+        transaction_type: 'REVOKE',
+        amount_credits: -safeDeduct,
+        balance_before: currentBalance,
+        balance_after: newBalance,
+        idempotency_key: revParams.idempotencyKey,
+        description: revParams.description,
+        metadata: JSON.stringify({
+          subscriptionId: revParams.subscriptionId,
+          refundId: revParams.refundId,
+          refundAmountMinor: revParams.refundAmountMinor
+        }),
+        created_at: now
+      });
+    };
+
     const executeRefund = async (trx: any) => {
-      const isPartialRefund = newCumulativeMinor < totalSettledMinor;
-      const processedRefundIds = Array.isArray(meta.processedRefundIds)
-        ? [...meta.processedRefundIds, norm.refundId]
+      await this.acquireCustomerTransactionLock(trx, params.subRecord.customer_id);
+      let subQ: any = trx('subscriptions').where({ id: params.subRecord.id });
+      if (typeof subQ.forUpdate === 'function') subQ = subQ.forUpdate();
+      const lockedSub = (await subQ.first()) || params.subRecord;
+      const freshMeta = this.parseJsonRecordSafe(lockedSub.metadata);
+      const lockedSettledMinor = Number(lockedSub.amount_minor_units) || totalSettledMinor;
+      const lockedCumulativeMinor = Number(freshMeta.cumulativeRefundedMinorUnits) || 0;
+
+      if (Array.isArray(freshMeta.processedRefundIds) && freshMeta.processedRefundIds.includes(norm.refundId)) {
+        await this.issueDurableCreditNote({
+          trx,
+          subRecord: lockedSub,
+          refundEntity: { id: norm.refundId, payment_id: norm.paymentId, order_id: norm.orderId },
+          refundAmount: norm.refundAmountMajor,
+          refundAmountMinorUnits: norm.refundAmountMinor,
+          isPartialRefund: lockedCumulativeMinor < lockedSettledMinor,
+          gateway: params.gateway,
+          now
+        });
+        return;
+      }
+
+      const lockedNewCumulativeMinor = lockedCumulativeMinor + norm.refundAmountMinor;
+      if (lockedNewCumulativeMinor > lockedSettledMinor) {
+        throw new Error(
+          `REFUND_EXCEEDS_SETTLED_AMOUNT: Cumulative refunded amount (${lockedNewCumulativeMinor} minor units) exceeds settled amount (${lockedSettledMinor} minor units)`
+        );
+      }
+
+      const isPartialRefund = lockedNewCumulativeMinor < lockedSettledMinor;
+      const processedRefundIds = Array.isArray(freshMeta.processedRefundIds)
+        ? [...freshMeta.processedRefundIds, norm.refundId]
         : [norm.refundId];
 
-      meta.refundId = norm.refundId;
-      meta.refundAmount = norm.refundAmountMajor;
-      meta.refundAmountMinorUnits = norm.refundAmountMinor;
-      meta.cumulativeRefundedMinorUnits = newCumulativeMinor;
-      meta.processedRefundIds = processedRefundIds;
-      meta.refundedAt = now;
+      freshMeta.refundId = norm.refundId;
+      freshMeta.refundAmount = norm.refundAmountMajor;
+      freshMeta.refundAmountMinorUnits = norm.refundAmountMinor;
+      freshMeta.cumulativeRefundedMinorUnits = lockedNewCumulativeMinor;
+      freshMeta.processedRefundIds = processedRefundIds;
+      freshMeta.refundedAt = now;
 
       if (isPartialRefund) {
-        meta.partialRefund = true;
-        await trx('subscriptions').where({ id: params.subRecord.id }).update({
-          metadata: JSON.stringify(meta),
+        freshMeta.partialRefund = true;
+        await trx('subscriptions').where({ id: lockedSub.id }).update({
+          metadata: JSON.stringify(freshMeta),
           updated_at: now
         });
 
+        if (lockedSettledMinor > 0 && norm.refundAmountMinor > 0) {
+          await revokeSubscriptionGrantCredits({
+            trx,
+            customerId: lockedSub.customer_id,
+            subscriptionId: lockedSub.id,
+            refundRatio: norm.refundAmountMinor / lockedSettledMinor,
+            idempotencyKey: `partial_revoke:${lockedSub.id}:${norm.refundId}`,
+            description: `Proportional credits adjusted for partial refund on subscription ${lockedSub.id}`,
+            refundId: norm.refundId,
+            refundAmountMinor: norm.refundAmountMinor
+          });
+        }
+
         await trx('billing_audit_events').insert({
           id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-          customer_id: params.subRecord.customer_id,
+          customer_id: lockedSub.customer_id,
           event_type: 'SUBSCRIPTION_PARTIALLY_REFUNDED',
           actor_type: 'gateway_webhook',
           actor_id: norm.refundId,
           payload: JSON.stringify({
-            subscriptionId: params.subRecord.id,
+            subscriptionId: lockedSub.id,
             refundId: norm.refundId,
             refundAmount: norm.refundAmountMajor,
             refundAmountMinorUnits: norm.refundAmountMinor,
-            cumulativeRefundedMinorUnits: newCumulativeMinor,
-            totalAmountMinor: totalSettledMinor,
+            cumulativeRefundedMinorUnits: lockedNewCumulativeMinor,
+            totalAmountMinor: lockedSettledMinor,
             currency: subCurrency,
             gateway: params.gateway
           }),
           created_at: now
         });
       } else {
-        meta.refunded = true;
-        meta.authRefunded = true;
-        const nextRefundStatus = params.subRecord.status === 'superseded' ? 'superseded' : 'refunded';
-        await trx('subscriptions').where({ id: params.subRecord.id }).update({
+        freshMeta.refunded = true;
+        freshMeta.authRefunded = true;
+        const nextRefundStatus = lockedSub.status === 'superseded' ? 'superseded' : 'refunded';
+        await trx('subscriptions').where({ id: lockedSub.id }).update({
           status: nextRefundStatus,
-          metadata: JSON.stringify(meta),
+          metadata: JSON.stringify(freshMeta),
           updated_at: now
         });
 
-        if (!this.customDbClient) {
-          const hasSavepoint = typeof (trx as any).raw === 'function';
-          if (hasSavepoint) {
-            try { await (trx as any).raw('SAVEPOINT sp_refund_credit_revoke'); } catch {}
-          }
-          try {
-            const acct = await trx('credit_accounts')
-              .where({ customer_id: params.subRecord.customer_id })
-              .forUpdate()
-              .first();
-            if (acct) {
-              const grantRows: any[] = await trx('credit_grants')
-                .where({ account_id: acct.id })
-                .where('remaining_credits', '>', 0)
-                .select('*');
-              let revokeTotal = 0;
-              for (const gr of grantRows || []) {
-                const gm = this.parseJsonRecordSafe(gr.metadata);
-                if (gm.purchaseId === params.subRecord.id) {
-                  revokeTotal += Number(gr.remaining_credits || 0);
-                  await trx('credit_grants').where({ id: gr.id }).update({ remaining_credits: 0 });
-                }
-              }
-              if (revokeTotal > 0) {
-                const currentBalance = Number(acct.balance_credits || 0);
-                const actualDeduct = Math.min(currentBalance, revokeTotal);
-                const newBalance = Math.max(0, currentBalance - actualDeduct);
-                await trx('credit_accounts')
-                  .where({ id: acct.id })
-                  .update({ balance_credits: newBalance, updated_at: now });
-                await trx('credit_transactions').insert({
-                  id: `ctx_${crypto.randomUUID().replace(/-/g, '')}`,
-                  account_id: acct.id,
-                  transaction_type: 'REVOKE',
-                  amount_credits: -actualDeduct,
-                  balance_before: currentBalance,
-                  balance_after: newBalance,
-                  idempotency_key: `revoke_refund:${params.subRecord.id}:${norm.refundId}`,
-                  description: `Credits revoked for refunded subscription ${params.subRecord.id}`,
-                  metadata: JSON.stringify({ subscriptionId: params.subRecord.id, refundId: norm.refundId }),
-                  created_at: now
-                });
-              }
-            }
-            if (hasSavepoint) {
-              try { await (trx as any).raw('RELEASE SAVEPOINT sp_refund_credit_revoke'); } catch {}
-            }
-          } catch {
-            if (hasSavepoint) {
-              try { await (trx as any).raw('ROLLBACK TO SAVEPOINT sp_refund_credit_revoke'); } catch {}
-            }
-          }
-        }
+        await revokeSubscriptionGrantCredits({
+          trx,
+          customerId: lockedSub.customer_id,
+          subscriptionId: lockedSub.id,
+          idempotencyKey: `revoke_refund:${lockedSub.id}:${norm.refundId}`,
+          description: `Credits revoked for refunded subscription ${lockedSub.id}`,
+          refundId: norm.refundId,
+          refundAmountMinor: norm.refundAmountMinor
+        });
 
         await trx('billing_audit_events').insert({
           id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-          customer_id: params.subRecord.customer_id,
+          customer_id: lockedSub.customer_id,
           event_type: 'SUBSCRIPTION_REFUNDED',
           actor_type: 'gateway_webhook',
           actor_id: norm.refundId,
           payload: JSON.stringify({
-            subscriptionId: params.subRecord.id,
+            subscriptionId: lockedSub.id,
             refundId: norm.refundId,
             amount: norm.refundAmountMajor,
             refundAmountMinorUnits: norm.refundAmountMinor,
-            cumulativeRefundedMinorUnits: newCumulativeMinor,
-            totalAmountMinor: totalSettledMinor,
+            cumulativeRefundedMinorUnits: lockedNewCumulativeMinor,
+            totalAmountMinor: lockedSettledMinor,
             currency: subCurrency,
             gateway: params.gateway
           }),
@@ -7363,7 +7578,7 @@ export class PaymentGatewayService {
 
       creditNoteResult = await this.issueDurableCreditNote({
         trx,
-        subRecord: params.subRecord,
+        subRecord: lockedSub,
         refundEntity: { id: norm.refundId, payment_id: norm.paymentId, order_id: norm.orderId },
         refundAmount: norm.refundAmountMajor,
         refundAmountMinorUnits: norm.refundAmountMinor,
@@ -7497,7 +7712,13 @@ export class PaymentGatewayService {
       id: string;
       planId: PlanTier;
       gateway: string;
+      status: string;
       cancelAtPeriodEnd: boolean;
+      autoRenewalStatus: 'active' | 'cancelled';
+      cancellationStatus: string | null;
+      cancellationPending: boolean;
+      cancellationFailed: boolean;
+      lastCancellationError: string | null;
       currentPeriodStart: number | null;
       currentPeriodEnd: number | null;
     } | null;
@@ -7517,33 +7738,170 @@ export class PaymentGatewayService {
       canCancelPending: boolean;
       createdAt: number;
     } | null;
+    latestSubscriptionLifecycle: {
+      state:
+        | 'ACTIVE_RENEWING'
+        | 'ACTIVE_CANCEL_SCHEDULED'
+        | 'CANCELLATION_PENDING'
+        | 'CANCELLATION_FAILED'
+        | 'EXPIRED'
+        | 'PAYMENT_PENDING'
+        | 'REFUNDED'
+        | 'FREE';
+      planId: PlanTier | null;
+      planName: string | null;
+      gateway: string | null;
+      currentPeriodEnd: number | null;
+      cancelledAt: number | null;
+      refundedAt: number | null;
+      refundAmount: number | null;
+      creditNoteNumber: string | null;
+      lastError: string | null;
+    };
   }> {
+    const freeLifecycle = {
+      state: 'FREE' as const,
+      planId: null,
+      planName: null,
+      gateway: null,
+      currentPeriodEnd: null,
+      cancelledAt: null,
+      refundedAt: null,
+      refundAmount: null,
+      creditNoteNumber: null,
+      lastError: null
+    };
     try {
       const dbClient = this.getDb() as any;
       const customer = await dbClient('billing_customers').where({ principal_id: principalId }).first();
       if (!customer) {
-        return { activeSubscription: null, pendingSubscription: null };
+        return { activeSubscription: null, pendingSubscription: null, latestSubscriptionLifecycle: freeLifecycle };
       }
 
-      const activeSub = await dbClient('subscriptions')
-        .where({ customer_id: customer.id, status: 'active' })
-        .orderBy('updated_at', 'desc')
-        .first();
+      const now = Date.now();
+      const allSubs = (await this.querySubscriptions(dbClient, { customer_id: customer.id }))
+        .sort((a: any, b: any) => Number(b?.updated_at || b?.created_at || 0) - Number(a?.updated_at || a?.created_at || 0));
 
-      const pendingSub = await dbClient('subscriptions')
-        .where({ customer_id: customer.id })
-        .whereIn('status', ['pending', 'initiating', 'ambiguous_timeout'])
-        .orderBy('created_at', 'desc')
-        .first();
+      const entitledSubs = allSubs
+        .filter((s: any) => hasPaidPeriodEntitlement(s, now))
+        .sort((a: any, b: any) => {
+          const aAct = (a.status === 'active' || a.status === 'authenticated') ? 1 : 0;
+          const bAct = (b.status === 'active' || b.status === 'authenticated') ? 1 : 0;
+          if (aAct !== bAct) return bAct - aAct;
+          return Number(b.current_period_end || 0) - Number(a.current_period_end || 0);
+        });
+      const activeSub = entitledSubs[0] || null;
 
-      const parseMeta = (raw: any): Record<string, any> => {
-        if (!raw) return {};
-        if (typeof raw === 'object') return raw;
-        try { return JSON.parse(raw); } catch { return {}; }
-      };
+      const pendingSub = allSubs
+        .filter((s: any) => s.status === 'pending' || s.status === 'initiating' || s.status === 'ambiguous_timeout')
+        .sort((a: any, b: any) => Number(b?.created_at || 0) - Number(a?.created_at || 0))[0] || null;
+
+      const parseMeta = (raw: any): Record<string, any> => this.parseJsonRecordSafe(raw);
+      const activeMeta = activeSub ? parseMeta(activeSub.metadata) : {};
+      const activeIsCancelledStatus = Boolean(
+        activeSub && (activeSub.status === 'cancelled' || activeSub.status === 'canceled')
+      );
+      const activeCancelAtPeriodEnd = Boolean(activeSub && (activeSub.cancel_at_period_end || activeIsCancelledStatus));
+      const activeCancelStatus = activeSub ? (activeMeta.cancellation_status ? String(activeMeta.cancellation_status) : null) : null;
+      const activeCancellationFailed = Boolean(activeSub && !activeCancelAtPeriodEnd && activeCancelStatus === 'CANCELLATION_FAILED');
+      const activeCancellationPending = Boolean(
+        activeSub &&
+        !activeIsCancelledStatus &&
+        activeCancelAtPeriodEnd &&
+        activeCancelStatus === 'CANCELLATION_REQUESTED' &&
+        activeSub.gateway === 'cashfree'
+      );
 
       const pendingMeta = pendingSub ? parseMeta(pendingSub.metadata) : {};
       const providerDetails = pendingMeta.providerDetails || {};
+
+      let latestSubscriptionLifecycle: {
+        state:
+          | 'ACTIVE_RENEWING'
+          | 'ACTIVE_CANCEL_SCHEDULED'
+          | 'CANCELLATION_PENDING'
+          | 'CANCELLATION_FAILED'
+          | 'EXPIRED'
+          | 'PAYMENT_PENDING'
+          | 'REFUNDED'
+          | 'FREE';
+        planId: PlanTier | null;
+        planName: string | null;
+        gateway: string | null;
+        currentPeriodEnd: number | null;
+        cancelledAt: number | null;
+        refundedAt: number | null;
+        refundAmount: number | null;
+        creditNoteNumber: string | null;
+        lastError: string | null;
+      } = freeLifecycle;
+
+      if (activeSub) {
+        const pId = activeSub.plan_id as PlanTier;
+        const pName = COMMERCIAL_PLANS[pId]?.name || (pId === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
+        const state = activeCancellationFailed
+          ? 'CANCELLATION_FAILED'
+          : activeCancellationPending
+            ? 'CANCELLATION_PENDING'
+            : activeCancelAtPeriodEnd
+              ? 'ACTIVE_CANCEL_SCHEDULED'
+              : 'ACTIVE_RENEWING';
+        latestSubscriptionLifecycle = {
+          state,
+          planId: pId,
+          planName: pName,
+          gateway: activeSub.gateway || null,
+          currentPeriodEnd: activeSub.current_period_end ? Number(activeSub.current_period_end) : null,
+          cancelledAt: activeSub.cancelled_at ? Number(activeSub.cancelled_at) : (activeMeta.cancelled_at ? Number(activeMeta.cancelled_at) : null),
+          refundedAt: null,
+          refundAmount: null,
+          creditNoteNumber: null,
+          lastError: activeCancellationFailed ? (activeMeta.lastCancellationError || 'Gateway cancellation failed.') : null
+        };
+      } else if (pendingSub) {
+        const pId = pendingSub.plan_id as PlanTier;
+        const pName = COMMERCIAL_PLANS[pId]?.name || (pId === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
+        latestSubscriptionLifecycle = {
+          state: 'PAYMENT_PENDING',
+          planId: pId,
+          planName: pName,
+          gateway: pendingSub.gateway || null,
+          currentPeriodEnd: null,
+          cancelledAt: null,
+          refundedAt: null,
+          refundAmount: null,
+          creditNoteNumber: null,
+          lastError: pendingMeta.lastPaymentError || null
+        };
+      } else {
+        // Inspect latest historical paid or refunded subscription (excluding unpaid abandoned checkouts)
+        const priorPaidOrRefunded = allSubs.find((s: any) => {
+          const sm = parseMeta(s.metadata);
+          return (
+            s.status === 'refunded' ||
+            sm.refunded === true ||
+            hasPaidSubscriptionEvidence({ ...s, status: s.status === 'active' || s.status === 'authenticated' ? 'active' : s.status })
+          );
+        });
+        if (priorPaidOrRefunded) {
+          const pm = parseMeta(priorPaidOrRefunded.metadata);
+          const pId = priorPaidOrRefunded.plan_id as PlanTier;
+          const pName = COMMERCIAL_PLANS[pId]?.name || (pId === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
+          const isRefunded = priorPaidOrRefunded.status === 'refunded' || pm.refunded === true;
+          latestSubscriptionLifecycle = {
+            state: isRefunded ? 'REFUNDED' : 'EXPIRED',
+            planId: pId,
+            planName: pName,
+            gateway: priorPaidOrRefunded.gateway || null,
+            currentPeriodEnd: priorPaidOrRefunded.current_period_end ? Number(priorPaidOrRefunded.current_period_end) : null,
+            cancelledAt: priorPaidOrRefunded.cancelled_at ? Number(priorPaidOrRefunded.cancelled_at) : null,
+            refundedAt: pm.refundedAt ? Number(pm.refundedAt) : null,
+            refundAmount: pm.refundAmount !== undefined ? Number(pm.refundAmount) : null,
+            creditNoteNumber: pm.creditNoteNumber || null,
+            lastError: null
+          };
+        }
+      }
 
       return {
         activeSubscription: activeSub
@@ -7551,7 +7909,13 @@ export class PaymentGatewayService {
               id: activeSub.id,
               planId: activeSub.plan_id as PlanTier,
               gateway: activeSub.gateway,
-              cancelAtPeriodEnd: Boolean(activeSub.cancel_at_period_end),
+              status: activeSub.status,
+              cancelAtPeriodEnd: activeCancelAtPeriodEnd,
+              autoRenewalStatus: activeCancelAtPeriodEnd ? 'cancelled' : 'active',
+              cancellationStatus: activeCancelStatus,
+              cancellationPending: activeCancellationPending,
+              cancellationFailed: activeCancellationFailed,
+              lastCancellationError: activeCancellationFailed ? (activeMeta.lastCancellationError || null) : null,
               currentPeriodStart: activeSub.current_period_start ? Number(activeSub.current_period_start) : null,
               currentPeriodEnd: activeSub.current_period_end ? Number(activeSub.current_period_end) : null
             }
@@ -7582,10 +7946,14 @@ export class PaymentGatewayService {
                 createdAt: Number(pendingSub.created_at) || 0
               };
             })()
-          : null
+          : null,
+        latestSubscriptionLifecycle
       };
-    } catch {
-      return { activeSubscription: null, pendingSubscription: null };
+    } catch (err: any) {
+      if (this.customDbClient) {
+        return { activeSubscription: null, pendingSubscription: null, latestSubscriptionLifecycle: freeLifecycle };
+      }
+      throw err;
     }
   }
 

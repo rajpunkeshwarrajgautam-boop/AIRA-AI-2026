@@ -183,7 +183,7 @@ function createMockDb(seed?: {
   return { mockDb, tables };
 }
 
-function signCashfree(payload: unknown, secret: string, ts = '1795620000') {
+function signCashfree(payload: unknown, secret: string, ts = String(Math.floor(Date.now() / 1000))) {
   const rawBody = JSON.stringify(payload);
   const signature = crypto.createHmac('sha256', secret).update(`${ts}${rawBody}`).digest('base64');
   return { rawBody, signature, timestamp: ts };
@@ -413,6 +413,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
     const service = new PaymentGatewayService();
     service.setDbClient(mockDb);
 
+    const cfNowSec = Math.floor(Date.now() / 1000);
     const authWh = signCashfree({
       type: 'SUBSCRIPTION_PAYMENT_SUCCESS',
       event_time: new Date(now).toISOString(),
@@ -426,7 +427,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
         cf_subscription_id: '1479133886088159744',
         authorization_details: { authorization_amount: 1, authorization_status: 'ACTIVE' }
       }
-    }, process.env.CASHFREE_SECRET_KEY!, '1795620001');
+    }, process.env.CASHFREE_SECRET_KEY!, String(cfNowSec));
 
     const statusWh = signCashfree({
       type: 'SUBSCRIPTION_STATUS_CHANGED',
@@ -438,7 +439,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
           subscription_status: 'ACTIVE'
         }
       }
-    }, process.env.CASHFREE_SECRET_KEY!, '1795620002');
+    }, process.env.CASHFREE_SECRET_KEY!, String(cfNowSec + 1));
 
     await service.processCashfreeWebhook(authWh.rawBody, authWh.signature, authWh.timestamp);
     await service.processCashfreeWebhook(statusWh.rawBody, statusWh.signature, statusWh.timestamp);
@@ -508,7 +509,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
         cf_subscription_id: 'cf_sub_399_001',
         cycle_number: 1
       }
-    }, process.env.CASHFREE_SECRET_KEY!, '1795620100');
+    }, process.env.CASHFREE_SECRET_KEY!, String(Math.floor(Date.now() / 1000)));
 
     const res = await service.processCashfreeWebhook(chargeWh.rawBody, chargeWh.signature, chargeWh.timestamp);
     assert.equal(res.status, 'PROCESSED');
@@ -922,6 +923,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
     const service = new PaymentGatewayService();
     service.setDbClient(mockDb);
 
+    const cfDupBase = Math.floor(Date.now() / 1000);
     const wh1 = signCashfree({
       type: 'SUBSCRIPTION_PAYMENT_SUCCESS',
       event_time: new Date(now).toISOString(),
@@ -935,7 +937,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
         cf_subscription_id: 'cf_sub_dup',
         cycle_number: 1
       }
-    }, process.env.CASHFREE_SECRET_KEY!, '1795620200');
+    }, process.env.CASHFREE_SECRET_KEY!, String(cfDupBase));
 
     // Second distinct webhook delivery with same payment ID
     const wh2 = signCashfree({
@@ -951,7 +953,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
         cf_subscription_id: 'cf_sub_dup',
         cycle_number: 1
       }
-    }, process.env.CASHFREE_SECRET_KEY!, '1795620201');
+    }, process.env.CASHFREE_SECRET_KEY!, String(cfDupBase + 1));
 
     const r1 = await service.processCashfreeWebhook(wh1.rawBody, wh1.signature, wh1.timestamp);
     const r2 = await service.processCashfreeWebhook(wh2.rawBody, wh2.signature, wh2.timestamp);
@@ -999,6 +1001,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
       authorisation_details: { authorization_status: 'ACTIVE', authorization_amount: 1 }
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
 
+    const cfConcBase = Math.floor(Date.now() / 1000);
     const chargeWh = signCashfree({
       type: 'SUBSCRIPTION_PAYMENT_SUCCESS',
       event_time: new Date(now).toISOString(),
@@ -1012,7 +1015,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
         cf_subscription_id: 'cf_sub_conc_1',
         cycle_number: 1
       }
-    }, process.env.CASHFREE_SECRET_KEY!, '1795620300');
+    }, process.env.CASHFREE_SECRET_KEY!, String(cfConcBase));
 
     const [whResult, cancelResult] = await Promise.all([
       service.processCashfreeWebhook(chargeWh.rawBody, chargeWh.signature, chargeWh.timestamp),
@@ -1033,7 +1036,7 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
           subscription_status: 'CANCELLED'
         }
       }
-    }, process.env.CASHFREE_SECRET_KEY!, '1795620305');
+    }, process.env.CASHFREE_SECRET_KEY!, String(cfConcBase + 5));
     await service.processCashfreeWebhook(laterCancelWh.rawBody, laterCancelWh.signature, laterCancelWh.timestamp);
 
     const subRow = tables.subscriptions.find(s => s.id === subId);
