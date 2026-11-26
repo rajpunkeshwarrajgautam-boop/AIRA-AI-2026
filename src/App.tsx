@@ -261,7 +261,17 @@ function App() {
 
       const orderIdParam = url.searchParams.get('order_id') || url.searchParams.get('sub_id') || url.searchParams.get('subscription_id') || url.searchParams.get('cf_id') || url.searchParams.get('session_id');
       if (orderIdParam) {
-        setToastMessage(`Payment authorization submitted (${orderIdParam}). Syncing subscription state...`);
+        const returnGateway = url.searchParams.get('gateway') || 'cashfree';
+        try {
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem('aira_cashfree_return_sub', JSON.stringify({
+              subId: orderIdParam,
+              gateway: returnGateway,
+              timestamp: Date.now()
+            }));
+          }
+        } catch {}
+        setToastMessage(`Verifying payment & activating subscription (${orderIdParam})...`);
         url.searchParams.delete('order_id');
         url.searchParams.delete('sub_id');
         url.searchParams.delete('subscription_id');
@@ -2062,6 +2072,10 @@ useEffect(() => {
             conversations={conversations}
             projects={projects}
             initialTab={settingsInitialTab}
+            onEntitlementsUpdated={(planId) => {
+              setUserTier(planId);
+              setEntitlementState('verified');
+            }}
             onImportData={data => {
               setConversations(data.conversations);
               setProjects(data.projects);
@@ -2173,6 +2187,10 @@ useEffect(() => {
           isOpen={isPricingOpen}
           onClose={() => setIsPricingOpen(false)}
           currentPlan={userTier}
+          onSubscriptionActivated={(planId) => {
+            setUserTier(planId);
+            setEntitlementState('verified');
+          }}
         />
 
         <VisionStudioModal

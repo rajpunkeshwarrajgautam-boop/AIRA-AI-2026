@@ -121,6 +121,7 @@ interface SettingsModalProps {
   onOpenPricing?: () => void;
   onOpenShortcuts?: () => void;
   userTier?: PlanTier;
+  onEntitlementsUpdated?: (planId: PlanTier) => void;
   onTriggerUpgrade?: (trigger: string) => void;
   onRestartOnboarding?: () => void;
   onResetAnnouncements?: () => void;
@@ -141,6 +142,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenPricing,
   onOpenShortcuts,
   userTier = 'guest',
+  onEntitlementsUpdated,
   onTriggerUpgrade,
   onRestartOnboarding,
   onResetAnnouncements,
@@ -219,6 +221,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     nextScheduleDate: string | null;
     lastPaymentError: string | null;
     hasAuthorizedMandate?: boolean;
+    immediateAuthChargeExpected?: boolean;
     canCancelPending?: boolean;
     createdAt: number;
   }
@@ -275,6 +278,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         // invalidate stale client session and adopt guest state gracefully instead of permanently crashing.
         neonAuth.saveSession(null);
         setCurrentUser(null);
+      } else if (planId !== userTier) {
+        onEntitlementsUpdated?.(planId);
       }
 
       const now = new Date();
@@ -306,7 +311,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } finally {
       setIsUsageLoading(false);
     }
-  }, [isGuestUser]);
+  }, [isGuestUser, onEntitlementsUpdated, userTier]);
 
   const [invoices, setInvoices] = useState<any[]>([]);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
@@ -317,8 +322,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isCancellingPending, setIsCancellingPending] = useState(false);
   const [reconcileMessage, setReconcileMessage] = useState<string | null>(null);
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
+  const returnReconciledSubRef = useRef<string | null>(null);
 
-  const handleReconcilePending = async (subscriptionId: string) => {
+  const fetchInvoices = useCallback(async () => {
+    if (isGuestUser) return;
+    setIsLoadingInvoices(true);
+    setInvoicesError(null);
+    try {
+      const res = await authenticatedApiFetch('/api/billing/invoices');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({} as Record<string, any>));
+        throw new Error(errData?.error || 'Unable to load billing history right now.');
+      }
+      const data = await res.json();
+      setInvoices(Array.isArray(data?.invoices) ? data.invoices : []);
+    } catch (err: any) {
+      setInvoices([]);
+      setInvoicesError(err?.message || 'Unable to load billing history right now.');
+    } finally {
+      setIsLoadingInvoices(false);
+    }
+  }, [isGuestUser]);
+
+  const handleReconcilePending = useCallback(async (subscriptionId: string) => {
     setIsReconcilingPending(true);
     setReconcileMessage(null);
     try {
@@ -335,7 +361,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } finally {
       setIsReconcilingPending(false);
     }
-  };
+  }, [fetchUsage, fetchInvoices]);
 
   const handleCancelPending = async (subscriptionId: string, allowCancelAuthorizedMandate = false) => {
     setIsCancellingPending(true);
@@ -385,26 +411,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const fetchInvoices = useCallback(async () => {
-    if (isGuestUser) return;
-    setIsLoadingInvoices(true);
-    setInvoicesError(null);
-    try {
-      const res = await authenticatedApiFetch('/api/billing/invoices');
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({} as Record<string, any>));
-        throw new Error(errData?.error || 'Unable to load billing history right now.');
-      }
-      const data = await res.json();
-      setInvoices(Array.isArray(data?.invoices) ? data.invoices : []);
-    } catch (err: any) {
-      setInvoices([]);
-      setInvoicesError(err?.message || 'Unable to load billing history right now.');
-    } finally {
-      setIsLoadingInvoices(false);
-    }
-  }, [isGuestUser]);
-
   const handleCancelSubscription = async () => {
     if (!window.confirm('Are you sure you want to cancel your recurring subscription? Your entitlements will remain active until the end of the current billing cycle.')) {
       return;
@@ -433,8 +439,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (isOpen) {
       void fetchUsage();
       void fetchInvoices();
+      if (!isGuestUser) {
+        try {
+          if (typeof sessionStorage !== 'undefined') {
+            const rawReturn = sessionStorage.getItem('aira_cashfree_return_sub');
+            if (rawReturn) {
+              const parsed = JSON.parse(rawReturn);
+              sessionStorage.removeItem('aira_cashfree_return_sub');
+              if (parsed?.subId && returnReconciledSubRef.current !== parsed.subId) {
+                returnReconciledSubRef.current = parsed.subId;
+                void handleReconcilePending(String(parsed.subId));
+              }
+            }
+          }
+        } catch {}
+      }
     }
-  }, [isOpen, userTier, fetchUsage, fetchInvoices]);
+  }, [isOpen, isGuestUser, userTier, fetchUsage, fetchInvoices, handleReconcilePending]);
 
   const activePlanId: PlanTier = usageData ? usageData.planId : (isGuestUser ? 'guest' : (userTier || 'free'));
   const activePlanDef = COMMERCIAL_PLANS[activePlanId] || COMMERCIAL_PLANS.free;
@@ -976,12 +997,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 {pending.lastPaymentError ? (
                                   <>Last gateway notice: <span className="text-red-500 font-medium">{pending.lastPaymentError}</span>. Verify status or cancel this pending checkout to retry.</>
                                 ) : hasMandate ? (
-                                  <>
-                                    Mandate authorized (₹1 verification). Paid tier activates only after Cycle 1 settlement
-                                    {pending.nextScheduleDate ? (
-                                      <> — first scheduled debit: <strong className="text-claude-text-light dark:text-white">{new Date(pending.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST</strong>.</>
-                                    ) : '.'}
-                                  </>
+                                  pending.immediateAuthChargeExpected ? (
+                                    <>
+                                      Mandate authorized; verifying full Cycle 1 settlement with {gwLabel} before activating paid features.
+                                      {pending.nextScheduleDate ? (
+                                        <> Next scheduled auto-renewal: <strong className="text-claude-text-light dark:text-white">{new Date(pending.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST</strong>.</>
+                                      ) : null}
+                                    </>
+                                  ) : (
+                                    <>
+                                      Mandate authorized (₹1 verification). Paid tier activates only after Cycle 1 settlement
+                                      {pending.nextScheduleDate ? (
+                                        <> — first scheduled debit: <strong className="text-claude-text-light dark:text-white">{new Date(pending.nextScheduleDate).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' })} IST</strong>.</>
+                                      ) : '.'}
+                                    </>
+                                  )
                                 ) : (
                                   <>No completed payment is recorded for this {gwLabel} checkout yet. Verify payment status if you completed it, or cancel it to choose another plan or gateway.</>
                                 )}

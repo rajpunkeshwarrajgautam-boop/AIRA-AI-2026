@@ -275,6 +275,7 @@ interface PendingCheckoutSummary {
   nextScheduleDate?: string | null;
   lastPaymentError?: string | null;
   hasAuthorizedMandate?: boolean;
+  immediateAuthChargeExpected?: boolean;
   canCancelPending?: boolean;
 }
 
@@ -289,9 +290,21 @@ function buildFriendlyPendingNotice(p: PendingCheckoutSummary): string {
     return `Your previous ${planLabel} checkout via ${gwLabel} did not complete (${p.lastPaymentError}). Verify payment status or cancel the pending checkout to try another plan or payment method.`;
   }
   if (p.hasAuthorizedMandate || (p.gateway === 'cashfree' && (p.gatewaySubscriptionStatus === 'ACTIVE' || p.authorizationStatus === 'ACTIVE'))) {
+    if (p.immediateAuthChargeExpected) {
+      return `Your ${planLabel} mandate authorization on ${gwLabel} was recorded; we are verifying full first-payment settlement before unlocking paid access. Click "Verify / Reconcile Status" to check settlement or cancel this mandate.`;
+    }
     return `An e-mandate for ${planLabel} via ${gwLabel} is already authorized. ${scheduleStr ? `First subscription charge is scheduled for ${scheduleStr}; paid access activates upon settlement.` : 'Awaiting first recurring charge settlement.'} You can verify its status or cancel the authorized mandate before starting another plan.`;
   }
   return `You have an unfinished ${planLabel} checkout with ${gwLabel}. Verify payment status if you completed it, or cancel the pending checkout to switch plans or payment methods.`;
+}
+
+interface ActivatedConfirmationSummary {
+  planId: PlanTier;
+  planName: string;
+  creditsAvailable?: number;
+  nextRenewalDate?: string | null;
+  invoiceNumber?: string | null;
+  paymentRef?: string | null;
 }
 
 interface PricingModalProps {
@@ -299,13 +312,15 @@ interface PricingModalProps {
   onClose: () => void;
   currentPlan?: PlanTier;
   onSelectPlan?: (planId: PlanTier, currency: CurrencyCode) => void;
+  onSubscriptionActivated?: (planId: PlanTier) => void;
 }
 
 export const PricingModal: React.FC<PricingModalProps> = ({
   isOpen,
   onClose,
   currentPlan = 'free',
-  onSelectPlan
+  onSelectPlan,
+  onSubscriptionActivated
 }) => {
   const [currency, setCurrency] = useState<CurrencyCode>('INR');
   const [gateway, setGateway] = useState<'razorpay' | 'cashfree'>('razorpay');
@@ -331,6 +346,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
   const setLoadingPlan = (tier: PlanTier | null) => setActivePlanTier(tier);
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
+  const [activatedSummary, setActivatedSummary] = useState<ActivatedConfirmationSummary | null>(null);
+  const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
   const [pendingCheckout, setPendingCheckout] = useState<PendingCheckoutSummary | null>(null);
   const [checkoutAvailable, setCheckoutAvailable] = useState<boolean>(false);
   const [_billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
@@ -869,59 +886,88 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 description: `AIRA ${tier.toUpperCase()} Monthly Subscription`,
                 amount: data.amount,
                 currency: data.currency,
-                handler: function (response: any) {
-                  const paymentRef = response.razorpay_payment_id || response.razorpay_subscription_id || data.orderId;
-                  setCheckoutState('AWAITING_CONFIRMATION');
-                  setCheckoutNotice(`Payment authorized (Ref: ${paymentRef}). Confirming subscription with secure ledger...`);
+                  handler: function (response: any) {
+                    const paymentRef = response.razorpay_payment_id || response.razorpay_subscription_id || data.orderId;
+                    setCheckoutState('AWAITING_CONFIRMATION');
+                    setCheckoutNotice(`Payment authorized (Ref: ${paymentRef}). Confirming subscription with secure ledger...`);
 
-                  // Bounded exponential polling (5 attempts) against authoritative server state
-                  let attempts = 0;
-                  const pollIntervals = [1000, 2500, 4500, 7000, 10000];
+                    // Bounded exponential polling + active reconcile trigger for immediate Cycle 1 activation
+                    let attempts = 0;
+                    const pollIntervals = [750, 2000, 3500, 5500, 8000];
 
-                  const pollEntitlements = async () => {
-                    if (!isMountedRef.current) return;
-                    attempts++;
-                    try {
-                      const verifyRes = await authenticatedApiFetch('/api/billing/entitlements');
-                      if (verifyRes.ok) {
-                        const ent = await verifyRes.json();
-                        if (ent.plan === tier) {
-                          try {
-                            if (typeof sessionStorage !== 'undefined') {
-                              sessionStorage.removeItem('aira_unresolved_checkout');
-                            }
-                          } catch {}
-                          setCheckoutState('COMPLETED');
-                          setCheckoutNotice(`Subscription active: Welcome to AIRA ${tier.toUpperCase()}!`);
-                          setTimeout(() => {
-                            if (isMountedRef.current) onClose();
-                          }, 1200);
-                          return;
-                        }
-                      }
-                    } catch {}
-
-                    if (attempts < pollIntervals.length) {
-                      pollingTimerRef.current = setTimeout(pollEntitlements, pollIntervals[attempts]);
-                    } else {
-                      // Exhausted polling window without throwing error; explain reconciliation status
-                      setCheckoutState('RECONCILIATION_REQUIRED');
-                      isSubmittingRef.current = false;
-                      setCheckoutNotice('Payment received. Your subscription is activating in the background. Please refresh in a moment.');
+                    const pollEntitlements = async () => {
+                      if (!isMountedRef.current) return;
+                      attempts++;
                       try {
-                        if (typeof sessionStorage !== 'undefined') {
-                          sessionStorage.setItem('aira_unresolved_checkout', JSON.stringify({
-                            status: 'RECONCILIATION_REQUIRED',
-                            notice: 'Payment received. Your subscription is activating in the background. Please refresh in a moment.',
-                            timestamp: Date.now()
-                          }));
+                        if (data.purchaseId) {
+                          await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(data.purchaseId)}/reconcile`, {
+                            method: 'POST',
+                            body: JSON.stringify({})
+                          }).catch(() => null);
+                        }
+                        const [verifyRes, summaryRes, invoicesRes] = await Promise.all([
+                          authenticatedApiFetch('/api/billing/entitlements'),
+                          authenticatedApiFetch('/api/billing/summary').catch(() => null),
+                          authenticatedApiFetch('/api/billing/invoices').catch(() => null)
+                        ]);
+                        if (verifyRes.ok) {
+                          const ent = await verifyRes.json();
+                          if (ent.plan === tier) {
+                            const summaryData = summaryRes && summaryRes.ok ? await summaryRes.json().catch(() => null) : null;
+                            const invoicesData = invoicesRes && invoicesRes.ok ? await invoicesRes.json().catch(() => null) : null;
+                            const latestInv = Array.isArray(invoicesData?.invoices) ? invoicesData.invoices[0] : null;
+                            const renewalEpoch = summaryData?.activeSubscription?.currentPeriodEnd;
+                            const formattedRenewal = renewalEpoch
+                              ? new Date(Number(renewalEpoch)).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })
+                              : null;
+
+                            try {
+                              if (typeof sessionStorage !== 'undefined') {
+                                sessionStorage.removeItem('aira_unresolved_checkout');
+                              }
+                            } catch {}
+
+                            setPendingCheckout(null);
+                            activePendingSubIdRef.current = null;
+                            isSubmittingRef.current = false;
+                            setActivePlanTier(null);
+                            setActivatedSummary({
+                              planId: tier,
+                              planName: tier === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
+                              creditsAvailable: typeof ent.availableCredits === 'number' ? ent.availableCredits : undefined,
+                              nextRenewalDate: formattedRenewal,
+                              invoiceNumber: latestInv?.invoiceNumber || null,
+                              paymentRef
+                            });
+                            setCheckoutState('COMPLETED');
+                            setCheckoutNotice(`Subscription active: Welcome to ${tier === 'pro' ? 'AIRA Pro' : 'AIRA Plus'}! Paid features and monthly credits are now unlocked.`);
+                            onSubscriptionActivated?.(tier);
+                            return;
+                          }
                         }
                       } catch {}
-                    }
-                  };
 
-                  pollingTimerRef.current = setTimeout(pollEntitlements, pollIntervals[0]);
-                },
+                      if (attempts < pollIntervals.length) {
+                        pollingTimerRef.current = setTimeout(pollEntitlements, pollIntervals[attempts]);
+                      } else {
+                        // Exhausted polling window without throwing error; explain reconciliation status
+                        setCheckoutState('RECONCILIATION_REQUIRED');
+                        isSubmittingRef.current = false;
+                        setCheckoutNotice('Payment received. Your subscription is activating in the background. Click "Verify / Reconcile Status" in a moment.');
+                        try {
+                          if (typeof sessionStorage !== 'undefined') {
+                            sessionStorage.setItem('aira_unresolved_checkout', JSON.stringify({
+                              status: 'RECONCILIATION_REQUIRED',
+                              notice: 'Payment received. Your subscription is activating in the background. Please refresh in a moment.',
+                              timestamp: Date.now()
+                            }));
+                          }
+                        } catch {}
+                      }
+                    };
+
+                    pollingTimerRef.current = setTimeout(pollEntitlements, pollIntervals[0]);
+                  },
                 modal: {
                   ondismiss: function () {
                     if (!isMountedRef.current) return;
@@ -1061,8 +1107,68 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         </div>
 
+        {/* Activated Immediate Subscription Confirmation Banner */}
+        {activatedSummary && checkoutState === 'COMPLETED' && (
+          <div className="mx-6 md:mx-8 mt-4 p-4 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-100 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="font-bold text-sm text-white flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{activatedSummary.planName} Activated Immediately</span>
+              </div>
+              <p className="text-emerald-200/90 leading-relaxed">
+                {typeof activatedSummary.creditsAvailable === 'number'
+                  ? `${activatedSummary.creditsAvailable.toLocaleString()} premium credits available now.`
+                  : 'Monthly premium credits unlocked.'}
+                {activatedSummary.nextRenewalDate ? ` Next auto-renewal: ${activatedSummary.nextRenewalDate} IST.` : ''}
+                {activatedSummary.paymentRef ? ` Ref: ${activatedSummary.paymentRef}.` : ''}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {activatedSummary.invoiceNumber && (
+                <button
+                  type="button"
+                  disabled={downloadingInvoiceNum === activatedSummary.invoiceNumber}
+                  onClick={async () => {
+                    const invNum = activatedSummary.invoiceNumber!;
+                    setDownloadingInvoiceNum(invNum);
+                    try {
+                      const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invNum)}/download`);
+                      if (res.ok) {
+                        const html = await res.text();
+                        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `AIRA-GST-Invoice-${invNum}.html`;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      }
+                    } finally {
+                      setDownloadingInvoiceNum(null);
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/40 text-white font-semibold text-[11px] whitespace-nowrap transition-colors disabled:opacity-50"
+                >
+                  {downloadingInvoiceNum === activatedSummary.invoiceNumber
+                    ? 'Downloading…'
+                    : `Download GST Invoice (${activatedSummary.invoiceNumber})`}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-white/15 text-white font-semibold text-[11px] whitespace-nowrap transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Status / Error & Pending Recovery Notice */}
-        {(checkoutNotice || pendingCheckout) && (() => {
+        {(checkoutNotice || pendingCheckout) && !(activatedSummary && checkoutState === 'COMPLETED') && (() => {
           const targetPendingId = pendingCheckout?.id || activePendingSubIdRef.current || null;
           const hasMandate = Boolean(pendingCheckout?.hasAuthorizedMandate);
           return (
@@ -1195,13 +1301,26 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         )}
 
-        {currency === 'INR' && gateway === 'cashfree' && (
-          <div className="px-6 md:px-8 pt-2">
-            <p className="text-[11px] text-stone-400">
-              Cashfree e-mandate setup authorizes a nominal ₹1 mandate verification today; first recurring billing occurs on the scheduled charge date (T+1 day+ per NPCI rules) and paid tier access activates after settlement. Choose Razorpay for immediate Cycle 1 activation.
-            </p>
+        <div className="px-6 md:px-8 pt-2">
+          <div className="rounded-xl border border-white/10 bg-stone-950/60 px-3.5 py-2.5 text-[11px] text-stone-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              {currency === 'INR' ? (
+                <>
+                  <strong className="text-white">Immediate Activation ({gateway === 'cashfree' ? 'Cashfree UPI AutoPay / Card' : 'Razorpay'}):</strong>{' '}
+                  Full Cycle 1 payment (Plus ₹399 or Pro ₹999, GST inclusive) is collected upfront today; paid access, credits, and your GST invoice unlock immediately upon confirmation.
+                </>
+              ) : (
+                <>
+                  <strong className="text-white">Immediate Activation:</strong>{' '}
+                  Full Cycle 1 payment ($7.99 Plus / $19.99 Pro) charges today with immediate plan & credit unlock.
+                </>
+              )}
+            </div>
+            <span className="text-stone-400 whitespace-nowrap shrink-0">
+              Monthly auto-debits follow NPCI / card mandate rules · Cancel anytime
+            </span>
           </div>
-        )}
+        </div>
 
         {/* Pricing Cards Grid */}
         <div className="p-6 md:p-8 grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1256,7 +1375,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
               </div>
               <p className="text-[11px] text-stone-400 mb-6">
-                {currency === 'INR' ? '₹338.14 + 18% GST · Tax compliant' : '$7.99 / month · Global billing'}
+                {currency === 'INR' ? 'Pay ₹399 now (₹338.14 + 18% GST) · Auto-renews monthly' : 'Pay $7.99 now · Auto-renews monthly'}
               </p>
 
               <div className="space-y-3 text-xs text-stone-300">
@@ -1317,7 +1436,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
               </div>
               <p className="text-[11px] text-stone-400 mb-6">
-                {currency === 'INR' ? '₹846.61 + 18% GST · Tax compliant' : '$19.99 / month · Global billing'}
+                {currency === 'INR' ? 'Pay ₹999 now (₹846.61 + 18% GST) · Auto-renews monthly' : 'Pay $19.99 now · Auto-renews monthly'}
               </p>
 
               <div className="space-y-3 text-xs text-stone-300">
