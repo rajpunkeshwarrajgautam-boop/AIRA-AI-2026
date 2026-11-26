@@ -27,7 +27,7 @@ A localized price book entry defining billing interval (`monthly`), currency (`I
 
 ### `Subscription` (`subscriptions`)
 The durable state machine governing a user's plan lifecycle:
-- States: `created`, `authenticated`, `active`, `pending`, `past_due`, `paused`, `cancelled`, `expired`.
+- States: `initiating`, `pending`, `ambiguous_timeout`, `active`, `superseded`, `past_due`, `paused`, `canceled`, `cancelled`, `expired`, `failed`, `refunded`.
 - Contains: `current_period_start`, `current_period_end`, `gateway_subscription_id`, `cancel_at_period_end`.
 
 ---

@@ -258,6 +258,33 @@ function App() {
         const targetTab = tabParam && validTabs.includes(tabParam.toLowerCase()) ? tabParam.toLowerCase() : 'general';
         handleOpenSettings(targetTab);
       }
+
+      const orderIdParam = url.searchParams.get('order_id') || url.searchParams.get('sub_id') || url.searchParams.get('subscription_id') || url.searchParams.get('cf_id') || url.searchParams.get('session_id');
+      if (orderIdParam) {
+        const returnGateway = url.searchParams.get('gateway') || 'cashfree';
+        try {
+          if (typeof sessionStorage !== 'undefined') {
+            sessionStorage.setItem('aira_cashfree_return_sub', JSON.stringify({
+              subId: orderIdParam,
+              gateway: returnGateway,
+              timestamp: Date.now()
+            }));
+          }
+        } catch {}
+        setToastMessage(`Verifying payment & activating subscription (${orderIdParam})...`);
+        url.searchParams.delete('order_id');
+        url.searchParams.delete('sub_id');
+        url.searchParams.delete('subscription_id');
+        url.searchParams.delete('cf_id');
+        url.searchParams.delete('session_id');
+        url.searchParams.delete('gateway');
+        url.searchParams.delete('payment_id');
+        url.searchParams.delete('signature');
+        url.searchParams.delete('razorpay_payment_id');
+        url.searchParams.delete('razorpay_signature');
+        url.searchParams.delete('razorpay_subscription_id');
+        window.history.replaceState({}, document.title, url.pathname + (url.search ? url.search : '') + url.hash);
+      }
     } catch {
       // ignore URL parsing errors
     }
@@ -2045,6 +2072,10 @@ useEffect(() => {
             conversations={conversations}
             projects={projects}
             initialTab={settingsInitialTab}
+            onEntitlementsUpdated={(planId) => {
+              setUserTier(planId);
+              setEntitlementState('verified');
+            }}
             onImportData={data => {
               setConversations(data.conversations);
               setProjects(data.projects);
@@ -2156,6 +2187,10 @@ useEffect(() => {
           isOpen={isPricingOpen}
           onClose={() => setIsPricingOpen(false)}
           currentPlan={userTier}
+          onSubscriptionActivated={(planId) => {
+            setUserTier(planId);
+            setEntitlementState('verified');
+          }}
         />
 
         <VisionStudioModal

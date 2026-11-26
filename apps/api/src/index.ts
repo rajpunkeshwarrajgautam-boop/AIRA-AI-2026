@@ -1,9 +1,14 @@
 import { createBuilderRoutes } from './builder-routes.js';
-import { createBillingRoutes } from './billing-routes.js';
+import {
+  createBillingRoutes,
+  createCashfreeReturnHandler,
+  createWorkerOutboxHandler,
+  createInternalReconcileAmbiguousHandler
+} from './billing-routes.js';
 import { createVisionRoutes } from './vision-routes.js';
 import { createAccountRoutes, createAnnouncementRoutes } from './account-routes.js';
 import { commercialBillingService, StandardQuotaExceededError, StandardChatReplayError, StandardChatPlanChangedError } from './billing/commercial-billing-service.js';
-import { paymentGatewayService } from './billing/payment-gateway-service.js';
+import { paymentGatewayService, isTerminalError, isInternationalUsdBillingEnabled, extractRawWebhookBody } from './billing/payment-gateway-service.js';
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
@@ -28,6 +33,7 @@ import {
   requireCapability,
   EntitlementServiceUnavailableError
 } from './middleware/entitlement-guard.js';
+import { isStagingSandboxRehearsalActive } from './billing/staging-sandbox-rehearsal-guard.js';
 import {
   ModelRouter,
   PlanRestrictionError,
@@ -145,6 +151,12 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3001;
 
 // Audit 28: Body size limits and strict CORS with credentials
 app.use((req: Request, res: Response, next: NextFunction) => {
+  // Cashfree browser form-POST return bridge arrives with Origin: payments*.cashfree.com.
+  // It performs zero state mutations or credentialed reads and immediately emits a 303 redirect.
+  if (req.path === '/api/billing/cashfree/return') {
+    return next();
+  }
+
   const forwardedHost = req.headers['x-forwarded-host'];
   const host = typeof forwardedHost === 'string'
     ? forwardedHost.split(',')[0].trim()
@@ -526,42 +538,65 @@ app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
 // -----------------------------------------------------------------------
 app.post('/api/billing/webhook/razorpay', async (req: Request, res: Response) => {
   const signature = req.headers['x-razorpay-signature'] as string;
-  const rawBody = typeof (req as any).rawBody === 'string'
-    ? (req as any).rawBody
-    : JSON.stringify(req.body);
+  const rawBody = extractRawWebhookBody(req);
+  if (rawBody === null) {
+    return res.status(400).json({ error: 'WEBHOOK_RAW_BODY_REQUIRED: Unparsed raw request body is required for cryptographic HMAC verification.' });
+  }
 
   try {
     const result = await paymentGatewayService.processRazorpayWebhook(rawBody, signature);
     res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[RazorpayWebhookError]', err.message);
-    res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 400).json({ error: err.message });
+    const isTerminal = isTerminalError(err);
+    const isForbidden = err?.message?.startsWith('FORBIDDEN_WEBHOOK');
+    const isUnavailable = err?.message?.startsWith('BILLING_UNAVAILABLE');
+    const statusCode = isForbidden ? 403 : isTerminal ? 400 : isUnavailable ? 503 : 500;
+    res.status(statusCode).json({ error: err.message });
   }
 });
 
 app.post('/api/billing/webhook/cashfree', async (req: Request, res: Response) => {
-  const signature = req.headers['x-webhook-signature'] as string;
-  const timestamp = req.headers['x-webhook-timestamp'] as string;
-  const rawBody = typeof (req as any).rawBody === 'string'
-    ? (req as any).rawBody
-    : JSON.stringify(req.body);
+  const signature = (req.headers['x-webhook-signature'] || req.headers['x-cashfree-signature']) as string;
+  const timestamp = (req.headers['x-webhook-timestamp'] || req.headers['x-cashfree-timestamp']) as string;
+  const idempotencyHeader = (
+    req.headers['x-idempotency-key'] ||
+    req.headers['x-idempotency-header'] ||
+    req.headers['idempotency-key'] ||
+    req.headers['x-webhook-event-id'] ||
+    req.headers['x-event-id']
+  ) as string | undefined;
+  const rawBody = extractRawWebhookBody(req);
+  if (rawBody === null) {
+    return res.status(400).json({ error: 'WEBHOOK_RAW_BODY_REQUIRED: Unparsed raw request body is required for cryptographic HMAC verification.' });
+  }
 
   try {
-    const result = await paymentGatewayService.processCashfreeWebhook(rawBody, signature, timestamp);
+    const result = await paymentGatewayService.processCashfreeWebhook(
+      rawBody,
+      signature,
+      timestamp,
+      idempotencyHeader ? { idempotencyHeader } : undefined
+    );
     res.status(200).json({ ok: true, ...result });
   } catch (err: any) {
     console.error('[CashfreeWebhookError]', err.message);
-    res.status(err?.message?.startsWith('BILLING_UNAVAILABLE') ? 503 : 400).json({ error: err.message });
+    const isTerminal = isTerminalError(err);
+    const isForbidden = err?.message?.startsWith('FORBIDDEN_WEBHOOK');
+    const isUnavailable = err?.message?.startsWith('BILLING_UNAVAILABLE');
+    const statusCode = isForbidden ? 403 : isTerminal ? 400 : isUnavailable ? 503 : 500;
+    res.status(statusCode).json({ error: err.message });
   }
 });
 
 // Public commercial plan definitions and pricing catalog (accessible to guests and landing pages)
 app.get('/api/billing/plans', (_req: Request, res: Response) => {
   const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
-  const isSandbox = process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+  const isRehearsal = isStagingSandboxRehearsalActive();
+  const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
   const billingStatus = isCheckoutAvailable
     ? 'active'
-    : (isSandbox ? 'sandbox' : 'checkout_disabled');
+    : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
   res.json({
     plans: Object.values(COMMERCIAL_PLANS).map(plan => ({
@@ -570,10 +605,23 @@ app.get('/api/billing/plans', (_req: Request, res: Response) => {
     })),
     topupPacks: [],
     billingStatus,
-    checkoutAvailable: isCheckoutAvailable,
+    checkoutAvailable: isCheckoutAvailable || isRehearsal,
+    internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
     featuresCertified: true
   });
 });
+
+// Cashfree gateway POST/GET return bridge and machine-to-machine outbox/reconciliation routes
+// must run before user-session principal enforcement while preserving fail-closed route auth.
+const cashfreeReturnHandler = createCashfreeReturnHandler();
+app.get('/api/billing/cashfree/return', cashfreeReturnHandler);
+app.post('/api/billing/cashfree/return', cashfreeReturnHandler);
+
+const billingWorkerOutboxHandler = createWorkerOutboxHandler();
+app.get('/api/billing/worker/process-outbox', billingWorkerOutboxHandler);
+app.post('/api/billing/worker/process-outbox', billingWorkerOutboxHandler);
+
+app.post('/api/billing/internal/reconcile-ambiguous', createInternalReconcileAmbiguousHandler());
 
 // Announcements delivery and user-isolated dismissal sync (P3 remediation)
 app.use('/api/announcements', createAnnouncementRoutes());
