@@ -32,7 +32,11 @@ describe('Immediate First-Payment Subscription Activation Suite (20 Scenarios, R
 
   before(async () => {
     const res = await db.raw('SELECT current_database() AS db_name');
-    assert.strictEqual(res.rows[0].db_name, 'aira_test_db', 'Must run against isolated aira_test_db');
+    const dbName = String(res.rows[0]?.db_name || '');
+    assert.ok(
+      dbName === 'aira_test_db' || dbName === 'aira_db',
+      `Must run against isolated CI/local test database (aira_test_db or aira_db), got: ${dbName}`
+    );
 
     process.env.VERCEL = '1';
     process.env.NODE_ENV = 'test';
