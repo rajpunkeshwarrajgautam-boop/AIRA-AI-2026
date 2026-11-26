@@ -293,7 +293,8 @@ export function createBillingRoutes(): Router {
         billingStatus,
         featuresCertified: true,
         activeSubscription: lifecycle.activeSubscription,
-        pendingSubscription: lifecycle.pendingSubscription
+        pendingSubscription: lifecycle.pendingSubscription,
+        subscriptionLifecycle: (lifecycle as any).latestSubscriptionLifecycle || null
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to fetch billing summary.' });
@@ -472,12 +473,13 @@ export function createBillingRoutes(): Router {
       res.json(checkout);
     } catch (err: any) {
       const isIdempotencyConflict = err?.message?.startsWith('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH') || err?.message?.startsWith('IDEMPOTENCY_CONFLICT');
+      const isPaidPeriodActive = err?.message?.startsWith('PAID_PERIOD_STILL_ACTIVE');
       const isValidationError = err?.message?.startsWith('VALIDATION_ERROR');
       const isRehearsalDenied = err?.message?.startsWith('REHEARSAL_') || err?.message?.includes('SECURITY_VIOLATION');
       const isBillingUnavailable = err?.message?.startsWith('BILLING_UNAVAILABLE');
       const isConcurrent = err?.message?.startsWith('CONCURRENT_CHECKOUT_IN_PROGRESS');
       const isAmbiguous = err?.message?.startsWith('GATEWAY_AMBIGUOUS_OUTCOME');
-      const status = isIdempotencyConflict ? 409 : (isValidationError ? 400 : (isConcurrent ? 409 : (isBillingUnavailable ? 503 : (isRehearsalDenied ? 403 : (isAmbiguous ? 504 : 500)))));
+      const status = (isIdempotencyConflict || isPaidPeriodActive || isConcurrent) ? 409 : (isValidationError ? 400 : (isBillingUnavailable ? 503 : (isRehearsalDenied ? 403 : (isAmbiguous ? 504 : 500))));
 
       if (status === 500) {
         console.error('[BillingRoutes] Subscription checkout failed unexpectedly:', {
@@ -502,15 +504,17 @@ export function createBillingRoutes(): Router {
       res.status(status).json({
         error: isIdempotencyConflict
           ? 'IDEMPOTENCY_CONFLICT'
-          : (isValidationError
-            ? 'VALIDATION_ERROR'
-            : (isConcurrent
-              ? 'CONCURRENT_CHECKOUT_IN_PROGRESS'
-              : (isBillingUnavailable
-                ? 'BILLING_UNAVAILABLE'
-                : (isRehearsalDenied
-                  ? 'REHEARSAL_REJECTED'
-                  : (isAmbiguous ? 'GATEWAY_AMBIGUOUS_OUTCOME' : 'CHECKOUT_FAILED'))))),
+          : (isPaidPeriodActive
+            ? 'PAID_PERIOD_STILL_ACTIVE'
+            : (isValidationError
+              ? 'VALIDATION_ERROR'
+              : (isConcurrent
+                ? 'CONCURRENT_CHECKOUT_IN_PROGRESS'
+                : (isBillingUnavailable
+                  ? 'BILLING_UNAVAILABLE'
+                  : (isRehearsalDenied
+                    ? 'REHEARSAL_REJECTED'
+                    : (isAmbiguous ? 'GATEWAY_AMBIGUOUS_OUTCOME' : 'CHECKOUT_FAILED')))))),
         message: status === 500
           ? 'Unable to initiate subscription checkout with the payment provider. Please try again later or contact support.'
           : err.message,

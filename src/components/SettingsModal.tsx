@@ -204,9 +204,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     id: string;
     planId: PlanTier;
     gateway: string;
+    status?: string;
     cancelAtPeriodEnd: boolean;
+    autoRenewalStatus?: 'active' | 'cancelled';
+    cancellationStatus?: string | null;
+    cancellationPending?: boolean;
+    cancellationFailed?: boolean;
+    lastCancellationError?: string | null;
     currentPeriodStart: number | null;
     currentPeriodEnd: number | null;
+  }
+
+  interface SubscriptionLifecycleSummary {
+    state:
+      | 'ACTIVE_RENEWING'
+      | 'ACTIVE_CANCEL_SCHEDULED'
+      | 'CANCELLATION_PENDING'
+      | 'CANCELLATION_FAILED'
+      | 'EXPIRED'
+      | 'PAYMENT_PENDING'
+      | 'REFUNDED'
+      | 'FREE';
+    planId: PlanTier | null;
+    planName: string | null;
+    gateway: string | null;
+    currentPeriodEnd: number | null;
+    cancelledAt: number | null;
+    refundedAt: number | null;
+    refundAmount: number | null;
+    creditNoteNumber: string | null;
+    lastError: string | null;
   }
 
   interface PendingSubscriptionSummary {
@@ -240,16 +267,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     billingStatus: string;
     activeSubscription: ActiveSubscriptionSummary | null;
     pendingSubscription: PendingSubscriptionSummary | null;
+    subscriptionLifecycle: SubscriptionLifecycleSummary | null;
   }
 
   const isGuestUser = userTier === 'guest' || !currentUser;
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   const [isUsageLoading, setIsUsageLoading] = useState(false);
   const [usageError, setUsageError] = useState(false);
+  const [summaryUnavailable, setSummaryUnavailable] = useState(false);
 
   const fetchUsage = useCallback(async () => {
     setIsUsageLoading((prev) => (usageData ? prev : true));
     setUsageError(false);
+    setSummaryUnavailable(false);
     try {
       const [res, summaryRes] = await Promise.all([
         authenticatedApiFetch('/api/billing/entitlements'),
@@ -257,7 +287,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       ]);
       if (!res.ok) throw new Error('Unable to verify current entitlements.');
       const entitlements = await res.json();
-      const summary = summaryRes && summaryRes.ok ? await summaryRes.json().catch(() => null) : null;
+      let summary: any = null;
+      if (summaryRes && summaryRes.ok) {
+        summary = await summaryRes.json().catch(() => null);
+      } else if (!isGuestUser && (entitlements.plan === 'plus' || entitlements.plan === 'pro')) {
+        setSummaryUnavailable(true);
+      }
       const planId = entitlements.plan as PlanTier;
       if (!Object.prototype.hasOwnProperty.call(COMMERCIAL_PLANS, planId) ||
           !Number.isFinite(entitlements.dailyStandardChatRemaining) ||
@@ -302,7 +337,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         checkoutAvailable,
         billingStatus: serverBillingStatus,
         activeSubscription: summary?.activeSubscription || null,
-        pendingSubscription: summary?.pendingSubscription || null
+        pendingSubscription: summary?.pendingSubscription || null,
+        subscriptionLifecycle: summary?.subscriptionLifecycle || null
       });
     } catch (err) {
       console.warn('[SettingsModal] fetchUsage error:', err);
@@ -420,15 +456,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const res = await authenticatedApiFetch('/api/billing/subscription/cancel', {
         method: 'POST'
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as Record<string, any>));
       if (res.ok && data.success) {
         setCancelMessage(data.message || 'Subscription cancellation scheduled at period end.');
         await fetchUsage();
         await fetchInvoices();
       } else {
+        await fetchUsage();
         alert(data.error || data.message || 'Failed to cancel subscription.');
       }
     } catch (err: any) {
+      await fetchUsage().catch(() => {});
       alert(err.message || 'Error communicating with billing server.');
     } finally {
       setIsCancellingSub(false);
@@ -895,14 +933,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <div>
                           <div className="flex items-center gap-2">
                             <h3 className="text-base font-bold text-claude-text-light dark:text-white">
-                              {activePlanDef.name}
+                              {usageData?.activeSubscription?.cancelAtPeriodEnd && !usageData.activeSubscription.cancellationPending && usageData.activeSubscription.currentPeriodEnd
+                                ? `${activePlanDef.name} — Active until ${new Date(usageData.activeSubscription.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })}`
+                                : activePlanDef.name}
                             </h3>
                             <span className={`px-2 py-0.5 rounded-md text-xs font-medium ${
                               activePlanId === 'guest'
                                 ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20'
-                                : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                                : usageData?.activeSubscription?.cancellationPending
+                                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/20'
+                                  : usageData?.activeSubscription?.cancelAtPeriodEnd
+                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/20'
+                                    : summaryUnavailable
+                                      ? 'bg-stone-500/15 text-stone-600 dark:text-stone-300 border border-stone-500/20'
+                                      : 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
                             }`}>
-                              {activePlanId === 'guest' ? 'Trial Session' : 'Active Plan'}
+                              {activePlanId === 'guest'
+                                ? 'Trial Session'
+                                : usageData?.activeSubscription?.cancellationPending
+                                  ? 'Cancellation Pending'
+                                  : usageData?.activeSubscription?.cancelAtPeriodEnd
+                                    ? 'Automatic renewal: Cancelled'
+                                    : summaryUnavailable
+                                      ? 'Renewal Status Unverified'
+                                      : 'Active Plan'}
                             </span>
                           </div>
                           <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
@@ -1277,43 +1331,126 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
 
                   {/* Active Subscription Management & Cancellation */}
-                  {(activePlanId === 'plus' || activePlanId === 'pro') && (
-                    <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <h4 className="text-xs font-bold text-claude-text-light dark:text-white">
-                            Active Subscription Management
-                          </h4>
-                          <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
-                            {usageData?.activeSubscription?.cancelAtPeriodEnd
-                              ? `Cancellation scheduled. Your paid entitlements remain active until ${usageData.activeSubscription.currentPeriodEnd ? new Date(usageData.activeSubscription.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' }) : 'period end'}.`
-                              : usageData?.activeSubscription?.currentPeriodEnd
-                                ? `Next automatic renewal: ${new Date(usageData.activeSubscription.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })} IST. Cancel anytime before renewal.`
-                                : 'Recurring plan renewal via e-mandate. Cancellation stops renewal at the end of your billing cycle.'}
-                          </p>
-                        </div>
-                        {usageData?.activeSubscription?.cancelAtPeriodEnd ? (
-                          <span className="px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-semibold whitespace-nowrap">
-                            Cancellation Scheduled
-                          </span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={handleCancelSubscription}
-                            disabled={isCancellingSub}
-                            className="px-3 py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-semibold transition-colors disabled:opacity-50 whitespace-nowrap"
-                          >
-                            {isCancellingSub ? 'Processing...' : 'Cancel Subscription'}
-                          </button>
-                        )}
-                      </div>
-                      {cancelMessage && (
-                        <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs">
-                          {cancelMessage}
-                        </div>
-                      )}
+                  {(activePlanId === 'plus' || activePlanId === 'pro') && summaryUnavailable && (
+                    <div className="p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 text-xs flex items-center justify-between gap-3">
+                      <span className="text-amber-800 dark:text-amber-200">
+                        Unable to verify subscription renewal status right now. Retry before managing cancellation.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void fetchUsage()}
+                        className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-800 dark:text-amber-200 font-semibold whitespace-nowrap"
+                      >
+                        Retry Status Check
+                      </button>
                     </div>
                   )}
+                  {(activePlanId === 'plus' || activePlanId === 'pro') && !summaryUnavailable && (() => {
+                    const activeSub = usageData?.activeSubscription;
+                    const lifecycleState = usageData?.subscriptionLifecycle?.state;
+                    const endDateText = activeSub?.currentPeriodEnd
+                      ? `${new Date(activeSub.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })}`
+                      : 'end of current period';
+                    const isCancellationFailed = Boolean(activeSub?.cancellationFailed || lifecycleState === 'CANCELLATION_FAILED');
+                    const isCancellationPending = Boolean(activeSub?.cancellationPending || lifecycleState === 'CANCELLATION_PENDING');
+                    const isRenewalCancelled = Boolean(activeSub?.cancelAtPeriodEnd || lifecycleState === 'ACTIVE_CANCEL_SCHEDULED');
+                    return (
+                      <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 space-y-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h4 className="text-xs font-bold text-claude-text-light dark:text-white">
+                                {isRenewalCancelled && !isCancellationPending
+                                  ? `${activePlanDef.name} — Active until ${endDateText}`
+                                  : isCancellationPending
+                                    ? `${activePlanDef.name} — Cancellation Pending`
+                                    : `${activePlanDef.name} — Active and renewing`}
+                              </h4>
+                              {isRenewalCancelled && !isCancellationPending && (
+                                <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[10px] font-semibold">
+                                  Automatic renewal: Cancelled
+                                </span>
+                              )}
+                              {!isRenewalCancelled && !isCancellationFailed && (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[10px] font-semibold">
+                                  Active and renewing
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-relaxed">
+                              {isCancellationFailed ? (
+                                <>
+                                  Cancellation could not be confirmed with the payment provider ({activeSub?.lastCancellationError || 'Gateway error'}). Automatic renewal remains active — please retry cancellation.
+                                </>
+                              ) : isCancellationPending ? (
+                                <>
+                                  Cancellation requested with the payment gateway. Your paid entitlements remain active until {endDateText} IST while confirmation settles.
+                                </>
+                              ) : isRenewalCancelled ? (
+                                <>
+                                  Automatic renewal: Cancelled · No further recurring payments will be charged for this subscription. Paid plan features and remaining credits stay active until {endDateText} IST.
+                                </>
+                              ) : activeSub?.currentPeriodEnd ? (
+                                <>Next automatic renewal: {endDateText} IST. Cancel anytime before renewal without losing your current paid cycle.</>
+                              ) : (
+                                <>Recurring plan renewal via e-mandate. Cancellation stops renewal at the end of your billing cycle.</>
+                              )}
+                            </p>
+                          </div>
+                          {isCancellationPending ? (
+                            <span className="px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-semibold whitespace-nowrap self-start sm:self-center">
+                              Cancellation Pending
+                            </span>
+                          ) : isRenewalCancelled ? (
+                            <span className="px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-xs font-semibold whitespace-nowrap self-start sm:self-center">
+                              Automatic renewal: Cancelled
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={handleCancelSubscription}
+                              disabled={isCancellingSub}
+                              className="px-3 py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-semibold transition-colors disabled:opacity-50 whitespace-nowrap self-start sm:self-center"
+                            >
+                              {isCancellingSub ? 'Processing...' : (isCancellationFailed ? 'Retry Cancellation' : 'Cancel Subscription')}
+                            </button>
+                          )}
+                        </div>
+                        {cancelMessage && (
+                          <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs">
+                            {cancelMessage}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Historical Expired / Refunded Subscription Notice (when on Free) */}
+                  {activePlanId === 'free' && (usageData?.subscriptionLifecycle?.state === 'EXPIRED' || usageData?.subscriptionLifecycle?.state === 'REFUNDED') && (() => {
+                    const lc = usageData.subscriptionLifecycle!;
+                    const endDateText = lc.currentPeriodEnd
+                      ? new Date(lc.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })
+                      : null;
+                    return (
+                      <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/40 dark:bg-claude-surface2-dark/40 text-xs space-y-1">
+                        <div className="font-bold text-claude-text-light dark:text-white flex items-center gap-2">
+                          <span>
+                            {lc.state === 'REFUNDED'
+                              ? `${lc.planName || 'Subscription'} — Refunded`
+                              : `${lc.planName || 'Subscription'} — Expired`}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md bg-stone-500/15 border border-stone-500/30 text-stone-600 dark:text-stone-300 text-[10px] font-semibold">
+                            {lc.state === 'REFUNDED' ? 'Refunded' : 'Expired'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark leading-relaxed">
+                          {lc.state === 'REFUNDED'
+                            ? `Your ${lc.planName || 'paid'} subscription payment was refunded${lc.creditNoteNumber ? ` (Credit Note ${lc.creditNoteNumber})` : ''}. Paid plan benefits have ended and your historical GST invoices remain preserved below.`
+                            : `Your ${lc.planName || 'paid'} billing period ended${endDateText ? ` on ${endDateText} IST` : ''} with automatic renewal cancelled. No further recurring charges will occur; upgrade anytime to resume paid benefits.`}
+                        </p>
+                      </div>
+                    );
+                  })()}
 
                   {/* Tax-Compliant Invoices & Billing History */}
                   {!isGuestUser && (

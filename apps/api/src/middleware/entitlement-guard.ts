@@ -65,7 +65,11 @@ export async function resolveCallerTier(req: Request, _options: { failClosed?: b
   try {
     const customer = await commercialBillingService.getOrCreateCustomer(principalId);
     const sub = await commercialBillingService.getActiveSubscription(customer.id);
-    if (sub?.planId && (sub.status === 'active' || sub.status === 'authenticated')) {
+    if (
+      sub?.planId &&
+      sub.currentPeriodEnd > Date.now() &&
+      (sub.status === 'active' || sub.status === 'authenticated' || sub.cancelAtPeriodEnd)
+    ) {
       const parsed = PlanTierSchema.safeParse(sub.planId);
       if (parsed.success && (parsed.data === 'plus' || parsed.data === 'pro')) {
         return parsed.data;
