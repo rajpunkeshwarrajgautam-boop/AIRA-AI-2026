@@ -1287,7 +1287,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
                             {usageData?.activeSubscription?.cancelAtPeriodEnd
                               ? `Cancellation scheduled. Your paid entitlements remain active until ${usageData.activeSubscription.currentPeriodEnd ? new Date(usageData.activeSubscription.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' }) : 'period end'}.`
-                              : 'Recurring plan renewal via e-mandate. Cancellation stops renewal at the end of your billing cycle.'}
+                              : usageData?.activeSubscription?.currentPeriodEnd
+                                ? `Next automatic renewal: ${new Date(usageData.activeSubscription.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })} IST. Cancel anytime before renewal.`
+                                : 'Recurring plan renewal via e-mandate. Cancellation stops renewal at the end of your billing cycle.'}
                           </p>
                         </div>
                         {usageData?.activeSubscription?.cancelAtPeriodEnd ? (

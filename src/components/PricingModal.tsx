@@ -525,6 +525,32 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       if (res.ok && data?.reconciled) {
         clearPendingState();
         if (data.status === 'active') {
+          try {
+            const [entRes, sumRes, invRes] = await Promise.all([
+              authenticatedApiFetch('/api/billing/entitlements').catch(() => null),
+              authenticatedApiFetch('/api/billing/summary').catch(() => null),
+              authenticatedApiFetch('/api/billing/invoices').catch(() => null)
+            ]);
+            const ent = entRes && entRes.ok ? await entRes.json().catch(() => null) : null;
+            const sum = sumRes && sumRes.ok ? await sumRes.json().catch(() => null) : null;
+            const inv = invRes && invRes.ok ? await invRes.json().catch(() => null) : null;
+            const confirmedPlan: PlanTier =
+              ent?.plan === 'pro' || ent?.plan === 'plus'
+                ? ent.plan
+                : (data.planId === 'pro' ? 'pro' : 'plus');
+            const latestInv = Array.isArray(inv?.invoices) ? inv.invoices[0] : null;
+            const renewalEpoch = sum?.activeSubscription?.currentPeriodEnd;
+            setActivatedSummary({
+              planId: confirmedPlan,
+              planName: confirmedPlan === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
+              creditsAvailable: typeof ent?.availableCredits === 'number' ? ent.availableCredits : undefined,
+              nextRenewalDate: renewalEpoch
+                ? new Date(Number(renewalEpoch)).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })
+                : null,
+              invoiceNumber: data.invoiceNumber || latestInv?.invoiceNumber || null
+            });
+            onSubscriptionActivated?.(confirmedPlan);
+          } catch {}
           setCheckoutState('COMPLETED');
         }
         setCheckoutNotice(data.message || 'Checkout status verified.');
