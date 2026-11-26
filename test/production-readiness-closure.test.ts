@@ -100,7 +100,7 @@ describe('Production Release Readiness & Distributed Safety Closure', () => {
     }
   });
 
-  it('3. Stale pending subscription superseded by newer active subscription does not mislead lifecycle or block upgrades', async () => {
+  it('3. Properly superseded checkout is hidden from pending lifecycle, while uncancelled legacy pending surfaces safely', async () => {
     const svc = new PaymentGatewayService();
     const now = Date.now();
     const subs = [
@@ -108,13 +108,13 @@ describe('Production Release Readiness & Distributed Safety Closure', () => {
         id: 'pur_stale_pending_plus',
         customer_id: 'cust_stale_1',
         plan_id: 'plus',
-        status: 'pending',
+        status: 'superseded',
         gateway: 'razorpay',
         currency: 'INR',
         amount_minor_units: 39900,
         metadata: JSON.stringify({}),
         created_at: now - 100000,
-        updated_at: now - 100000
+        updated_at: now - 10000
       },
       {
         id: 'pur_active_pro',
@@ -166,9 +166,10 @@ describe('Production Release Readiness & Distributed Safety Closure', () => {
     svc.setDbClient(mockDb);
     const lifecycle = await svc.getCustomerBillingLifecycleState('usr_stale_1');
     assert.equal(lifecycle.activeSubscription?.id, 'pur_active_pro');
-    assert.equal(lifecycle.pendingSubscription, null, 'Older abandoned pending checkout must not mislead active subscriber');
+    assert.equal(lifecycle.pendingSubscription, null, 'Properly superseded checkout must not surface as pending');
 
-    // Conversely, an authorized mandate newer or preserved without active sub MUST still surface
+    // Conversely, an unresolved row still in pending status MUST surface transparently (never silently ignored locally)
+    subs[0].status = 'pending';
     subs[0].metadata = JSON.stringify({ gateway_auth_status: 'ACTIVE', gateway_subscription_status: 'ACTIVE' });
     const withMandate = await svc.getCustomerBillingLifecycleState('usr_stale_1');
     assert.equal(withMandate.pendingSubscription?.id, 'pur_stale_pending_plus');
