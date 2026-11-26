@@ -21,6 +21,26 @@ export interface WebhookVerificationResult {
   error?: string;
 }
 
+/**
+ * Extracts exact unparsed webhook payload text from an Express request without
+ * falling back to re-serializing req.body (fail-closed HMAC integrity per ADR 0002).
+ */
+export function extractRawWebhookBody(req: { rawBody?: unknown; body?: unknown }): string | null {
+  if (typeof req?.rawBody === 'string') {
+    return req.rawBody;
+  }
+  if (Buffer.isBuffer(req?.rawBody)) {
+    return req.rawBody.toString('utf8');
+  }
+  if (typeof req?.body === 'string') {
+    return req.body;
+  }
+  if (Buffer.isBuffer(req?.body)) {
+    return req.body.toString('utf8');
+  }
+  return null;
+}
+
 export interface CreditTopupPack {
   id: string;
   name: string;
@@ -59,6 +79,11 @@ export interface InvoiceRecord {
   cgstAmount?: number;
   sgstAmount?: number;
   igstAmount?: number;
+  taxRate?: number;
+  cgstRate?: number;
+  sgstRate?: number;
+  igstRate?: number;
+  taxRateVersion?: string;
   sacCode: string;
   supplierName: string;
   supplierGstin?: string;
@@ -434,6 +459,161 @@ export class PaymentGatewayService {
   constructor() {
     this.razorpaySecret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
     this.cashfreeSecret = process.env.CASHFREE_WEBHOOK_SECRET || process.env.CASHFREE_SECRET_KEY || '';
+  }
+
+  /**
+   * Queries subscription rows compatibly across both Knex/PostgreSQL and lightweight mock DB builders.
+   */
+  private async querySubscriptions(dbOrTrx: any, filter: Record<string, unknown>): Promise<any[]> {
+    const q: any = dbOrTrx('subscriptions').where(filter);
+    const raw: any = typeof q.select === 'function'
+      ? await q.select('*')
+      : (typeof q.orderBy === 'function'
+          ? await q.orderBy('created_at', 'desc')
+          : (typeof q.first === 'function' ? await q.first() : await q));
+    const rows = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object' && 'id' in raw
+        ? [raw]
+        : [];
+    return rows.filter((r: any) =>
+      r && Object.entries(filter).every(([k, v]) => r[k] === v)
+    );
+  }
+
+  /**
+   * Acquires a PostgreSQL transaction-scoped advisory lock per customer to serialize
+   * concurrent activation/superseding transitions across serverless instances.
+   * Fails closed on PostgreSQL lock errors; skips cleanly for non-PG mock clients.
+   */
+  private async acquireCustomerTransactionLock(trx: any, customerId: string): Promise<void> {
+    if (!customerId || typeof trx?.raw !== 'function') {
+      return;
+    }
+    const isPg = trx.client?.config?.client === 'pg' || typeof trx.client === 'object';
+    if (!isPg) {
+      return;
+    }
+    await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`sub_cust_lock:${customerId}`]);
+  }
+
+  private async supersedeCustomerSubscriptionRow(params: {
+    trx: any;
+    targetSub: any;
+    newSubId: string;
+    customerId: string;
+    planTier: PlanTier;
+    gateway: string;
+    principalId: string;
+    now: number;
+    previousStatus?: string;
+  }): Promise<void> {
+    const { trx, targetSub, newSubId, customerId, planTier, gateway, principalId, now, previousStatus } = params;
+    const oldMeta = this.parseJsonRecordSafe(targetSub.metadata);
+    await trx('subscriptions').where({ id: targetSub.id }).update({
+      status: 'superseded',
+      metadata: JSON.stringify({
+        ...oldMeta,
+        supersededBy: newSubId,
+        supersededAt: now
+      }),
+      updated_at: now
+    });
+
+    await trx('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: customerId,
+      event_type: 'SUBSCRIPTION_SUPERSEDED',
+      actor_type: 'system',
+      actor_id: newSubId,
+      payload: JSON.stringify({
+        oldSubscriptionId: targetSub.id,
+        oldGatewaySubscriptionId: targetSub.gateway_subscription_id,
+        ...(previousStatus ? { previousStatus } : {}),
+        newSubscriptionId: newSubId,
+        planTier,
+        gateway
+      }),
+      created_at: now
+    });
+
+    if (targetSub.gateway_subscription_id) {
+      await this.scheduleGatewayMandateCancellation(
+        targetSub.id,
+        targetSub.gateway as 'razorpay' | 'cashfree',
+        targetSub.gateway_subscription_id,
+        principalId,
+        customerId,
+        trx,
+        newSubId
+      );
+    }
+  }
+
+  private async recordIdempotentOperationSafe(params: {
+    trx: any;
+    principalId: string;
+    operationId: string;
+    operationType: string;
+    responseBody: Record<string, unknown>;
+    now: number;
+  }): Promise<void> {
+    const { trx, principalId, operationId, operationType, responseBody, now } = params;
+    try {
+      let ins = trx('idempotent_operations').insert({
+        key: `${principalId}:${operationId}`,
+        principal_id: principalId,
+        operation_id: operationId,
+        operation_type: operationType,
+        payload_hash: '',
+        status: 'COMPLETED',
+        response_status: 200,
+        response_body: JSON.stringify(responseBody),
+        locked_until: 0,
+        created_at: now,
+        updated_at: now
+      });
+      if (ins && typeof ins.onConflict === 'function') {
+        ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
+      }
+      await ins;
+    } catch (idempErr: any) {
+      console.warn(`[PaymentGateway] Could not persist ${operationType} idempotency record:`, idempErr?.message);
+    }
+  }
+
+  private async correlateRefundSubscription(
+    trx: any,
+    gatewayOrderId?: string,
+    gatewayPaymentId?: string
+  ): Promise<any> {
+    if (gatewayOrderId) {
+      const byOrder = await trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId }).first();
+      if (byOrder) return byOrder;
+    }
+    if (!gatewayPaymentId) {
+      return null;
+    }
+    const candidateQuery = trx('subscriptions').whereIn('status', ['active', 'pending', 'cancelled', 'canceled', 'superseded', 'refunded']);
+    if (typeof candidateQuery.select !== 'function') {
+      return null;
+    }
+    const candidateSubs = await candidateQuery.select('*');
+    const matches = (candidateSubs || []).filter((s: any) => {
+      const m = this.parseJsonRecordSafe(s?.metadata);
+      const dupMatch = Array.isArray(m.duplicateCyclePayments) &&
+        m.duplicateCyclePayments.some((d: any) => d?.paymentId === gatewayPaymentId);
+      return (
+        m.lastPaymentId === gatewayPaymentId ||
+        m.initialPaymentId === gatewayPaymentId ||
+        m.auth_payment_id === gatewayPaymentId ||
+        dupMatch
+      );
+    });
+    if (matches.length > 1) {
+      throw new TerminalRejectionError(`AMBIGUOUS_CORRELATION: Multiple subscription records matched refunded payment ID ${gatewayPaymentId}.`);
+    }
+    return matches[0] || null;
   }
 
   /**
@@ -1319,24 +1499,18 @@ export class PaymentGatewayService {
 
       let purchaseRecord: any = null;
 
-      // Lookup Step A: Query by explicit validated subscription ID
+      // Lookup Step A: Query by explicit validated subscription ID (read-only; lock acquired per-customer below)
       if (resolvedSubscriptionId) {
-        let q = trx('subscriptions').where({ gateway_subscription_id: resolvedSubscriptionId });
-        if (typeof q.forUpdate === 'function') q = q.forUpdate();
-        purchaseRecord = await q.first();
+        purchaseRecord = await trx('subscriptions').where({ gateway_subscription_id: resolvedSubscriptionId }).first();
 
         if (!purchaseRecord) {
-          let qFallback = trx('subscriptions').where({ id: resolvedSubscriptionId });
-          if (typeof qFallback.forUpdate === 'function') qFallback = qFallback.forUpdate();
-          purchaseRecord = await qFallback.first();
+          purchaseRecord = await trx('subscriptions').where({ id: resolvedSubscriptionId }).first();
         }
       }
 
       // Lookup Step B: Query by verified notes purchase_id
       if (!purchaseRecord && notesPurchaseId && typeof notesPurchaseId === 'string' && notesPurchaseId.startsWith('pur_')) {
-        let q = trx('subscriptions').where({ id: notesPurchaseId });
-        if (typeof q.forUpdate === 'function') q = q.forUpdate();
-        purchaseRecord = await q.first();
+        purchaseRecord = await trx('subscriptions').where({ id: notesPurchaseId }).first();
       }
 
       // Lookup Step C: Authoritative payment ID mapping with cross-customer and ambiguity validation
@@ -1348,9 +1522,7 @@ export class PaymentGatewayService {
               .where({ billing_event_id: actualPaymentId })
               .first();
             if (invoiceByPayment?.subscription_id) {
-              let q = trx('subscriptions').where({ id: invoiceByPayment.subscription_id });
-              if (typeof q.forUpdate === 'function') q = q.forUpdate();
-              const candidateSub = await q.first();
+              const candidateSub = await trx('subscriptions').where({ id: invoiceByPayment.subscription_id }).first();
 
               if (candidateSub) {
                 if (invoiceByPayment.customer_id && candidateSub.customer_id && invoiceByPayment.customer_id !== candidateSub.customer_id) {
@@ -1407,9 +1579,7 @@ export class PaymentGatewayService {
                 });
                 const parentSubId = (typeof related?.payload === 'string' ? JSON.parse(related.payload) : related?.payload)?.payload?.invoice?.entity?.subscription_id;
                 if (parentSubId && typeof parentSubId === 'string' && !parentSubId.startsWith('inv_') && !parentSubId.startsWith('order_')) {
-                  let q = trx('subscriptions').where({ gateway_subscription_id: parentSubId });
-                  if (typeof q.forUpdate === 'function') q = q.forUpdate();
-                  purchaseRecord = await q.first();
+                  purchaseRecord = await trx('subscriptions').where({ gateway_subscription_id: parentSubId }).first();
                 }
               }
             }
@@ -1421,14 +1591,10 @@ export class PaymentGatewayService {
 
       // Lookup Step E: Direct one-time order ID lookup (if not a subscription)
       if (!purchaseRecord && orderCandidate) {
-        let q = trx('subscriptions').where({ gateway_subscription_id: orderCandidate });
-        if (typeof q.forUpdate === 'function') q = q.forUpdate();
-        purchaseRecord = await q.first();
+        purchaseRecord = await trx('subscriptions').where({ gateway_subscription_id: orderCandidate }).first();
 
         if (!purchaseRecord) {
-          let qFallback = trx('subscriptions').where({ id: orderCandidate });
-          if (typeof qFallback.forUpdate === 'function') qFallback = qFallback.forUpdate();
-          purchaseRecord = await qFallback.first();
+          purchaseRecord = await trx('subscriptions').where({ id: orderCandidate }).first();
         }
       }
 
@@ -1442,11 +1608,20 @@ export class PaymentGatewayService {
         throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: No authoritative purchase record found for transaction ${identifierHint}. Refusing fulfillment.`);
       }
 
+      // Acquire per-customer transaction lock BEFORE taking row locks or modifying metadata
+      await this.acquireCustomerTransactionLock(trx, purchaseRecord.customer_id);
+      let lockQuery: any = trx('subscriptions').where({ id: purchaseRecord.id });
+      if (typeof lockQuery.forUpdate === 'function') lockQuery = lockQuery.forUpdate();
+      const lockedPurchase = await lockQuery.first();
+      if (lockedPurchase) {
+        purchaseRecord = lockedPurchase;
+      }
+
       const gatewayOrderId = purchaseRecord.gateway_subscription_id || purchaseRecord.id;
 
-      // Validate state transition: never reactivate a cancelled subscription without a new checkout order
-      if (purchaseRecord.status === 'cancelled') {
-        throw new TerminalRejectionError(`INVALID_STATE_TRANSITION: Cannot activate or renew cancelled subscription ${purchaseRecord.id}.`);
+      // Validate state transition: never reactivate a cancelled/canceled/refunded subscription without a new checkout order
+      if (purchaseRecord.status === 'cancelled' || purchaseRecord.status === 'canceled' || purchaseRecord.status === 'refunded') {
+        throw new TerminalRejectionError(`INVALID_STATE_TRANSITION: Cannot activate or renew ${purchaseRecord.status} subscription ${purchaseRecord.id}.`);
       }
 
       const cashfreePaymentType = String(
@@ -1725,7 +1900,90 @@ export class PaymentGatewayService {
               }),
               created_at: now
             });
-          } catch {}
+          } catch (auditErr: any) {
+            console.warn(`[PaymentGateway] Could not persist companion payment audit event:`, auditErr?.message);
+          }
+          return;
+        }
+
+        const isClaimedRenewalEvent = Boolean(
+          eventType === 'subscription.renewed' ||
+          eventType === 'subscription.charged' ||
+          eventType === 'SUBSCRIPTION_CHARGED' ||
+          eventType === 'SUBSCRIPTION_PAYMENT_SUCCESS'
+        );
+
+        // Duplicate Cycle 1 Payment Protection BEFORE cycleNumber companion check:
+        // 1) Distinct payment for same/earlier or unspecified cycle while Cycle 1 immediate auth is active, OR
+        // 2) Distinct payment >5 days before Cycle 1 end when Cashfree reported a premature next_schedule_date.
+        const periodEndMs = Number(purchaseRecord.current_period_end || 0);
+        const fiveDaysMs = 5 * 24 * 60 * 60 * 1000;
+        const isDistinctPayment = Boolean(
+          actualPaymentId &&
+          actualPaymentId !== meta.initialPaymentId &&
+          actualPaymentId !== meta.lastPaymentId
+        );
+        const isSameOrUnnumberedCycle = cycleNumber === undefined || cycleNumber <= (meta.fulfilledCycle || 1);
+        const isMismatchEarlyCharge = Boolean(meta.cashfreeScheduleMismatch) && periodEndMs > now + fiveDaysMs;
+        const isPrematureCycle1Payment = Boolean(
+          (meta.immediateAuthPaid === true || (meta.immediateAuthChargeExpected === true && cashfreePaymentType === 'AUTH')) &&
+          isDistinctPayment &&
+          isClaimedRenewalEvent &&
+          !(explicitPeriodEnd && explicitPeriodEnd > periodEndMs) &&
+          periodEndMs > now + fiveDaysMs &&
+          (isSameOrUnnumberedCycle || isMismatchEarlyCharge)
+        );
+
+        if (isPrematureCycle1Payment) {
+          const dupPayments = Array.isArray(meta.duplicateCyclePayments) ? [...meta.duplicateCyclePayments] : [];
+          dupPayments.push({
+            paymentId: actualPaymentId || null,
+            gatewayOrderId,
+            paymentType: cashfreePaymentType || 'CHARGE',
+            amountMinorUnits: expectedAmount,
+            currency: purchaseRecord.currency || 'INR',
+            eventType,
+            status: 'PENDING_RECOVERY_REFUND',
+            detectedAt: now
+          });
+          meta.duplicateCyclePayments = dupPayments;
+          if (actualPaymentId) {
+            meta.lastPaymentId = actualPaymentId;
+          }
+
+          await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+            metadata: JSON.stringify(meta),
+            updated_at: now
+          });
+
+          await trx('billing_audit_events').insert({
+            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+            customer_id: customerId,
+            event_type: 'DUPLICATE_CYCLE_PAYMENT_DETECTED',
+            actor_type: 'gateway_webhook',
+            actor_id: gatewayOrderId,
+            payload: JSON.stringify({
+              purchaseId: purchaseRecord.id,
+              principalId,
+              gateway,
+              actualPaymentId,
+              paymentType: cashfreePaymentType || 'CHARGE',
+              amountMinorUnits: expectedAmount,
+              currency: purchaseRecord.currency || 'INR',
+              currentPeriodEnd: periodEndMs,
+              recoveryStatus: 'PENDING_RECOVERY_REFUND'
+            }),
+            created_at: now
+          });
+
+          await this.recordIdempotentOperationSafe({
+            trx,
+            principalId,
+            operationId: fulfillmentOpId,
+            operationType: 'duplicate_cycle_payment_recovery',
+            responseBody: { status: 'DUPLICATE_CYCLE_PAYMENT_DETECTED', purchaseId: purchaseRecord.id },
+            now
+          });
           return;
         }
 
@@ -1748,7 +2006,9 @@ export class PaymentGatewayService {
               }),
               created_at: now
             });
-          } catch {}
+          } catch (auditErr: any) {
+            console.warn(`[PaymentGateway] Could not persist cycle companion audit event:`, auditErr?.message);
+          }
           return;
         }
 
@@ -1762,13 +2022,6 @@ export class PaymentGatewayService {
           (explicitPeriodEnd && explicitPeriodEnd > Number(purchaseRecord.current_period_end)) ||
           (cycleNumber !== undefined && cycleNumber > (meta.fulfilledCycle || 1)) ||
           (actualPaymentId && actualPaymentId !== meta.lastPaymentId && actualPaymentId !== meta.initialPaymentId)
-        );
-
-        const isClaimedRenewalEvent = Boolean(
-          eventType === 'subscription.renewed' ||
-          eventType === 'subscription.charged' ||
-          eventType === 'SUBSCRIPTION_CHARGED' ||
-          eventType === 'SUBSCRIPTION_PAYMENT_SUCCESS'
         );
 
         if (!hasRenewalEvidence) {
@@ -2080,7 +2333,9 @@ export class PaymentGatewayService {
       }
 
       const nextLifecycleStage = hasPaidFulfillment ? 'PAID_SUBSCRIPTION_CANCELLED' : 'UNPAID_CHECKOUT_CANCELLED';
-      const nextStatus = existingSub.status === 'canceled' ? 'canceled' : 'cancelled';
+      const nextStatus = existingSub.status === 'superseded'
+        ? 'superseded'
+        : (existingSub.status === 'canceled' ? 'canceled' : 'cancelled');
 
       meta.cancellation_status = 'CANCELLATION_CONFIRMED';
       meta.cancelled_at = now;
@@ -2125,22 +2380,7 @@ export class PaymentGatewayService {
       const gatewayPaymentId = paymentEntity.id || refundEntity.payment_id || payload.data?.payment?.cf_payment_id;
       const gatewayOrderId = paymentEntity.order_id || refundEntity.order_id || payload.data?.order?.order_id;
 
-      let subRecord: any = null;
-      if (gatewayOrderId) {
-        subRecord = await trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId }).first();
-      }
-      if (!subRecord && gatewayPaymentId) {
-        let candidateQuery = trx('subscriptions').whereIn('status', ['active', 'pending', 'cancelled']);
-        if (typeof candidateQuery.select === 'function') {
-          const candidateSubs = await candidateQuery.select('*');
-          subRecord = (candidateSubs || []).find((s: any) => {
-            try {
-              const m = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {});
-              return m.lastPaymentId === gatewayPaymentId || m.initialPaymentId === gatewayPaymentId;
-            } catch { return false; }
-          });
-        }
-      }
+      const subRecord = await this.correlateRefundSubscription(trx, gatewayOrderId, gatewayPaymentId);
 
       await trx('billing_audit_events').insert({
         id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -2170,22 +2410,7 @@ export class PaymentGatewayService {
       const gatewayPaymentId = paymentEntity.id || refundEntity.payment_id || payload.data?.payment?.cf_payment_id || payload.data?.refund?.cf_payment_id;
       const gatewayOrderId = paymentEntity.order_id || refundEntity.order_id || payload.data?.order?.order_id;
 
-      let subRecord: any = null;
-      if (gatewayOrderId) {
-        subRecord = await trx('subscriptions').where({ gateway_subscription_id: gatewayOrderId }).first();
-      }
-      if (!subRecord && gatewayPaymentId) {
-        let candidateQuery = trx('subscriptions').whereIn('status', ['active', 'pending', 'cancelled']);
-        if (typeof candidateQuery.select === 'function') {
-          const candidateSubs = await candidateQuery.select('*');
-          subRecord = (candidateSubs || []).find((s: any) => {
-            try {
-              const m = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {});
-              return m.lastPaymentId === gatewayPaymentId || m.initialPaymentId === gatewayPaymentId || m.auth_payment_id === gatewayPaymentId;
-            } catch { return false; }
-          });
-        }
-      }
+      const subRecord = await this.correlateRefundSubscription(trx, gatewayOrderId, gatewayPaymentId);
 
       if (subRecord) {
         await this.handleSubscriptionRefund({
@@ -2485,15 +2710,15 @@ export class PaymentGatewayService {
     }
 
     const gateway = resolvePaymentGateway(requestedGateway);
-    if (gateway === 'cashfree' && !normalizedPhone) {
-      throw new Error('VALIDATION_ERROR: A valid 10-digit mobile phone number is required for Cashfree subscription e-mandate registration.');
-    }
     const keyId = gateway === 'razorpay'
       ? (process.env.RAZORPAY_KEY_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined))
       : (process.env.CASHFREE_APP_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined));
 
     if (!keyId) {
       throw new Error('BILLING_UNAVAILABLE: Gateway credentials not configured.');
+    }
+    if (gateway === 'cashfree' && !normalizedPhone) {
+      throw new Error('VALIDATION_ERROR: A valid 10-digit mobile phone number is required for Cashfree subscription e-mandate registration.');
     }
 
     let customerId: string;
@@ -2618,25 +2843,55 @@ export class PaymentGatewayService {
         }
       }
 
-      // 3. Active Pending Session Deduplication & Cross-Tier Protection
+      // 3. Active Pending Session Deduplication, Superseded Verification & Cross-Tier Protection
       try {
-        const activeSubForPendingCheck = await (database as Knex)('subscriptions')
-          .where({ customer_id: customerId, status: 'active' })
-          .orderBy('updated_at', 'desc')
-          .first();
+        const activeSubForPendingCheck = (await this.querySubscriptions(database, { customer_id: customerId, status: 'active' }))
+          .sort((a: any, b: any) => Number(b?.updated_at || 0) - Number(a?.updated_at || 0))[0] || null;
 
-        const rawPending = await (database as Knex)('subscriptions')
-          .where({ customer_id: customerId, status: 'pending' })
-          .orderBy('created_at', 'desc')
-          .first();
+        const pendingRows = (await this.querySubscriptions(database, { customer_id: customerId, status: 'pending' }))
+          .sort((a: any, b: any) => Number(b?.created_at || 0) - Number(a?.created_at || 0));
 
-        const anyPending = rawPending && !this.isSupersededStalePendingSubscription(rawPending, activeSubForPendingCheck)
-          ? rawPending
-          : null;
+        const unresolvedPendingRows: any[] = [];
+        for (const pendSub of pendingRows) {
+          const isOlderThanActive = Boolean(
+            activeSubForPendingCheck &&
+            Number(pendSub.created_at || 0) <= Number(activeSubForPendingCheck.created_at || 0)
+          );
+
+          if (isOlderThanActive) {
+            // Never silently ignore an older pending checkout when a newer subscription is active:
+            // authoritatively query provider status and cancel at provider before clearing locally.
+            const statusCheck = await this.queryProviderSubscriptionStatus(pendSub);
+            if (!statusCheck.queried) {
+              throw new Error(`CONCURRENT_CHECKOUT_IN_PROGRESS: Existing pending subscription (${pendSub.id}) could not be verified with ${pendSub.gateway}. Please reconcile or cancel it before starting a new checkout.`);
+            }
+            if (statusCheck.paidEvidence || statusCheck.hasAuthorizedMandate) {
+              throw new Error(`CONCURRENT_CHECKOUT_IN_PROGRESS: Existing older pending subscription (${pendSub.id}) has confirmed payment or an active mandate on ${pendSub.gateway}. Please reconcile or cancel it before starting a new checkout.`);
+            }
+            const cancelRes = await this.cancelProviderPendingSubscription(pendSub);
+            if (!cancelRes.cancelled) {
+              throw new Error(`CONCURRENT_CHECKOUT_IN_PROGRESS: Existing older pending subscription (${pendSub.id}) could not be cancelled on ${pendSub.gateway}: ${cancelRes.error || 'Provider unavailable'}.`);
+            }
+            await this.transitionUnpaidSubscriptionStatus(
+              database,
+              pendSub,
+              'canceled',
+              'superseded_stale_pending_cancelled',
+              statusCheck.rawStatus,
+              statusCheck.providerDetails,
+              principalId
+            );
+            continue;
+          }
+
+          unresolvedPendingRows.push(pendSub);
+        }
+
+        const anyPending = unresolvedPendingRows[0] || null;
 
         if (anyPending) {
           // If customer requests the identical plan tier and gateway within the 15-minute window, reuse the active session
-          if (anyPending.plan_id === planTier && anyPending.gateway === gateway && (now - Number(anyPending.created_at) < 15 * 60 * 1000)) {
+          if (unresolvedPendingRows.length === 1 && anyPending.plan_id === planTier && anyPending.gateway === gateway && (now - Number(anyPending.created_at) < 15 * 60 * 1000)) {
             let pendingMeta: any = {};
             try {
               pendingMeta = typeof anyPending.metadata === 'string'
@@ -2671,6 +2926,7 @@ export class PaymentGatewayService {
         if (pendingErr?.message?.startsWith('CONCURRENT_CHECKOUT_IN_PROGRESS')) {
           throw pendingErr;
         }
+        throw new Error(`CONCURRENT_CHECKOUT_IN_PROGRESS: Failed to verify or clear existing pending subscription (${pendingErr?.message || 'Verification unavailable'}). Please try again or reconcile your billing session.`);
       }
 
       // 4. Customer Concurrency Locking & Fencing
@@ -2755,6 +3011,7 @@ export class PaymentGatewayService {
     let cashfreeImmediateAuthExpected = false;
     let cashfreeExpectedAuthRefund: boolean | undefined = undefined;
     let cashfreeNextScheduleDate: string | null = null;
+    let cashfreeScheduleMismatch: { expectedRenewal: string; providerNextScheduleDate: string } | null = null;
     const expectedNextRenewalAt = this.addOneMonthEpochMs(now);
 
     const recurringPlanId = gateway === 'razorpay'
@@ -2966,6 +3223,14 @@ export class PaymentGatewayService {
               Math.round(Number(cfAuthDetails.authorization_amount) * 100) === price.amountMinorUnits);
           if (cfData?.next_schedule_date) {
             cashfreeNextScheduleDate = String(cfData.next_schedule_date);
+            const parsedScheduleMs = Date.parse(cashfreeNextScheduleDate);
+            if (Number.isFinite(parsedScheduleMs) && parsedScheduleMs < expectedNextRenewalAt - 7 * 24 * 60 * 60 * 1000) {
+              cashfreeScheduleMismatch = {
+                expectedRenewal: firstChargeTime,
+                providerNextScheduleDate: cashfreeNextScheduleDate
+              };
+              console.warn(`[PaymentGateway] Cashfree next_schedule_date (${cashfreeNextScheduleDate}) is earlier than expected +1 month renewal (${firstChargeTime}) for ${purchaseId}.`);
+            }
           }
         }
       } else if (isSandbox) {
@@ -3105,6 +3370,7 @@ export class PaymentGatewayService {
         paymentSessionId: gatewayPaymentSessionId,
         expectedNextRenewalAt,
         ...(cashfreeNextScheduleDate ? { next_schedule_date: cashfreeNextScheduleDate } : {}),
+        ...(cashfreeScheduleMismatch ? { cashfreeScheduleMismatch } : {}),
         ...(gateway === 'cashfree' ? {
           providerApiVersion: '2025-01-01',
           immediateAuthChargeExpected: cashfreeImmediateAuthExpected,
@@ -3444,7 +3710,7 @@ export class PaymentGatewayService {
     isCashfreeImmediateAuth?: boolean;
     fulfillmentOpId: string;
     now: number;
-  }): Promise<{ activated: boolean; invoiceNumber?: string }> {
+  }): Promise<{ activated: boolean; recoveredLatePayment?: boolean; invoiceNumber?: string }> {
     const {
       trx,
       purchaseRecord,
@@ -3467,7 +3733,103 @@ export class PaymentGatewayService {
       now
     } = params;
 
+    await this.acquireCustomerTransactionLock(trx, customerId);
+
+    const freshPurchase = (await trx('subscriptions').where({ id: purchaseRecord.id }).first()) || purchaseRecord;
     const plan = COMMERCIAL_PLANS[planTier] || COMMERCIAL_PLANS.plus;
+
+    // Fetch existing active subscriptions under customer lock to guard against out-of-order / late activations
+    const existingActiveSubs = (await this.querySubscriptions(trx, { customer_id: customerId, status: 'active' }))
+      .filter((s: any) => s.id !== purchaseRecord.id);
+
+    const currentCreatedAt = Number(freshPurchase.created_at || 0);
+    const newerActiveSub = existingActiveSubs.find((s: any) => Number(s.created_at || 0) > currentCreatedAt);
+
+    if (freshPurchase.status === 'superseded' || newerActiveSub) {
+      // Late payment on an older superseded/pending subscription MUST NOT overwrite a newer active
+      // subscription or grant duplicate entitlements; preserve all evidence and route to recovery.
+      const supersededById = newerActiveSub?.id || meta.supersededBy || null;
+      meta.latePaymentRecovery = {
+        status: 'PENDING_RECOVERY_REFUND',
+        paymentId: actualPaymentId || null,
+        gatewayOrderId,
+        amountMinorUnits: expectedAmount,
+        currency: freshPurchase.currency || 'INR',
+        gateway,
+        supersededByActiveId: supersededById,
+        detectedAt: now
+      };
+      if (actualPaymentId) {
+        meta.lastPaymentId = actualPaymentId;
+      }
+
+      await trx('subscriptions').where({ id: freshPurchase.id }).update({
+        status: 'superseded',
+        ...(gatewaySubscriptionIdUpdate ? { gateway_subscription_id: gatewaySubscriptionIdUpdate } : {}),
+        metadata: JSON.stringify(meta),
+        updated_at: now
+      });
+
+      await trx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: customerId,
+        event_type: 'LATE_PAYMENT_ON_SUPERSEDED_SUBSCRIPTION',
+        actor_type: actorType,
+        actor_id: gatewayOrderId,
+        payload: JSON.stringify({
+          purchaseId: freshPurchase.id,
+          principalId,
+          planTier,
+          gateway,
+          currency: freshPurchase.currency,
+          amountMinorUnits: expectedAmount,
+          actualPaymentId: actualPaymentId || null,
+          supersededByActiveId: supersededById,
+          recoveryStatus: 'PENDING_RECOVERY_REFUND'
+        }),
+        created_at: now
+      });
+
+      const targetGwSubId = gatewaySubscriptionIdUpdate || freshPurchase.gateway_subscription_id || gatewayOrderId;
+      if (targetGwSubId) {
+        let alreadyScheduled = false;
+        try {
+          const hasOutbox = typeof trx.schema?.hasTable === 'function'
+            ? await trx.schema.hasTable('subscription_cancellation_outbox')
+            : false;
+          if (hasOutbox) {
+            const existingTask = await trx('subscription_cancellation_outbox')
+              .where({ subscription_id: freshPurchase.id })
+              .first();
+            alreadyScheduled = Boolean(existingTask);
+          }
+        } catch (err: any) {
+          console.warn(`[PaymentGateway] Could not inspect cancellation outbox for ${freshPurchase.id}:`, err?.message);
+        }
+        if (!alreadyScheduled) {
+          await this.scheduleGatewayMandateCancellation(
+            freshPurchase.id,
+            gateway as 'razorpay' | 'cashfree',
+            targetGwSubId,
+            principalId,
+            customerId,
+            trx,
+            supersededById || undefined
+          );
+        }
+      }
+
+      await this.recordIdempotentOperationSafe({
+        trx,
+        principalId,
+        operationId: fulfillmentOpId,
+        operationType: 'late_payment_superseded_recovery',
+        responseBody: { status: 'LATE_PAYMENT_ROUTED_TO_RECOVERY', purchaseId: freshPurchase.id, supersededById },
+        now
+      });
+
+      return { activated: false, recoveredLatePayment: true };
+    }
 
     const initialPeriodStart = explicitPeriodStart || now;
     const expectedRenewalMs = Number(meta.expectedNextRenewalAt || 0);
@@ -3492,56 +3854,36 @@ export class PaymentGatewayService {
       meta.auth_recorded_at = meta.auth_recorded_at || now;
     }
 
-    // Supersede any existing active subscriptions for this customer to satisfy uniq_subscriptions_customer_active
-    try {
-      const activeRowsResult: any = await trx('subscriptions')
-        .where({ customer_id: customerId, status: 'active' });
-      const existingActiveSubs = Array.isArray(activeRowsResult)
-        ? activeRowsResult.filter((s: any) => s && s.id !== purchaseRecord.id)
-        : (activeRowsResult && typeof activeRowsResult === 'object' && activeRowsResult.id && activeRowsResult.id !== purchaseRecord.id ? [activeRowsResult] : []);
+    // Supersede existing active subscriptions AND any unresolved older pending/initiating/ambiguous rows
+    for (const oldSub of existingActiveSubs) {
+      await this.supersedeCustomerSubscriptionRow({
+        trx,
+        targetSub: oldSub,
+        newSubId: purchaseRecord.id,
+        customerId,
+        planTier,
+        gateway,
+        principalId,
+        now
+      });
+    }
 
-      for (const oldSub of existingActiveSubs) {
-        const oldMeta = typeof oldSub.metadata === 'string' ? JSON.parse(oldSub.metadata || '{}') : (oldSub.metadata || {});
-        await trx('subscriptions').where({ id: oldSub.id }).update({
-          status: 'superseded',
-          metadata: JSON.stringify({
-            ...oldMeta,
-            supersededBy: purchaseRecord.id,
-            supersededAt: now
-          }),
-          updated_at: now
+    for (const staleStatus of ['pending', 'initiating', 'ambiguous_timeout'] as const) {
+      const staleSiblings = (await this.querySubscriptions(trx, { customer_id: customerId, status: staleStatus }))
+        .filter((s: any) => s.id !== purchaseRecord.id && Number(s.created_at || 0) <= currentCreatedAt);
+      for (const staleSub of staleSiblings) {
+        await this.supersedeCustomerSubscriptionRow({
+          trx,
+          targetSub: staleSub,
+          newSubId: purchaseRecord.id,
+          customerId,
+          planTier,
+          gateway,
+          principalId,
+          now,
+          previousStatus: staleStatus
         });
-
-        await trx('billing_audit_events').insert({
-          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-          customer_id: customerId,
-          event_type: 'SUBSCRIPTION_SUPERSEDED',
-          actor_type: 'system',
-          actor_id: purchaseRecord.id,
-          payload: JSON.stringify({
-            oldSubscriptionId: oldSub.id,
-            oldGatewaySubscriptionId: oldSub.gateway_subscription_id,
-            newSubscriptionId: purchaseRecord.id,
-            planTier,
-            gateway
-          }),
-          created_at: now
-        });
-
-        if (oldSub.gateway_subscription_id) {
-          await this.scheduleGatewayMandateCancellation(
-            oldSub.id,
-            oldSub.gateway as 'razorpay' | 'cashfree',
-            oldSub.gateway_subscription_id,
-            principalId,
-            customerId,
-            trx,
-            purchaseRecord.id
-          );
-        }
       }
-    } catch (superErr: any) {
-      console.warn(`[PaymentGateway] Subscription superseding error for ${customerId}:`, superErr?.message);
     }
 
     const updatedMetadataStr = JSON.stringify(meta);
@@ -4205,6 +4547,7 @@ export class PaymentGatewayService {
     clientOrTrx?: any
   ): Promise<{
     reconciled: boolean;
+    recoveredLatePayment?: boolean;
     status: string;
     message: string;
     providerStatus?: string;
@@ -4565,6 +4908,7 @@ export class PaymentGatewayService {
     }
   ): Promise<{
     reconciled: boolean;
+    recoveredLatePayment?: boolean;
     status: string;
     message: string;
     providerStatus?: string;
@@ -4856,16 +5200,46 @@ export class PaymentGatewayService {
         const reconciledPaymentId = check.paidPayment?.paymentId;
         const principalId = subMeta.principalId;
 
-        if (reconciledPaymentId && principalId && sub.status !== 'active' && sub.status !== 'refunded' && sub.status !== 'cancelled' && sub.status !== 'canceled') {
+        if (sub.status === 'refunded' || sub.status === 'cancelled' || sub.status === 'canceled') {
+          return {
+            reconciled: false,
+            status: sub.status,
+            providerStatus: check.rawStatus,
+            providerDetails: check.providerDetails,
+            paidEvidence: Boolean(check.paidEvidence),
+            planId: sub.plan_id,
+            gateway: sub.gateway,
+            message: `Subscription is already in terminal state '${sub.status}'.`
+          };
+        }
+
+        if (reconciledPaymentId && principalId && sub.status !== 'active') {
           const fulfillmentOpId = `${sub.gateway}:sub:${sub.id}:pay:${reconciledPaymentId}`;
           const gatewayOrderId = check.gatewaySubscriptionId || sub.gateway_subscription_id || sub.id;
           let invoiceNumber: string | undefined;
+          let activatedNow = true;
+          let recoveredLatePayment = false;
+          let resolvedStatus = 'active';
 
           const runActivation = async (trx: any) => {
+            await this.acquireCustomerTransactionLock(trx, sub.customer_id);
+            const freshSub = (await trx('subscriptions').where({ id: sub.id }).first()) || sub;
             const existingOp = await trx('idempotent_operations')
               .where({ principal_id: principalId, operation_id: fulfillmentOpId })
               .first();
             if (existingOp && existingOp.status === 'COMPLETED') {
+              const newerActive = (await this.querySubscriptions(trx, { customer_id: sub.customer_id, status: 'active' }))
+                .find((s: any) => s.id !== freshSub.id && Number(s.created_at || 0) > Number(freshSub.created_at || 0));
+              if (
+                existingOp.operation_type === 'late_payment_superseded_recovery' ||
+                freshSub.status === 'superseded' ||
+                newerActive
+              ) {
+                activatedNow = false;
+                recoveredLatePayment = true;
+                resolvedStatus = 'superseded';
+                return;
+              }
               await trx('subscriptions').where({ id: sub.id }).update({
                 status: 'active',
                 ...(check.gatewaySubscriptionId ? { gateway_subscription_id: check.gatewaySubscriptionId } : {}),
@@ -4875,8 +5249,8 @@ export class PaymentGatewayService {
             }
             const res = await this.executeInitialSubscriptionActivation({
               trx,
-              purchaseRecord: sub,
-              meta: { ...subMeta },
+              purchaseRecord: freshSub,
+              meta: { ...this.parseJsonRecordSafe(freshSub.metadata) },
               principalId,
               customerId: sub.customer_id,
               planTier: (sub.plan_id as PlanTier) || 'plus',
@@ -4894,6 +5268,9 @@ export class PaymentGatewayService {
               fulfillmentOpId,
               now
             });
+            activatedNow = res.activated;
+            recoveredLatePayment = Boolean(res.recoveredLatePayment);
+            resolvedStatus = res.activated ? 'active' : 'superseded';
             invoiceNumber = res.invoiceNumber;
           };
 
@@ -4901,6 +5278,20 @@ export class PaymentGatewayService {
             await db.transaction(runActivation);
           } else {
             await runActivation(db);
+          }
+
+          if (!activatedNow) {
+            return {
+              reconciled: false,
+              recoveredLatePayment,
+              status: resolvedStatus,
+              providerStatus: check.rawStatus,
+              providerDetails: check.providerDetails,
+              paidEvidence: true,
+              planId: sub.plan_id,
+              gateway: sub.gateway,
+              message: 'Payment was received for a superseded subscription and routed to recovery without overwriting the active subscription.'
+            };
           }
 
           return {
@@ -4913,6 +5304,35 @@ export class PaymentGatewayService {
             gateway: sub.gateway,
             ...(invoiceNumber ? { invoiceNumber } : {}),
             message: 'Authoritatively reconciled: Full first payment verified; subscription active with credits and GST invoice issued.'
+          };
+        }
+
+        if (sub.status === 'active' || sub.status === 'superseded') {
+          return {
+            reconciled: sub.status === 'active',
+            status: sub.status,
+            providerStatus: check.rawStatus,
+            providerDetails: check.providerDetails,
+            paidEvidence: Boolean(check.paidEvidence),
+            planId: sub.plan_id,
+            gateway: sub.gateway,
+            message: `Subscription already in state '${sub.status}'.`
+          };
+        }
+
+        await this.acquireCustomerTransactionLock(db, sub.customer_id);
+        const newerActiveFallback = (await this.querySubscriptions(db, { customer_id: sub.customer_id, status: 'active' }))
+          .find((s: any) => s.id !== sub.id && Number(s.created_at || 0) > Number(sub.created_at || 0));
+        if (newerActiveFallback) {
+          return {
+            reconciled: false,
+            status: sub.status,
+            providerStatus: check.rawStatus,
+            providerDetails: check.providerDetails,
+            paidEvidence: Boolean(check.paidEvidence),
+            planId: sub.plan_id,
+            gateway: sub.gateway,
+            message: 'Newer active subscription already exists for customer; refusing fallback activation.'
           };
         }
 
@@ -6317,6 +6737,11 @@ export class PaymentGatewayService {
         cgstAmount: taxResult.cgstAmount,
         sgstAmount: taxResult.sgstAmount,
         igstAmount: taxResult.igstAmount,
+        taxRate: taxResult.taxRate,
+        cgstRate: taxResult.cgstRate,
+        sgstRate: taxResult.sgstRate,
+        igstRate: taxResult.igstRate,
+        taxRateVersion: taxResult.taxRateVersion,
         sacCode: taxResult.sacCode,
         supplierName: taxResult.supplierName,
         supplierGstin: taxResult.supplierGstin,
@@ -6358,7 +6783,14 @@ export class PaymentGatewayService {
               status: invoiceRecord.status,
               gateway: params.gateway,
               pdf_download_available: invoiceRecord.pdfDownloadAvailable,
-              metadata: JSON.stringify(isStagingSandboxRehearsalActive() ? { is_sandbox: true, rehearsal: true } : {}),
+              metadata: JSON.stringify({
+                taxRate: taxResult.taxRate,
+                cgstRate: taxResult.cgstRate,
+                sgstRate: taxResult.sgstRate,
+                igstRate: taxResult.igstRate,
+                taxRateVersion: taxResult.taxRateVersion,
+                ...(isStagingSandboxRehearsalActive() ? { is_sandbox: true, rehearsal: true } : {})
+              }),
               created_at: params.now,
               updated_at: params.now
             });
@@ -6883,8 +7315,9 @@ export class PaymentGatewayService {
       } else {
         meta.refunded = true;
         meta.authRefunded = true;
+        const nextRefundStatus = params.subRecord.status === 'superseded' ? 'superseded' : 'refunded';
         await trx('subscriptions').where({ id: params.subRecord.id }).update({
-          status: 'refunded',
+          status: nextRefundStatus,
           metadata: JSON.stringify(meta),
           updated_at: now
         });
@@ -7010,6 +7443,7 @@ export class PaymentGatewayService {
    * Maps a relational billing_invoices database row to an InvoiceRecord.
    */
   public mapBillingInvoiceRow(row: any): InvoiceRecord {
+    const meta = this.parseJsonRecordSafe(row.metadata);
     return {
       invoiceNumber: row.invoice_number,
       date: new Date(Number(row.created_at) || Date.now()).toISOString().split('T')[0],
@@ -7021,6 +7455,11 @@ export class PaymentGatewayService {
       cgstAmount: row.cgst_amount !== null && row.cgst_amount !== undefined ? Number(row.cgst_amount) : undefined,
       sgstAmount: row.sgst_amount !== null && row.sgst_amount !== undefined ? Number(row.sgst_amount) : undefined,
       igstAmount: row.igst_amount !== null && row.igst_amount !== undefined ? Number(row.igst_amount) : undefined,
+      taxRate: typeof meta.taxRate === 'number' ? meta.taxRate : undefined,
+      cgstRate: typeof meta.cgstRate === 'number' ? meta.cgstRate : undefined,
+      sgstRate: typeof meta.sgstRate === 'number' ? meta.sgstRate : undefined,
+      igstRate: typeof meta.igstRate === 'number' ? meta.igstRate : undefined,
+      taxRateVersion: typeof meta.taxRateVersion === 'string' ? meta.taxRateVersion : undefined,
       sacCode: row.sac_code || '998431',
       supplierName: row.supplier_name || 'Virexa AI Ventures Private Limited',
       supplierGstin: row.supplier_gstin || undefined,
@@ -7088,25 +7527,6 @@ export class PaymentGatewayService {
     return { reconciled, failed };
   }
 
-  private isSupersededStalePendingSubscription(pendingSub: any, activeSub: any): boolean {
-    if (!pendingSub || !activeSub) return false;
-    const pendingCreatedAt = Number(pendingSub.created_at || 0);
-    const activeCreatedAt = Number(activeSub.created_at || 0);
-    if (!pendingCreatedAt || !activeCreatedAt || pendingCreatedAt > activeCreatedAt) {
-      return false;
-    }
-    const meta = this.parseJsonRecordSafe(pendingSub.metadata);
-    const providerDetails = meta.providerDetails || {};
-    const gwStatus = String(meta.gateway_subscription_status || providerDetails.subscriptionStatus || '').toUpperCase();
-    const authStatus = String(meta.gateway_auth_status || providerDetails.authorizationStatus || '').toUpperCase();
-    const hasAuthorizedMandate = Boolean(
-      authStatus === 'ACTIVE' ||
-      gwStatus === 'AUTHENTICATED' ||
-      (pendingSub.gateway === 'cashfree' && gwStatus === 'ACTIVE')
-    );
-    return !hasAuthorizedMandate;
-  }
-
   async getCustomerBillingLifecycleState(principalId: string): Promise<{
     activeSubscription: {
       id: string;
@@ -7145,15 +7565,11 @@ export class PaymentGatewayService {
         .orderBy('updated_at', 'desc')
         .first();
 
-      const rawPendingSub = await dbClient('subscriptions')
+      const pendingSub = await dbClient('subscriptions')
         .where({ customer_id: customer.id })
         .whereIn('status', ['pending', 'initiating', 'ambiguous_timeout'])
         .orderBy('created_at', 'desc')
         .first();
-
-      const pendingSub = rawPendingSub && !this.isSupersededStalePendingSubscription(rawPendingSub, activeSub)
-        ? rawPendingSub
-        : null;
 
       const parseMeta = (raw: any): Record<string, any> => {
         if (!raw) return {};
@@ -7656,6 +8072,11 @@ export class PaymentGatewayService {
           cgstAmount: p.cgstAmount !== undefined ? Number(p.cgstAmount) : undefined,
           sgstAmount: p.sgstAmount !== undefined ? Number(p.sgstAmount) : undefined,
           igstAmount: p.igstAmount !== undefined ? Number(p.igstAmount) : undefined,
+          taxRate: typeof p.taxRate === 'number' ? p.taxRate : undefined,
+          cgstRate: typeof p.cgstRate === 'number' ? p.cgstRate : undefined,
+          sgstRate: typeof p.sgstRate === 'number' ? p.sgstRate : undefined,
+          igstRate: typeof p.igstRate === 'number' ? p.igstRate : undefined,
+          taxRateVersion: typeof p.taxRateVersion === 'string' ? p.taxRateVersion : undefined,
           sacCode: p.sacCode || '998431',
           supplierName: p.supplierName || 'Virexa AI Ventures Private Limited',
           supplierGstin: p.supplierGstin || process.env.AIRA_SUPPLIER_GSTIN || undefined,

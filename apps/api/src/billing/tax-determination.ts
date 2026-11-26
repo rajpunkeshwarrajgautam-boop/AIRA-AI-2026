@@ -28,6 +28,8 @@ export interface TaxDeterminationInput {
   lutAvailable?: boolean;
   supplierGstin?: string;
   supplierGstinVerified?: boolean;
+  taxRate?: number;
+  taxRateVersion?: string;
 }
 
 export type TaxComplianceStatus =
@@ -45,6 +47,11 @@ export interface TaxDeterminationResult {
   cgstAmount?: number;
   sgstAmount?: number;
   igstAmount?: number;
+  taxRate: number;
+  cgstRate?: number;
+  sgstRate?: number;
+  igstRate?: number;
+  taxRateVersion: string;
   sacCode: string;
   supplierName: string;
   supplierGstin?: string;
@@ -125,6 +132,17 @@ export class TaxDeterminationService {
            (!isProd && process.env.AIRA_LUT_AVAILABLE !== 'false'))
     );
 
+    // Evaluate configurable statutory tax rate (ADR 0002)
+    const envRateStr = process.env.AIRA_GST_RATE !== undefined ? process.env.AIRA_GST_RATE.trim() : '';
+    const envRateRaw = envRateStr !== '' ? Number(envRateStr) : undefined;
+    const inputRateRaw = input.taxRate !== undefined && input.taxRate !== null ? Number(input.taxRate) : undefined;
+    const candidateRate = inputRateRaw !== undefined ? inputRateRaw : envRateRaw;
+    const effectiveRate = candidateRate !== undefined && Number.isFinite(candidateRate) && candidateRate >= 0 && candidateRate <= 1
+      ? candidateRate
+      : 0.18;
+    const taxDivisor = 1 + effectiveRate;
+    const taxRateVersion = (input.taxRateVersion || process.env.AIRA_GST_RATE_VERSION || 'SAC_998431_2026_v1').trim();
+
     // Evaluate Export status under GST Section 2(6)
     // Export requires recipient outside India (customerCountry !== 'IN')
     const isExport = customerCountry !== 'IN' && !isINR;
@@ -134,6 +152,10 @@ export class TaxDeterminationService {
     let cgstAmount: number | undefined;
     let sgstAmount: number | undefined;
     let igstAmount: number | undefined;
+    let cgstRate: number | undefined;
+    let sgstRate: number | undefined;
+    let igstRate: number | undefined;
+    let appliedRate = effectiveRate;
     let placeOfSupply = 'UNKNOWN';
     let complianceStatus: TaxComplianceStatus;
 
@@ -151,18 +173,20 @@ export class TaxDeterminationService {
         // Zero-rated supply under Section 16 of IGST Act under Letter of Undertaking
         taxableBase = totalAmount;
         gstAmount = 0;
+        appliedRate = 0;
         if (complianceStatus === 'COMPLIANT') {
           complianceStatus = 'COMPLIANT_ZERO_RATED_EXPORT';
         }
       } else {
-        // Export of service without LUT is subject to standard 18% IGST
-        taxableBase = Math.round((totalAmount / 1.18) * 100) / 100;
+        // Export of service without LUT is subject to standard IGST rate
+        taxableBase = Math.round((totalAmount / taxDivisor) * 100) / 100;
         gstAmount = Math.round((totalAmount - taxableBase) * 100) / 100;
         igstAmount = gstAmount;
+        igstRate = effectiveRate;
       }
     } else {
       // Domestic supply (including USD charged to Indian customers)
-      taxableBase = Math.round((totalAmount / 1.18) * 100) / 100;
+      taxableBase = Math.round((totalAmount / taxDivisor) * 100) / 100;
       gstAmount = Math.round((totalAmount - taxableBase) * 100) / 100;
 
       placeOfSupply = this.normalizePlaceOfSupply(input.placeOfSupply || input.customerState);
@@ -170,16 +194,20 @@ export class TaxDeterminationService {
       if (placeOfSupply === 'UNKNOWN') {
         // Missing place of supply: provisional IGST, must NOT default to Delhi
         igstAmount = gstAmount;
+        igstRate = effectiveRate;
         if (complianceStatus === 'COMPLIANT') {
           complianceStatus = 'PROVISIONAL_PENDING_PLACE_OF_SUPPLY';
         }
       } else if (placeOfSupply === supplierState) {
-        // Intra-state supply (e.g. Delhi -> Delhi): 9% CGST + 9% SGST
+        // Intra-state supply (e.g. Delhi -> Delhi): equal CGST + SGST split
         cgstAmount = Math.round((gstAmount / 2) * 100) / 100;
         sgstAmount = Math.round((gstAmount - cgstAmount) * 100) / 100;
+        cgstRate = Math.round((effectiveRate / 2) * 10000) / 10000;
+        sgstRate = Math.round((effectiveRate - cgstRate) * 10000) / 10000;
       } else {
-        // Inter-state supply: 18% IGST
+        // Inter-state supply: full IGST
         igstAmount = gstAmount;
+        igstRate = effectiveRate;
       }
     }
 
@@ -190,6 +218,11 @@ export class TaxDeterminationService {
       cgstAmount,
       sgstAmount,
       igstAmount,
+      taxRate: appliedRate,
+      cgstRate,
+      sgstRate,
+      igstRate,
+      taxRateVersion,
       sacCode: '998431',
       supplierName: this.defaultSupplierName,
       supplierGstin,

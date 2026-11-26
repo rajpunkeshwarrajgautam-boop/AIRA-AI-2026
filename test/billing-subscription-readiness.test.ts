@@ -106,12 +106,41 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
       gateway.setRazorpaySecret(testSecret);
       gateway.setDbClient(mockDb);
 
+      const gatewaySubId = `sub_gw_${Date.now()}`;
+      const unseededRawBody = JSON.stringify({
+        event_id: `evt_unseeded_${Date.now()}`,
+        event: 'subscription.halted',
+        subscription: { id: gatewaySubId }
+      });
+      const unseededSig = crypto.createHmac('sha256', testSecret).update(unseededRawBody).digest('hex');
+      await assert.rejects(
+        async () => gateway.processRazorpayWebhook(unseededRawBody, unseededSig),
+        /BILLING_RECONCILIATION_FAILED: No authoritative subscription record found/
+      );
+
+      await mockDb('subscriptions').insert({
+        id: `sub_dedup_rec_${Date.now()}`,
+        customer_id: 'cust_dedup_1',
+        plan_id: 'plus',
+        price_id: 'price_plus_inr',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: Date.now() - 5000,
+        current_period_end: Date.now() + 25 * 24 * 60 * 60 * 1000,
+        cancel_at_period_end: false,
+        created_at: Date.now(),
+        updated_at: Date.now()
+      });
+
       const eventId = `evt_dedup_${Date.now()}`;
       const payload = {
         event_id: eventId,
         event: 'subscription.halted',
         subscription: {
-          id: `sub_gw_${Date.now()}`
+          id: gatewaySubId
         }
       };
       const rawBody = JSON.stringify(payload);
@@ -361,7 +390,7 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
         );
 
         // Test currency fraud detection
-        const fraudOrderId = `order_fraud_${Date.now()}`;
+        const fraudOrderId = `sub_fraud_${Date.now()}`;
         await mockDb('subscriptions').insert({
           id: `pur_fraud_1`,
           customer_id: 'cust_fraud_1',

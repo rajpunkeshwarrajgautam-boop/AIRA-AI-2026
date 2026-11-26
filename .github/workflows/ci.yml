@@ -113,6 +113,9 @@ jobs:
       - name: Production readiness closure, INR-only USD gating & outbox CAS fencing
         run: npx tsx --test test/production-readiness-closure.test.ts
 
+      - name: Subscription readiness & superseded safety / hardening regressions (PG18)
+        run: npx tsx --test test/billing-subscription-readiness.test.ts test/billing-superseded-and-hardening-regression.test.ts
+
       - name: Staging target validation and fail-closed isolation (F5)
         run: npx tsx --test test/staging-target-validation-security.test.ts
 
