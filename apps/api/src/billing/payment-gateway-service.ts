@@ -353,9 +353,11 @@ export const SAFE_RECONCILIATION_EVENTS = new Set([
   'SUBSCRIPTION_HALTED',
   'SUBSCRIPTION_PAYMENT_FAILED',
   'SUBSCRIPTION_PAYMENT_CANCELLED',
+  'SUBSCRIPTION_AUTH_STATUS',
   'PAYMENT_FAILED_WEBHOOK',
   'PAYMENT_FAILED',
-  'REFUND_SUCCESS'
+  'REFUND_SUCCESS',
+  'REFUND_STATUS'
 ]);
 
 export function assertCommercialFulfillmentAllowed(eventType: string, gateway: string, payload: any): void {
@@ -1200,6 +1202,7 @@ export class PaymentGatewayService {
       eventType === 'SUBSCRIPTION_PAYMENT_SUCCESS' ||
       eventType === 'SUBSCRIPTION_ACTIVATED' ||
       eventType === 'SUBSCRIPTION_CHARGED' ||
+      eventType === 'SUBSCRIPTION_AUTH_STATUS' ||
       ((eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') && !(
         payload.data?.subscription_details?.subscription_status === 'CANCELLED' ||
         payload.data?.subscription_details?.subscription_status === 'HALTED' ||
@@ -1443,8 +1446,14 @@ export class PaymentGatewayService {
         paymentEntity.payment_type || payload.data?.payment_type || ''
       ).toUpperCase();
       const isCashfreeMandateAuth = gateway === 'cashfree' && cashfreePaymentType === 'AUTH';
+      const isCashfreePaidImmediateAuth = isCashfreeMandateAuth && this.isCashfreeImmediatePaidAuth(
+        purchaseRecord,
+        paymentEntity,
+        payload,
+        actualPaymentId
+      );
 
-      if (isCashfreeMandateAuth && (paymentEntity.payment_status === 'SUCCESS' || !paymentEntity.payment_status)) {
+      if (isCashfreeMandateAuth && !isCashfreePaidImmediateAuth && (paymentEntity.payment_status === 'SUCCESS' || !paymentEntity.payment_status)) {
         const rawAuthAmount = paymentEntity.payment_amount !== undefined
           ? Number(paymentEntity.payment_amount)
           : (payload.data?.authorization_details?.authorization_amount !== undefined
@@ -1503,10 +1512,11 @@ export class PaymentGatewayService {
         Boolean(subEntity.currency || subEntity.plan_currency);
 
       // Handle status-only notification:
-      // Cashfree: SUBSCRIPTION_STATUS_CHANGE / SUBSCRIPTION_STATUS_CHANGED without payment evidence,
+      // Cashfree: SUBSCRIPTION_STATUS_CHANGE / SUBSCRIPTION_STATUS_CHANGED / SUBSCRIPTION_AUTH_STATUS without payment evidence,
       // or SUBSCRIPTION_ACTIVATED carrying status fields only without payment/charge evidence.
       // Razorpay: subscription.activated without payment evidence.
       if (
+        eventType === 'SUBSCRIPTION_AUTH_STATUS' ||
         ((eventType === 'SUBSCRIPTION_STATUS_CHANGE' || eventType === 'SUBSCRIPTION_STATUS_CHANGED') && !hasPaymentEvidence) ||
         (eventType === 'SUBSCRIPTION_ACTIVATED' && !hasPaymentEvidence && !hasLegacyCashfreeChargeAmount) ||
         (eventType === 'subscription.activated' && !hasPaymentEvidence)
@@ -1516,6 +1526,7 @@ export class PaymentGatewayService {
           subEntity.status ||
           payload.data?.subscription_details?.subscription_status ||
           payload.data?.subscription?.subscription_status ||
+          payload.data?.authorization_details?.authorization_status ||
           'UNKNOWN'
         ).toUpperCase();
 
@@ -1535,7 +1546,9 @@ export class PaymentGatewayService {
         await trx('subscriptions').where({ id: purchaseRecord.id }).update({
           metadata: JSON.stringify({
             ...existingMeta,
-            gateway_subscription_status: rawStatus,
+            ...(eventType === 'SUBSCRIPTION_AUTH_STATUS'
+              ? { gateway_auth_status: rawStatus }
+              : { gateway_subscription_status: rawStatus }),
             ...(nextScheduleDate ? { next_schedule_date: nextScheduleDate } : {}),
             status_recorded_at: now
           }),
@@ -1590,13 +1603,17 @@ export class PaymentGatewayService {
       }
 
       // 2. Exact minor-unit amount verification (no zero or missing fallbacks)
+      const cfAuthAmountFallback = (isCashfreePaidImmediateAuth && payload.data?.authorization_details?.authorization_amount !== undefined)
+        ? Math.round(Number(payload.data.authorization_details.authorization_amount) * 100)
+        : null;
       const receivedAmount = subEntity.amount !== undefined ? Number(subEntity.amount)
         : invoiceEntity.amount_paid !== undefined ? Number(invoiceEntity.amount_paid)
         : invoiceEntity.amount !== undefined ? Number(invoiceEntity.amount)
         : paymentEntity.amount !== undefined ? Number(paymentEntity.amount)
         : (paymentEntity.payment_amount !== undefined ? Math.round(Number(paymentEntity.payment_amount) * 100)
+        : (cfAuthAmountFallback !== null ? cfAuthAmountFallback
         : (orderEntity.amount !== undefined ? Number(orderEntity.amount)
-        : (orderEntity.order_amount !== undefined ? Math.round(Number(orderEntity.order_amount) * 100) : null)));
+        : (orderEntity.order_amount !== undefined ? Math.round(Number(orderEntity.order_amount) * 100) : null))));
 
       if (receivedAmount === null || receivedAmount <= 0 || !Number.isInteger(receivedAmount)) {
         throw new TerminalRejectionError(`FRAUD_CHECK_FAILED: Received invalid or non-integer minor-unit payment amount: ${receivedAmount}`);
@@ -1946,240 +1963,26 @@ export class PaymentGatewayService {
       }
 
       // Initial Activation (transition from pending -> active)
-      const initialPeriodStart = explicitPeriodStart || now;
-      const initialPeriodEnd = explicitPeriodEnd || (initialPeriodStart + 30 * 24 * 60 * 60 * 1000);
-
-      meta.fulfilledCycle = cycleNumber || 1;
-      if (actualPaymentId) {
-        meta.initialPaymentId = actualPaymentId;
-        meta.lastPaymentId = actualPaymentId;
-      }
-
-      // Supersede any existing active subscriptions for this customer to satisfy uniq_subscriptions_customer_active
-      try {
-        const activeRowsResult: any = await trx('subscriptions')
-          .where({ customer_id: customerId, status: 'active' });
-        const existingActiveSubs = Array.isArray(activeRowsResult)
-          ? activeRowsResult.filter((s: any) => s && s.id !== purchaseRecord.id)
-          : (activeRowsResult && typeof activeRowsResult === 'object' && activeRowsResult.id && activeRowsResult.id !== purchaseRecord.id ? [activeRowsResult] : []);
-
-        for (const oldSub of existingActiveSubs) {
-          const oldMeta = typeof oldSub.metadata === 'string' ? JSON.parse(oldSub.metadata || '{}') : (oldSub.metadata || {});
-          await trx('subscriptions').where({ id: oldSub.id }).update({
-            status: 'superseded',
-            metadata: JSON.stringify({
-              ...oldMeta,
-              supersededBy: purchaseRecord.id,
-              supersededAt: now
-            }),
-            updated_at: now
-          });
-
-          await trx('billing_audit_events').insert({
-            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-            customer_id: customerId,
-            event_type: 'SUBSCRIPTION_SUPERSEDED',
-            actor_type: 'system',
-            actor_id: purchaseRecord.id,
-            payload: JSON.stringify({
-              oldSubscriptionId: oldSub.id,
-              oldGatewaySubscriptionId: oldSub.gateway_subscription_id,
-              newSubscriptionId: purchaseRecord.id,
-              planTier,
-              gateway
-            }),
-            created_at: now
-          });
-
-          if (oldSub.gateway_subscription_id) {
-            await this.scheduleGatewayMandateCancellation(
-              oldSub.id,
-              oldSub.gateway as 'razorpay' | 'cashfree',
-              oldSub.gateway_subscription_id,
-              principalId,
-              customerId,
-              trx,
-              purchaseRecord.id
-            );
-          }
-        }
-      } catch (superErr: any) {
-        console.warn(`[PaymentGateway] Subscription superseding error for ${customerId}:`, superErr?.message);
-      }
-
-      await trx('subscriptions').where({ id: purchaseRecord.id }).update({
-        status: 'active',
-        current_period_start: initialPeriodStart,
-        current_period_end: initialPeriodEnd,
-        cancel_at_period_end: false,
-        metadata: JSON.stringify(meta),
-        updated_at: now
+      await this.executeInitialSubscriptionActivation({
+        trx,
+        purchaseRecord,
+        meta,
+        principalId,
+        customerId,
+        planTier,
+        gateway,
+        gatewayOrderId,
+        actualPaymentId,
+        expectedAmount,
+        explicitPeriodStart,
+        explicitPeriodEnd,
+        cycleNumber,
+        eventType,
+        actorType: 'gateway_webhook',
+        isCashfreeImmediateAuth: isCashfreePaidImmediateAuth,
+        fulfillmentOpId,
+        now
       });
-
-      const initialGrantId = `grant_${fulfillmentOpId}`;
-      if (!this.customDbClient) {
-        await commercialBillingService.grantCredits(
-          principalId,
-          plan.monthlyPremiumCredits,
-          'subscription_monthly',
-          initialPeriodEnd,
-          plan.monthlyPremiumCredits * 2,
-          {
-            gatewayOrderId,
-            eventType,
-            purchaseId: purchaseRecord.id,
-            actualPaymentId,
-            cycleNumber: meta.fulfilledCycle,
-            idempotencyKey: initialGrantId
-          },
-          trx
-        );
-      }
-
-      try {
-        let ins = trx('idempotent_operations').insert({
-          key: `${principalId}:${fulfillmentOpId}`,
-          principal_id: principalId,
-          operation_id: fulfillmentOpId,
-          operation_type: 'subscription_activation',
-          payload_hash: '',
-          status: 'COMPLETED',
-          response_status: 200,
-          response_body: JSON.stringify({ status: 'FULFILLED', purchaseId: purchaseRecord.id, cycle: meta.fulfilledCycle }),
-          locked_until: 0,
-          created_at: now,
-          updated_at: now
-        });
-        if (ins && typeof ins.onConflict === 'function') {
-          ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
-        }
-        await ins;
-      } catch {}
-
-      await trx('billing_audit_events').insert({
-        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-        customer_id: customerId,
-        event_type: 'SUBSCRIPTION_ACTIVATED',
-        actor_type: 'gateway_webhook',
-        actor_id: gatewayOrderId,
-        payload: JSON.stringify({
-          purchaseId: purchaseRecord.id,
-          principalId,
-          planTier,
-          currency: purchaseRecord.currency,
-          amount: purchaseRecord.amount_minor_units,
-          periodStart: initialPeriodStart,
-          periodEnd: initialPeriodEnd,
-          actualPaymentId
-        }),
-        created_at: now
-      });
-
-      const hasSavepoint = typeof (trx as any).raw === 'function';
-      if (hasSavepoint) {
-        try {
-          await (trx as any).raw('SAVEPOINT sp_invoice_initial');
-        } catch {}
-      }
-      try {
-        await this.issueDurableInvoice({
-          trx,
-          customerId,
-          principalId,
-          purchaseRecord,
-          planTier,
-          gateway,
-          actualPaymentId,
-          gatewayOrderId,
-          cycleNumber: meta.fulfilledCycle,
-          now
-        });
-        if (hasSavepoint) {
-          try {
-            await (trx as any).raw('RELEASE SAVEPOINT sp_invoice_initial');
-          } catch {}
-        }
-      } catch (invErr: any) {
-        if (hasSavepoint) {
-          try {
-            await (trx as any).raw('ROLLBACK TO SAVEPOINT sp_invoice_initial');
-          } catch {}
-        }
-        const correlationId = `rec_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-        const sanitizedError = (invErr?.message || 'INVOICE_GENERATION_FAILED').replace(/[\r\n\t]/g, ' ').slice(0, 255);
-        try {
-          await trx('billing_audit_events').insert({
-            id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
-            customer_id: customerId,
-            event_type: 'TAX_INVOICE_PENDING_RECONCILIATION',
-            actor_type: 'system',
-            actor_id: purchaseRecord.id,
-            payload: JSON.stringify({
-              errorCode: 'INVOICE_GENERATION_FAILED',
-              errorMessage: sanitizedError,
-              correlationId,
-              purchaseId: purchaseRecord.id,
-              cycleNumber: meta.fulfilledCycle,
-              paymentId: actualPaymentId,
-              gateway,
-              amount: purchaseRecord.amount_minor_units,
-              planTier
-            }),
-            created_at: now
-          });
-        } catch {}
-        try {
-          const hasInvOutbox = typeof trx.schema?.hasTable === 'function'
-            ? await trx.schema.hasTable('billing_invoice_reconciliation_outbox')
-            : false;
-          if (hasInvOutbox) {
-            const outboxId = `biro_${crypto.randomUUID().replace(/-/g, '')}`;
-            let ins = trx('billing_invoice_reconciliation_outbox').insert({
-              id: outboxId,
-              subscription_id: purchaseRecord.id,
-              cycle_number: meta.fulfilledCycle || 1,
-              customer_id: customerId,
-              principal_id: principalId,
-              gateway,
-              plan_tier: planTier,
-              amount_minor_units: purchaseRecord.amount_minor_units || 0,
-              currency: 'INR',
-              actual_payment_id: actualPaymentId || null,
-              gateway_order_id: gatewayOrderId || null,
-              correlation_id: correlationId,
-              state: 'PENDING',
-              attempts: 0,
-              max_attempts: 5,
-              fencing_token: 0,
-              payload: JSON.stringify({
-                errorCode: 'INVOICE_GENERATION_FAILED',
-                errorMessage: sanitizedError,
-                planTier
-              }),
-              created_at: now,
-              updated_at: now
-            });
-            if (typeof ins.onConflict === 'function') {
-              ins = ins.onConflict(['subscription_id', 'cycle_number']).ignore();
-            }
-            await ins;
-          }
-        } catch (outboxInsErr: any) {
-          console.warn(`[PaymentGateway] Could not persist invoice reconciliation outbox: ${outboxInsErr?.message}`);
-        }
-        try {
-          const existingMeta = typeof purchaseRecord.metadata === 'string' ? JSON.parse(purchaseRecord.metadata) : (purchaseRecord.metadata || {});
-          await trx('subscriptions').where({ id: purchaseRecord.id }).update({
-            metadata: JSON.stringify({
-              ...existingMeta,
-              invoice_status: 'PENDING_RECONCILIATION',
-              invoice_error: sanitizedError,
-              invoice_correlation_id: correlationId
-            }),
-            updated_at: now
-          });
-        } catch {}
-      }
 
       return;
     }
@@ -2352,11 +2155,12 @@ export class PaymentGatewayService {
     if (
       eventType === 'refund.processed' ||
       eventType === 'refund.speed_processed' ||
-      eventType === 'REFUND_SUCCESS'
+      eventType === 'REFUND_SUCCESS' ||
+      (eventType === 'REFUND_STATUS' && String(payload.data?.refund?.refund_status || payload.refund?.status || '').toUpperCase() === 'SUCCESS')
     ) {
       const paymentEntity = payload.payload?.payment?.entity || payload.payment || payload.data?.payment || {};
       const refundEntity = payload.payload?.refund?.entity || payload.refund || payload.data?.refund || {};
-      const gatewayPaymentId = paymentEntity.id || refundEntity.payment_id || payload.data?.payment?.cf_payment_id;
+      const gatewayPaymentId = paymentEntity.id || refundEntity.payment_id || payload.data?.payment?.cf_payment_id || payload.data?.refund?.cf_payment_id;
       const gatewayOrderId = paymentEntity.order_id || refundEntity.order_id || payload.data?.order?.order_id;
 
       let subRecord: any = null;
@@ -2370,7 +2174,7 @@ export class PaymentGatewayService {
           subRecord = (candidateSubs || []).find((s: any) => {
             try {
               const m = typeof s.metadata === 'string' ? JSON.parse(s.metadata) : (s.metadata || {});
-              return m.lastPaymentId === gatewayPaymentId || m.initialPaymentId === gatewayPaymentId;
+              return m.lastPaymentId === gatewayPaymentId || m.initialPaymentId === gatewayPaymentId || m.auth_payment_id === gatewayPaymentId;
             } catch { return false; }
           });
         }
@@ -2726,6 +2530,7 @@ export class PaymentGatewayService {
 
     const clientKey = clientOpKey || `op_${customerId}_${planTier}_${currency}_${gateway}`;
     const leaseKey = `checkout:sub:${customerId}`;
+    const leaseOpId = `lease:${clientKey}`;
     const expectedPayloadHash = crypto.createHash('sha256').update(`${customerId}:${planTier}:${currency}:${gateway}`).digest('hex');
 
     if (hasTransaction) {
@@ -2859,7 +2664,7 @@ export class PaymentGatewayService {
           .where('locked_until', '>', now)
           .first();
 
-        if (activeLease && activeLease.operation_id !== clientKey) {
+        if (activeLease && activeLease.operation_id !== leaseOpId && activeLease.operation_id !== clientKey) {
           throw new Error('CONCURRENT_CHECKOUT_IN_PROGRESS: A checkout session is currently in progress for your account. Please complete or dismiss your current session before starting a new one.');
         }
 
@@ -2867,7 +2672,7 @@ export class PaymentGatewayService {
           .insert({
             key: leaseKey,
             principal_id: principalId,
-            operation_id: clientKey,
+            operation_id: leaseOpId,
             operation_type: 'subscription_checkout',
             payload_hash: expectedPayloadHash,
             status: 'IN_PROGRESS',
@@ -2878,7 +2683,7 @@ export class PaymentGatewayService {
         if (typeof leaseIns.onConflict === 'function') {
           leaseIns = leaseIns.onConflict('key').merge({
             principal_id: principalId,
-            operation_id: clientKey,
+            operation_id: leaseOpId,
             payload_hash: expectedPayloadHash,
             status: 'IN_PROGRESS',
             locked_until: now + 30000,
@@ -2931,6 +2736,10 @@ export class PaymentGatewayService {
     let gatewayOrderId: string;
     let gatewayCheckoutUrl: string | undefined;
     let gatewayPaymentSessionId: string | undefined;
+    let cashfreeImmediateAuthExpected = false;
+    let cashfreeExpectedAuthRefund: boolean | undefined = undefined;
+    let cashfreeNextScheduleDate: string | null = null;
+    const expectedNextRenewalAt = this.addOneMonthEpochMs(now);
 
     const recurringPlanId = gateway === 'razorpay'
       ? CANDIDATE_RAZORPAY_PLANS[planTier]?.[currency]
@@ -3067,14 +2876,16 @@ export class PaymentGatewayService {
           ? (process.env.AUTHORIZED_STAGING_CANONICAL_DOMAIN || 'staging.virexaaiventures.com')
           : (process.env.AIRA_CANONICAL_DOMAIN || 'aira-ai-2026.vercel.app');
         const returnUrl = `https://${canonicalDomain}/api/billing/cashfree/return?sub_id=${encodeURIComponent(purchaseId)}&gateway=cashfree`;
-        const firstChargeTime = this.formatIstIsoTimestamp(Date.now() + 25 * 60 * 60 * 1000);
+        const authorizationAmountMajor = Number((price.amountMinorUnits / 100).toFixed(2));
+        const firstChargeTime = this.formatIstIsoTimestamp(expectedNextRenewalAt);
+        cashfreeNextScheduleDate = firstChargeTime;
 
         const cfSubRes = await fetch(cfBaseUrl, {
           method: 'POST',
           headers: {
             'x-client-id': process.env.CASHFREE_APP_ID,
             'x-client-secret': process.env.CASHFREE_SECRET_KEY,
-            'x-api-version': '2023-08-01',
+            'x-api-version': '2025-01-01',
             'Content-Type': 'application/json'
           },
           signal: AbortSignal.timeout(15000),
@@ -3085,7 +2896,7 @@ export class PaymentGatewayService {
               plan_name: `AIRA ${planTier.toUpperCase()}`,
               plan_type: 'PERIODIC',
               plan_currency: currency,
-              plan_amount: price.amountMinorUnits / 100,
+              plan_amount: authorizationAmountMajor,
               plan_interval_type: 'MONTH',
               plan_intervals: 1
             },
@@ -3094,6 +2905,11 @@ export class PaymentGatewayService {
               customer_phone: normalizedPhone,
               customer_email: customerEmail,
               customer_name: customerName
+            },
+            authorization_details: {
+              authorization_amount: authorizationAmountMajor,
+              authorization_amount_refund: false,
+              payment_methods: ['upi', 'card']
             },
             subscription_first_charge_time: firstChargeTime,
             subscription_meta: {
@@ -3121,6 +2937,19 @@ export class PaymentGatewayService {
           const sessionId = cfData.subscription_session_id || cfData.sub_session_id || cfData.payment_session_id;
           if (sessionId) {
             gatewayPaymentSessionId = sessionId;
+          }
+          const cfAuthDetails = cfData?.authorization_details || cfData?.authorisation_details || null;
+          cashfreeExpectedAuthRefund =
+            cfAuthDetails?.authorization_amount_refund !== undefined
+              ? Boolean(cfAuthDetails.authorization_amount_refund)
+              : false;
+          cashfreeImmediateAuthExpected =
+            price.amountMinorUnits > 100 &&
+            !cashfreeExpectedAuthRefund &&
+            (cfAuthDetails?.authorization_amount === undefined ||
+              Math.round(Number(cfAuthDetails.authorization_amount) * 100) === price.amountMinorUnits);
+          if (cfData?.next_schedule_date) {
+            cashfreeNextScheduleDate = String(cfData.next_schedule_date);
           }
         }
       } else if (isSandbox) {
@@ -3229,7 +3058,7 @@ export class PaymentGatewayService {
       const currentLease = await clientOrTrx('idempotent_operations')
         .where({ key: leaseKey })
         .first();
-      if (currentLease && currentLease.operation_id && currentLease.operation_id !== clientKey) {
+      if (currentLease && currentLease.operation_id && currentLease.operation_id !== leaseOpId && currentLease.operation_id !== clientKey) {
         throw new Error(`STALE_WORKER_FENCED: Execution lease was reassigned to operation '${currentLease.operation_id}'. Current worker execution fenced.`);
       }
 
@@ -3242,6 +3071,35 @@ export class PaymentGatewayService {
         });
       }
 
+      const checkoutMetadata = {
+        principalId,
+        customerId,
+        orderId: gatewayOrderId,
+        purchaseId,
+        planTier,
+        currency,
+        customerPhone: normalizedPhone,
+        customerEmail: customerEmail,
+        amount: price.amountMinorUnits,
+        priceId: price.id,
+        reconciliationStatus: 'AWAITING_PAYMENT',
+        checkoutUrl: gatewayCheckoutUrl,
+        subscriptionSessionId: gatewayPaymentSessionId,
+        subsSessionId: gatewayPaymentSessionId,
+        paymentSessionId: gatewayPaymentSessionId,
+        expectedNextRenewalAt,
+        ...(cashfreeNextScheduleDate ? { next_schedule_date: cashfreeNextScheduleDate } : {}),
+        ...(gateway === 'cashfree' ? {
+          providerApiVersion: '2025-01-01',
+          immediateAuthChargeExpected: cashfreeImmediateAuthExpected,
+          expectedFirstPaymentAmountMinor: price.amountMinorUnits,
+          ...(cashfreeExpectedAuthRefund !== undefined ? { expectedAuthorizationAmountRefund: cashfreeExpectedAuthRefund } : {})
+        } : {}),
+        isSandbox,
+        rehearsal: isRehearsal,
+        createdAt: now
+      };
+
       // Authoritative purchase record binding in database:
       // Binds authenticated principal, customer ID, gateway order, plan, price, amount, and currency
       const existingSub = await clientOrTrx('subscriptions').where({ id: purchaseId }).first();
@@ -3249,26 +3107,7 @@ export class PaymentGatewayService {
         await clientOrTrx('subscriptions').where({ id: purchaseId }).update({
           status: 'pending',
           gateway_subscription_id: gatewayOrderId,
-          metadata: JSON.stringify({
-            principalId,
-            customerId,
-            orderId: gatewayOrderId,
-            purchaseId,
-            planTier,
-            currency,
-            customerPhone: normalizedPhone,
-            customerEmail: customerEmail,
-            amount: price.amountMinorUnits,
-            priceId: price.id,
-            reconciliationStatus: 'AWAITING_PAYMENT',
-            checkoutUrl: gatewayCheckoutUrl,
-            subscriptionSessionId: gatewayPaymentSessionId,
-            subsSessionId: gatewayPaymentSessionId,
-            paymentSessionId: gatewayPaymentSessionId,
-            isSandbox,
-            rehearsal: isRehearsal,
-            createdAt: now
-          }),
+          metadata: JSON.stringify(checkoutMetadata),
           updated_at: now
         });
       } else {
@@ -3285,26 +3124,7 @@ export class PaymentGatewayService {
           current_period_start: now,
           current_period_end: now,
           cancel_at_period_end: false,
-          metadata: JSON.stringify({
-            principalId,
-            customerId,
-            orderId: gatewayOrderId,
-            purchaseId,
-            planTier,
-            currency,
-            customerPhone: normalizedPhone,
-            customerEmail: customerEmail,
-            amount: price.amountMinorUnits,
-            priceId: price.id,
-            reconciliationStatus: 'AWAITING_PAYMENT',
-            checkoutUrl: gatewayCheckoutUrl,
-            subscriptionSessionId: gatewayPaymentSessionId,
-            subsSessionId: gatewayPaymentSessionId,
-            paymentSessionId: gatewayPaymentSessionId,
-            isSandbox,
-            rehearsal: isRehearsal,
-            createdAt: now
-          }),
+          metadata: JSON.stringify(checkoutMetadata),
           created_at: now,
           updated_at: now
         });
@@ -3365,10 +3185,24 @@ export class PaymentGatewayService {
       checkoutUrl: gatewayCheckoutUrl,
       paymentSessionId: gatewayPaymentSessionId,
       subscriptionSessionId: gatewayPaymentSessionId,
-      subsSessionId: gatewayPaymentSessionId
+      subsSessionId: gatewayPaymentSessionId,
+      immediateActivationSupported: gateway === 'razorpay' || cashfreeImmediateAuthExpected,
+      immediateChargeAmount: Number((price.amountMinorUnits / 100).toFixed(2)),
+      nextRenewalAt: expectedNextRenewalAt,
+      nextRenewalDate: cashfreeNextScheduleDate || this.formatIstIsoTimestamp(expectedNextRenewalAt)
     };
 
     if (hasTransaction) {
+      try {
+        await (database as Knex)('idempotent_operations')
+          .where({ key: leaseKey })
+          .update({
+            status: 'COMPLETED',
+            locked_until: 0,
+            updated_at: now
+          });
+      } catch {}
+
       try {
         let opIns: any = (database as Knex)('idempotent_operations')
           .insert({
@@ -3393,14 +3227,6 @@ export class PaymentGatewayService {
           });
         }
         await opIns;
-
-        await (database as Knex)('idempotent_operations')
-          .where({ key: leaseKey })
-          .update({
-            status: 'COMPLETED',
-            locked_until: 0,
-            updated_at: now
-          });
       } catch {}
     }
 
@@ -3501,9 +3327,401 @@ export class PaymentGatewayService {
     return `${new Date(istEpochMs).toISOString().slice(0, 19)}+05:30`;
   }
 
+  /**
+   * Computes the next monthly cycle boundary anchored to +1 calendar month in IST (+05:30),
+   * clamping month-end dates (e.g., Jan 31 -> Feb 28/29) so immediate Cycle 1 activation aligns
+   * cleanly with Cashfree subscription_first_charge_time and Razorpay billing cycles.
+   */
+  private addOneMonthEpochMs(startMs: number): number {
+    const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+    const d = new Date(startMs + istOffsetMs);
+    const origDay = d.getUTCDate();
+    const targetMonth = d.getUTCMonth() + 1;
+    d.setUTCDate(1);
+    d.setUTCMonth(targetMonth);
+    const daysInTargetMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    d.setUTCDate(Math.min(origDay, daysInTargetMonth));
+    return d.getTime() - istOffsetMs;
+  }
+
+  /**
+   * Fail-closed check determining whether a Cashfree AUTH payment carries authoritative proof of a
+   * full, non-refundable first-month subscription charge (never a ₹1 verification auth).
+   */
+  private isCashfreeImmediatePaidAuth(
+    purchaseRecord: any,
+    paymentEntity: any,
+    payload: any,
+    actualPaymentId?: string,
+    options?: { allowPostActivationRefunded?: boolean }
+  ): boolean {
+    if (!actualPaymentId) return false;
+    const pStatus = String(paymentEntity?.payment_status || paymentEntity?.status || '').toUpperCase();
+    if (pStatus !== 'SUCCESS' && pStatus !== 'CAPTURED' && pStatus !== 'PAID') {
+      return false;
+    }
+
+    const meta = this.parseJsonRecordSafe(purchaseRecord?.metadata);
+    if (meta.immediateAuthChargeExpected !== true) return false;
+    if (!options?.allowPostActivationRefunded && (meta.authRefunded === true || meta.refunded === true)) return false;
+
+    const authDetails = payload?.data?.authorization_details || payload?.authorization_details || payload?.authorisation_details || {};
+    const explicitRefundFlag =
+      authDetails.authorization_amount_refund !== undefined
+        ? authDetails.authorization_amount_refund
+        : paymentEntity?.authorization_amount_refund;
+    if (explicitRefundFlag === true || explicitRefundFlag === 'true') {
+      return false;
+    }
+    const isNonRefundable =
+      explicitRefundFlag === false ||
+      explicitRefundFlag === 'false' ||
+      (explicitRefundFlag === undefined && meta.expectedAuthorizationAmountRefund === false);
+    if (!isNonRefundable) return false;
+
+    const expectedMinor = Number(purchaseRecord?.amount_minor_units || 0);
+    if (!Number.isInteger(expectedMinor) || expectedMinor <= 100) return false;
+
+    const rawMajor =
+      paymentEntity?.payment_amount !== undefined
+        ? Number(paymentEntity.payment_amount)
+        : (authDetails.authorization_amount !== undefined ? Number(authDetails.authorization_amount) : NaN);
+    const receivedMinor =
+      paymentEntity?.amount !== undefined && Number.isInteger(Number(paymentEntity.amount)) && paymentEntity.payment_amount === undefined
+        ? Number(paymentEntity.amount)
+        : (Number.isFinite(rawMajor) ? Math.round(rawMajor * 100) : 0);
+
+    if (!Number.isInteger(receivedMinor) || receivedMinor !== expectedMinor) return false;
+
+    const expectedCurr = String(purchaseRecord?.currency || 'INR').toUpperCase();
+    const receivedCurr = String(
+      paymentEntity?.payment_currency ||
+      paymentEntity?.currency ||
+      payload?.data?.plan_details?.plan_currency ||
+      expectedCurr
+    ).toUpperCase();
+    return receivedCurr === expectedCurr;
+  }
+
+  /**
+   * Atomically executes Cycle 1 paid activation: idempotent operation binding, superseding any prior
+   * active subscription (plus scheduling remote mandate cancellation), updating period timestamps,
+   * granting monthly credits, recording audit telemetry, and issuing a durable GST invoice.
+   */
+  private async executeInitialSubscriptionActivation(params: {
+    trx: any;
+    purchaseRecord: any;
+    meta: Record<string, any>;
+    principalId: string;
+    customerId: string;
+    planTier: PlanTier;
+    gateway: string;
+    gatewayOrderId: string;
+    gatewaySubscriptionIdUpdate?: string;
+    actualPaymentId?: string;
+    expectedAmount: number;
+    explicitPeriodStart?: number;
+    explicitPeriodEnd?: number;
+    cycleNumber?: number;
+    eventType: string;
+    actorType?: 'gateway_webhook' | 'system';
+    isCashfreeImmediateAuth?: boolean;
+    fulfillmentOpId: string;
+    now: number;
+  }): Promise<{ activated: boolean; invoiceNumber?: string }> {
+    const {
+      trx,
+      purchaseRecord,
+      meta,
+      principalId,
+      customerId,
+      planTier,
+      gateway,
+      gatewayOrderId,
+      gatewaySubscriptionIdUpdate,
+      actualPaymentId,
+      expectedAmount,
+      explicitPeriodStart,
+      explicitPeriodEnd,
+      cycleNumber,
+      eventType,
+      actorType = 'gateway_webhook',
+      isCashfreeImmediateAuth = false,
+      fulfillmentOpId,
+      now
+    } = params;
+
+    const plan = COMMERCIAL_PLANS[planTier] || COMMERCIAL_PLANS.plus;
+
+    const initialPeriodStart = explicitPeriodStart || now;
+    const expectedRenewalMs = Number(meta.expectedNextRenewalAt || 0);
+    const initialPeriodEnd =
+      explicitPeriodEnd ||
+      (expectedRenewalMs > initialPeriodStart ? expectedRenewalMs : this.addOneMonthEpochMs(initialPeriodStart));
+
+    meta.fulfilledCycle = cycleNumber || 1;
+    meta.activatedAt = meta.activatedAt || now;
+    if (actualPaymentId) {
+      meta.initialPaymentId = actualPaymentId;
+      meta.lastPaymentId = actualPaymentId;
+    }
+    if (isCashfreeImmediateAuth && actualPaymentId) {
+      meta.auth_payment_id = actualPaymentId;
+      meta.authorization_amount = expectedAmount / 100;
+      meta.authorizationAmountRefund = false;
+      meta.immediateAuthPaid = true;
+      meta.initialPaymentType = 'AUTH';
+      meta.gateway_auth_status = 'ACTIVE';
+      meta.gateway_subscription_status = 'ACTIVE';
+      meta.auth_recorded_at = meta.auth_recorded_at || now;
+    }
+
+    // Supersede any existing active subscriptions for this customer to satisfy uniq_subscriptions_customer_active
+    try {
+      const activeRowsResult: any = await trx('subscriptions')
+        .where({ customer_id: customerId, status: 'active' });
+      const existingActiveSubs = Array.isArray(activeRowsResult)
+        ? activeRowsResult.filter((s: any) => s && s.id !== purchaseRecord.id)
+        : (activeRowsResult && typeof activeRowsResult === 'object' && activeRowsResult.id && activeRowsResult.id !== purchaseRecord.id ? [activeRowsResult] : []);
+
+      for (const oldSub of existingActiveSubs) {
+        const oldMeta = typeof oldSub.metadata === 'string' ? JSON.parse(oldSub.metadata || '{}') : (oldSub.metadata || {});
+        await trx('subscriptions').where({ id: oldSub.id }).update({
+          status: 'superseded',
+          metadata: JSON.stringify({
+            ...oldMeta,
+            supersededBy: purchaseRecord.id,
+            supersededAt: now
+          }),
+          updated_at: now
+        });
+
+        await trx('billing_audit_events').insert({
+          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+          customer_id: customerId,
+          event_type: 'SUBSCRIPTION_SUPERSEDED',
+          actor_type: 'system',
+          actor_id: purchaseRecord.id,
+          payload: JSON.stringify({
+            oldSubscriptionId: oldSub.id,
+            oldGatewaySubscriptionId: oldSub.gateway_subscription_id,
+            newSubscriptionId: purchaseRecord.id,
+            planTier,
+            gateway
+          }),
+          created_at: now
+        });
+
+        if (oldSub.gateway_subscription_id) {
+          await this.scheduleGatewayMandateCancellation(
+            oldSub.id,
+            oldSub.gateway as 'razorpay' | 'cashfree',
+            oldSub.gateway_subscription_id,
+            principalId,
+            customerId,
+            trx,
+            purchaseRecord.id
+          );
+        }
+      }
+    } catch (superErr: any) {
+      console.warn(`[PaymentGateway] Subscription superseding error for ${customerId}:`, superErr?.message);
+    }
+
+    const updatedMetadataStr = JSON.stringify(meta);
+    await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+      status: 'active',
+      ...(gatewaySubscriptionIdUpdate ? { gateway_subscription_id: gatewaySubscriptionIdUpdate } : {}),
+      current_period_start: initialPeriodStart,
+      current_period_end: initialPeriodEnd,
+      cancel_at_period_end: false,
+      metadata: updatedMetadataStr,
+      updated_at: now
+    });
+
+    const initialGrantId = `grant_${fulfillmentOpId}`;
+    if (!this.customDbClient) {
+      await commercialBillingService.grantCredits(
+        principalId,
+        plan.monthlyPremiumCredits,
+        'subscription_monthly',
+        initialPeriodEnd,
+        plan.monthlyPremiumCredits * 2,
+        {
+          gatewayOrderId,
+          eventType,
+          purchaseId: purchaseRecord.id,
+          actualPaymentId,
+          cycleNumber: meta.fulfilledCycle,
+          idempotencyKey: initialGrantId
+        },
+        trx
+      );
+    }
+
+    try {
+      let ins = trx('idempotent_operations').insert({
+        key: `${principalId}:${fulfillmentOpId}`,
+        principal_id: principalId,
+        operation_id: fulfillmentOpId,
+        operation_type: 'subscription_activation',
+        payload_hash: '',
+        status: 'COMPLETED',
+        response_status: 200,
+        response_body: JSON.stringify({ status: 'FULFILLED', purchaseId: purchaseRecord.id, cycle: meta.fulfilledCycle }),
+        locked_until: 0,
+        created_at: now,
+        updated_at: now
+      });
+      if (ins && typeof ins.onConflict === 'function') {
+        ins = ins.onConflict(['principal_id', 'operation_id']).ignore();
+      }
+      await ins;
+    } catch {}
+
+    await trx('billing_audit_events').insert({
+      id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+      customer_id: customerId,
+      event_type: 'SUBSCRIPTION_ACTIVATED',
+      actor_type: actorType,
+      actor_id: gatewayOrderId,
+      payload: JSON.stringify({
+        purchaseId: purchaseRecord.id,
+        principalId,
+        planTier,
+        gateway,
+        currency: purchaseRecord.currency,
+        amount: purchaseRecord.amount_minor_units,
+        periodStart: initialPeriodStart,
+        periodEnd: initialPeriodEnd,
+        cycleNumber: meta.fulfilledCycle,
+        paymentType: isCashfreeImmediateAuth ? 'AUTH' : 'CHARGE',
+        actualPaymentId
+      }),
+      created_at: now
+    });
+
+    const updatedPurchaseRecord = {
+      ...purchaseRecord,
+      status: 'active',
+      current_period_start: initialPeriodStart,
+      current_period_end: initialPeriodEnd,
+      metadata: updatedMetadataStr
+    };
+
+    const hasSavepoint = typeof (trx as any).raw === 'function';
+    if (hasSavepoint) {
+      try {
+        await (trx as any).raw('SAVEPOINT sp_invoice_initial');
+      } catch {}
+    }
+    let issuedInvoice: InvoiceRecord | null = null;
+    try {
+      issuedInvoice = await this.issueDurableInvoice({
+        trx,
+        customerId,
+        principalId,
+        purchaseRecord: updatedPurchaseRecord,
+        planTier,
+        gateway,
+        actualPaymentId,
+        gatewayOrderId,
+        cycleNumber: meta.fulfilledCycle,
+        now
+      });
+      if (hasSavepoint) {
+        try {
+          await (trx as any).raw('RELEASE SAVEPOINT sp_invoice_initial');
+        } catch {}
+      }
+    } catch (invErr: any) {
+      if (hasSavepoint) {
+        try {
+          await (trx as any).raw('ROLLBACK TO SAVEPOINT sp_invoice_initial');
+        } catch {}
+      }
+      const correlationId = `rec_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const sanitizedError = (invErr?.message || 'INVOICE_GENERATION_FAILED').replace(/[\r\n\t]/g, ' ').slice(0, 255);
+      try {
+        await trx('billing_audit_events').insert({
+          id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+          customer_id: customerId,
+          event_type: 'TAX_INVOICE_PENDING_RECONCILIATION',
+          actor_type: 'system',
+          actor_id: purchaseRecord.id,
+          payload: JSON.stringify({
+            errorCode: 'INVOICE_GENERATION_FAILED',
+            errorMessage: sanitizedError,
+            correlationId,
+            purchaseId: purchaseRecord.id,
+            cycleNumber: meta.fulfilledCycle,
+            paymentId: actualPaymentId,
+            gateway,
+            amount: purchaseRecord.amount_minor_units,
+            planTier
+          }),
+          created_at: now
+        });
+      } catch {}
+      try {
+        const hasInvOutbox = typeof trx.schema?.hasTable === 'function'
+          ? await trx.schema.hasTable('billing_invoice_reconciliation_outbox')
+          : false;
+        if (hasInvOutbox) {
+          const outboxId = `biro_${crypto.randomUUID().replace(/-/g, '')}`;
+          let ins = trx('billing_invoice_reconciliation_outbox').insert({
+            id: outboxId,
+            subscription_id: purchaseRecord.id,
+            cycle_number: meta.fulfilledCycle || 1,
+            customer_id: customerId,
+            principal_id: principalId,
+            gateway,
+            plan_tier: planTier,
+            amount_minor_units: purchaseRecord.amount_minor_units || 0,
+            currency: 'INR',
+            actual_payment_id: actualPaymentId || null,
+            gateway_order_id: gatewayOrderId || null,
+            correlation_id: correlationId,
+            state: 'PENDING',
+            attempts: 0,
+            max_attempts: 5,
+            fencing_token: 0,
+            payload: JSON.stringify({
+              errorCode: 'INVOICE_GENERATION_FAILED',
+              errorMessage: sanitizedError,
+              planTier
+            }),
+            created_at: now,
+            updated_at: now
+          });
+          if (typeof ins.onConflict === 'function') {
+            ins = ins.onConflict(['subscription_id', 'cycle_number']).ignore();
+          }
+          await ins;
+        }
+      } catch (outboxInsErr: any) {
+        console.warn(`[PaymentGateway] Could not persist invoice reconciliation outbox: ${outboxInsErr?.message}`);
+      }
+      try {
+        await trx('subscriptions').where({ id: purchaseRecord.id }).update({
+          metadata: JSON.stringify({
+            ...meta,
+            invoice_status: 'PENDING_RECONCILIATION',
+            invoice_error: sanitizedError,
+            invoice_correlation_id: correlationId
+          }),
+          updated_at: now
+        });
+      } catch {}
+    }
+
+    return { activated: true, invoiceNumber: issuedInvoice?.invoiceNumber };
+  }
+
   private sanitizeProviderDetails(gateway: string, rawData: any): Record<string, unknown> | undefined {
     if (!rawData || typeof rawData !== 'object') return undefined;
     if (gateway === 'cashfree') {
+      const authDetails = rawData.authorization_details || rawData.authorisation_details || {};
       return {
         subscriptionId: rawData.subscription_id ?? null,
         cfSubscriptionId: rawData.cf_subscription_id ?? null,
@@ -3513,8 +3731,9 @@ export class PaymentGatewayService {
         subscriptionExpiryTime: rawData.subscription_expiry_time ?? null,
         planId: rawData.plan_details?.plan_id ?? null,
         planRecurringAmount: rawData.plan_details?.plan_recurring_amount ?? null,
-        authorizationStatus: rawData.authorization_details?.authorization_status ?? null,
-        authorizationAmount: rawData.authorization_details?.authorization_amount ?? null
+        authorizationStatus: authDetails.authorization_status ?? null,
+        authorizationAmount: authDetails.authorization_amount ?? null,
+        authorizationAmountRefund: authDetails.authorization_amount_refund ?? null
       };
     }
     return {
@@ -3531,6 +3750,15 @@ export class PaymentGatewayService {
     exists: boolean;
     rawStatus: string;
     paidEvidence?: boolean;
+    paidPayment?: {
+      paymentId?: string;
+      amountMinor?: number;
+      currency?: string;
+      paymentType?: string;
+      isCashfreeImmediateAuth?: boolean;
+      periodStart?: number;
+      periodEnd?: number;
+    };
     hasAuthorizedMandate?: boolean;
     gatewaySubscriptionId?: string;
     rawData?: any;
@@ -3560,11 +3788,23 @@ export class PaymentGatewayService {
         (sub.gateway === 'cashfree' && rawStatus === 'ACTIVE') ||
         (sub.gateway === 'razorpay' && rawStatus === 'ACTIVE' && !paidEvidence)
       );
+      const paymentIdCandidate = checkExtra.paymentId || checkExtra.cf_payment_id || checkExtra.razorpay_payment_id;
       return {
         queried: true,
         exists: true,
         rawStatus,
         paidEvidence,
+        ...(paidEvidence && paymentIdCandidate ? {
+          paidPayment: {
+            paymentId: String(paymentIdCandidate),
+            amountMinor: checkExtra.amountMinor !== undefined ? Number(checkExtra.amountMinor) : Number(sub.amount_minor_units || 0),
+            currency: String(checkExtra.currency || sub.currency || 'INR').toUpperCase(),
+            paymentType: checkExtra.paymentType ? String(checkExtra.paymentType).toUpperCase() : undefined,
+            isCashfreeImmediateAuth: Boolean(checkExtra.isCashfreeImmediateAuth),
+            periodStart: checkExtra.periodStart ? Number(checkExtra.periodStart) : undefined,
+            periodEnd: checkExtra.periodEnd ? Number(checkExtra.periodEnd) : undefined
+          }
+        } : {}),
         hasAuthorizedMandate,
         gatewaySubscriptionId: check.gatewaySubscriptionId || sub.gateway_subscription_id,
         rawData: check,
@@ -3587,13 +3827,69 @@ export class PaymentGatewayService {
       }
       const data: any = await resp.json().catch(() => ({}));
       const rawStatus = String(data.status || 'UNKNOWN').toUpperCase();
-      const paidEvidence = Number(data.paid_count || 0) > 0;
+      let paidEvidence = Number(data.paid_count || 0) > 0;
       const hasAuthorizedMandate = rawStatus === 'AUTHENTICATED' || (rawStatus === 'ACTIVE' && !paidEvidence);
+
+      let paidPayment: {
+        paymentId?: string;
+        amountMinor?: number;
+        currency?: string;
+        paymentType?: string;
+        periodStart?: number;
+        periodEnd?: number;
+      } | undefined;
+
+      if (paidEvidence) {
+        try {
+          const invResp = await fetch(
+            `https://api.razorpay.com/v1/invoices?subscription_id=${encodeURIComponent(sub.gateway_subscription_id)}`,
+            {
+              method: 'GET',
+              headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+              signal: AbortSignal.timeout(5000)
+            }
+          );
+          if (invResp.ok) {
+            const invData: any = await invResp.json().catch(() => ({}));
+            const items = Array.isArray(invData?.items) ? invData.items : [];
+            const expectedAmountMinor = Number(sub.amount_minor_units || 0);
+            const expectedCurrency = String(sub.currency || 'INR').toUpperCase();
+            const paidInv = items.find((inv: any) => {
+              const invStatus = String(inv?.status || '').toLowerCase();
+              const invCurr = String(inv?.currency || expectedCurrency).toUpperCase();
+              const invAmt = Number(inv?.amount_paid ?? inv?.amount ?? 0);
+              return (
+                invStatus === 'paid' &&
+                Boolean(inv?.payment_id) &&
+                invCurr === expectedCurrency &&
+                (expectedAmountMinor <= 0 || invAmt === expectedAmountMinor)
+              );
+            });
+            if (paidInv?.payment_id) {
+              paidPayment = {
+                paymentId: String(paidInv.payment_id),
+                amountMinor: Number(paidInv.amount_paid ?? paidInv.amount ?? expectedAmountMinor),
+                currency: String(paidInv.currency || expectedCurrency).toUpperCase(),
+                paymentType: 'CHARGE',
+                periodStart: (paidInv.billing_start || data.current_start) ? Number(paidInv.billing_start || data.current_start) * 1000 : undefined,
+                periodEnd: (paidInv.billing_end || data.current_end) ? Number(paidInv.billing_end || data.current_end) * 1000 : undefined
+              };
+            } else if (items.length > 0) {
+              // Invoices existed but none is paid for full amount
+              paidEvidence = false;
+            }
+          }
+        } catch {
+          // Non-fatal: webhook or subsequent poll will resolve payment_id
+        }
+      }
+
       return {
         queried: true,
         exists: true,
         rawStatus,
         paidEvidence,
+        ...(paidPayment ? { paidPayment } : {}),
         hasAuthorizedMandate,
         gatewaySubscriptionId: data.id || sub.gateway_subscription_id,
         rawData: data,
@@ -3608,12 +3904,14 @@ export class PaymentGatewayService {
         process.env.CASHFREE_ENV === 'TEST' ||
         process.env.CASHFREE_APP_ID?.startsWith('TEST');
       const cfBaseUrl = isSandbox ? 'https://sandbox.cashfree.com/pg/subscriptions' : 'https://api.cashfree.com/pg/subscriptions';
+      const cfMeta = this.parseJsonRecordSafe(sub.metadata);
+      const cfApiVersion = String(cfMeta.providerApiVersion || '2025-01-01');
       const resp = await fetch(`${cfBaseUrl}/${sub.gateway_subscription_id}`, {
         method: 'GET',
         headers: {
           'x-client-id': process.env.CASHFREE_APP_ID,
           'x-client-secret': process.env.CASHFREE_SECRET_KEY,
-          'x-api-version': '2023-08-01',
+          'x-api-version': cfApiVersion,
           'Content-Type': 'application/json'
         },
         signal: AbortSignal.timeout(5000)
@@ -3626,13 +3924,103 @@ export class PaymentGatewayService {
       }
       const data: any = await resp.json().catch(() => ({}));
       const rawStatus = String(data.subscription_status || 'UNKNOWN').toUpperCase();
-      const authStatus = String(data?.authorisation_details?.authorization_status || '').toUpperCase();
+      const authDetails = data?.authorization_details || data?.authorisation_details || {};
+      const authStatus = String(authDetails.authorization_status || '').toUpperCase();
       const hasAuthorizedMandate = rawStatus === 'ACTIVE' || authStatus === 'ACTIVE';
+
+      let paidEvidence = false;
+      let paidPayment: {
+        paymentId?: string;
+        amountMinor?: number;
+        currency?: string;
+        paymentType?: string;
+        isCashfreeImmediateAuth?: boolean;
+        periodEnd?: number;
+      } | undefined;
+
+      try {
+        const payResp = await fetch(`${cfBaseUrl}/${encodeURIComponent(sub.gateway_subscription_id)}/payments`, {
+          method: 'GET',
+          headers: {
+            'x-client-id': process.env.CASHFREE_APP_ID,
+            'x-client-secret': process.env.CASHFREE_SECRET_KEY,
+            'x-api-version': cfApiVersion,
+            'Content-Type': 'application/json'
+          },
+          signal: AbortSignal.timeout(5000)
+        });
+        if (payResp.ok) {
+          const payPayload: any = await payResp.json().catch(() => ([]));
+          const payments = Array.isArray(payPayload)
+            ? payPayload
+            : (Array.isArray(payPayload?.data) ? payPayload.data : (Array.isArray(payPayload?.payments) ? payPayload.payments : []));
+          const expectedMinor = Number(sub.amount_minor_units || 0);
+          const expectedCurr = String(sub.currency || 'INR').toUpperCase();
+          const parsedNextScheduleMs = data.next_schedule_date ? Date.parse(String(data.next_schedule_date)) : NaN;
+
+          for (const p of payments) {
+            const pStatus = String(p?.payment_status || p?.status || '').toUpperCase();
+            if (pStatus !== 'SUCCESS' && pStatus !== 'CAPTURED' && pStatus !== 'PAID') continue;
+
+            const pRefunded = Boolean(p?.refunded || String(p?.refund_status || '').toUpperCase() === 'SUCCESS');
+            if (pRefunded) continue;
+
+            const pId = String(p?.cf_payment_id || p?.payment_id || p?.id || '').trim();
+            if (!pId) continue;
+
+            const pCurr = String(p?.payment_currency || p?.currency || expectedCurr).toUpperCase();
+            if (pCurr !== expectedCurr) continue;
+
+            const pAmountMinor =
+              p?.payment_amount !== undefined
+                ? Math.round(Number(p.payment_amount) * 100)
+                : (p?.amount !== undefined ? Number(p.amount) : 0);
+            if (!Number.isInteger(pAmountMinor) || pAmountMinor <= 100 || (expectedMinor > 0 && pAmountMinor !== expectedMinor)) {
+              continue;
+            }
+
+            const pType = String(p?.payment_type || '').toUpperCase();
+            if (pType === 'AUTH') {
+              const authPayload = { data: { authorization_details: authDetails, plan_details: data?.plan_details } };
+              if (!this.isCashfreeImmediatePaidAuth(sub, p, authPayload, pId)) {
+                continue;
+              }
+              paidEvidence = true;
+              paidPayment = {
+                paymentId: pId,
+                amountMinor: pAmountMinor,
+                currency: pCurr,
+                paymentType: 'AUTH',
+                isCashfreeImmediateAuth: true,
+                periodEnd: Number.isFinite(parsedNextScheduleMs) && parsedNextScheduleMs > Date.now() ? parsedNextScheduleMs : undefined
+              };
+              break;
+            }
+
+            if (pType === 'CHARGE') {
+              paidEvidence = true;
+              paidPayment = {
+                paymentId: pId,
+                amountMinor: pAmountMinor,
+                currency: pCurr,
+                paymentType: 'CHARGE',
+                isCashfreeImmediateAuth: false,
+                periodEnd: Number.isFinite(parsedNextScheduleMs) && parsedNextScheduleMs > Date.now() ? parsedNextScheduleMs : undefined
+              };
+              break;
+            }
+          }
+        }
+      } catch {
+        // Non-fatal: preserve mandate status inspection even if /payments lookup times out
+      }
+
       return {
         queried: true,
         exists: true,
         rawStatus,
-        paidEvidence: false,
+        paidEvidence,
+        ...(paidPayment ? { paidPayment } : {}),
         hasAuthorizedMandate,
         gatewaySubscriptionId: data.subscription_id || sub.gateway_subscription_id,
         rawData: data,
@@ -4418,7 +4806,7 @@ export class PaymentGatewayService {
         };
       }
 
-      if (check.rawStatus === 'ACTIVE' || check.rawStatus === 'AUTHENTICATED') {
+      if (check.rawStatus === 'ACTIVE' || check.rawStatus === 'AUTHENTICATED' || (check.rawStatus === 'COMPLETED' && check.paidEvidence)) {
         // Never grant active tier on a 'pending' subscription without confirmed paid charge evidence.
         if (sub.status === 'pending' && !check.paidEvidence) {
           let existingMeta: any = {};
@@ -4445,6 +4833,70 @@ export class PaymentGatewayService {
             planId: sub.plan_id,
             gateway: sub.gateway,
             message: `Provider mandate status is ${check.rawStatus}; awaiting settled full subscription charge webhook before activation.`
+          };
+        }
+
+        const subMeta = this.parseJsonRecordSafe(sub.metadata);
+        const reconciledPaymentId = check.paidPayment?.paymentId;
+        const principalId = subMeta.principalId;
+
+        if (reconciledPaymentId && principalId && sub.status !== 'active' && sub.status !== 'refunded' && sub.status !== 'cancelled' && sub.status !== 'canceled') {
+          const fulfillmentOpId = `${sub.gateway}:sub:${sub.id}:pay:${reconciledPaymentId}`;
+          const gatewayOrderId = check.gatewaySubscriptionId || sub.gateway_subscription_id || sub.id;
+          let invoiceNumber: string | undefined;
+
+          const runActivation = async (trx: any) => {
+            const existingOp = await trx('idempotent_operations')
+              .where({ principal_id: principalId, operation_id: fulfillmentOpId })
+              .first();
+            if (existingOp && existingOp.status === 'COMPLETED') {
+              await trx('subscriptions').where({ id: sub.id }).update({
+                status: 'active',
+                ...(check.gatewaySubscriptionId ? { gateway_subscription_id: check.gatewaySubscriptionId } : {}),
+                updated_at: now
+              });
+              return;
+            }
+            const res = await this.executeInitialSubscriptionActivation({
+              trx,
+              purchaseRecord: sub,
+              meta: { ...subMeta },
+              principalId,
+              customerId: sub.customer_id,
+              planTier: (sub.plan_id as PlanTier) || 'plus',
+              gateway: sub.gateway,
+              gatewayOrderId,
+              gatewaySubscriptionIdUpdate: check.gatewaySubscriptionId || undefined,
+              actualPaymentId: reconciledPaymentId,
+              expectedAmount: Number(sub.amount_minor_units || 0),
+              explicitPeriodStart: check.paidPayment?.periodStart,
+              explicitPeriodEnd: check.paidPayment?.periodEnd,
+              cycleNumber: 1,
+              eventType: `reconcile.${sub.gateway}.initial_payment`,
+              actorType: 'system',
+              isCashfreeImmediateAuth: Boolean(check.paidPayment?.isCashfreeImmediateAuth),
+              fulfillmentOpId,
+              now
+            });
+            invoiceNumber = res.invoiceNumber;
+          };
+
+          if (typeof db.transaction === 'function') {
+            await db.transaction(runActivation);
+          } else {
+            await runActivation(db);
+          }
+
+          return {
+            reconciled: true,
+            status: 'active',
+            providerStatus: check.rawStatus,
+            providerDetails: check.providerDetails,
+            paidEvidence: true,
+            planId: sub.plan_id,
+            gateway: sub.gateway,
+            ...(invoiceNumber ? { invoiceNumber } : {}),
+            message: 'Authoritatively reconciled: Full first payment verified; subscription active with credits and GST invoice issued.'
           };
         }
 
@@ -6386,11 +6838,66 @@ export class PaymentGatewayService {
         });
       } else {
         meta.refunded = true;
+        meta.authRefunded = true;
         await trx('subscriptions').where({ id: params.subRecord.id }).update({
           status: 'refunded',
           metadata: JSON.stringify(meta),
           updated_at: now
         });
+
+        if (!this.customDbClient) {
+          const hasSavepoint = typeof (trx as any).raw === 'function';
+          if (hasSavepoint) {
+            try { await (trx as any).raw('SAVEPOINT sp_refund_credit_revoke'); } catch {}
+          }
+          try {
+            const acct = await trx('credit_accounts')
+              .where({ customer_id: params.subRecord.customer_id })
+              .forUpdate()
+              .first();
+            if (acct) {
+              const grantRows: any[] = await trx('credit_grants')
+                .where({ account_id: acct.id })
+                .where('remaining_credits', '>', 0)
+                .select('*');
+              let revokeTotal = 0;
+              for (const gr of grantRows || []) {
+                const gm = this.parseJsonRecordSafe(gr.metadata);
+                if (gm.purchaseId === params.subRecord.id) {
+                  revokeTotal += Number(gr.remaining_credits || 0);
+                  await trx('credit_grants').where({ id: gr.id }).update({ remaining_credits: 0 });
+                }
+              }
+              if (revokeTotal > 0) {
+                const currentBalance = Number(acct.balance_credits || 0);
+                const actualDeduct = Math.min(currentBalance, revokeTotal);
+                const newBalance = Math.max(0, currentBalance - actualDeduct);
+                await trx('credit_accounts')
+                  .where({ id: acct.id })
+                  .update({ balance_credits: newBalance, updated_at: now });
+                await trx('credit_transactions').insert({
+                  id: `ctx_${crypto.randomUUID().replace(/-/g, '')}`,
+                  account_id: acct.id,
+                  transaction_type: 'REVOKE',
+                  amount_credits: -actualDeduct,
+                  balance_before: currentBalance,
+                  balance_after: newBalance,
+                  idempotency_key: `revoke_refund:${params.subRecord.id}:${norm.refundId}`,
+                  description: `Credits revoked for refunded subscription ${params.subRecord.id}`,
+                  metadata: JSON.stringify({ subscriptionId: params.subRecord.id, refundId: norm.refundId }),
+                  created_at: now
+                });
+              }
+            }
+            if (hasSavepoint) {
+              try { await (trx as any).raw('RELEASE SAVEPOINT sp_refund_credit_revoke'); } catch {}
+            }
+          } catch {
+            if (hasSavepoint) {
+              try { await (trx as any).raw('ROLLBACK TO SAVEPOINT sp_refund_credit_revoke'); } catch {}
+            }
+          }
+        }
 
         await trx('billing_audit_events').insert({
           id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -6558,6 +7065,7 @@ export class PaymentGatewayService {
       nextScheduleDate: string | null;
       lastPaymentError: string | null;
       hasAuthorizedMandate: boolean;
+      immediateAuthChargeExpected?: boolean;
       canCancelPending: boolean;
       createdAt: number;
     } | null;
@@ -6621,6 +7129,7 @@ export class PaymentGatewayService {
                 nextScheduleDate: pendingMeta.next_schedule_date || providerDetails.nextScheduleDate || null,
                 lastPaymentError: pendingMeta.lastPaymentError || null,
                 hasAuthorizedMandate,
+                immediateAuthChargeExpected: Boolean(pendingMeta.immediateAuthChargeExpected),
                 canCancelPending: pendingSub.status === 'pending' || pendingSub.status === 'ambiguous_timeout',
                 createdAt: Number(pendingSub.created_at) || 0
               };
@@ -6766,13 +7275,22 @@ export class PaymentGatewayService {
       for (const gev of allGatewayEvents) {
         const gp = this.parseJsonRecordSafe(gev?.payload);
         const data = gp.data || gp;
-        const payEntity = gp.payload?.payment?.entity || gp.payment || data.payment || {};
+        const cfFlatData = data && (
+          data.cf_payment_id !== undefined ||
+          data.payment_amount !== undefined ||
+          data.payment_status !== undefined ||
+          data.payment_type !== undefined ||
+          data.subscription_id !== undefined
+        ) ? data : undefined;
+        const payEntity = gp.payload?.payment?.entity || gp.payment || data.payment || cfFlatData || {};
         const paymentType = String(payEntity.payment_type || data.payment_type || '').toUpperCase();
         const paymentStatus = String(payEntity.payment_status || payEntity.status || data.payment_status || '').toUpperCase();
         const pid = String(payEntity.cf_payment_id || payEntity.id || data.cf_payment_id || data.payment_id || '').trim();
         const subRef = String(
           data.subscription_id ||
+          data.cf_subscription_id ||
           data.subscription_details?.subscription_id ||
+          data.subscription_details?.cf_subscription_id ||
           gp.payload?.subscription?.entity?.id ||
           gp.subscription?.id ||
           ''
@@ -6780,6 +7298,34 @@ export class PaymentGatewayService {
 
         if (!pid) continue;
         if (paymentType === 'AUTH' || gev.event_type === 'SUBSCRIPTION_AUTH_SUCCESS') {
+          const matchedSub = subRef
+            ? (subsById.get(subRef) || Array.from(subsById.values()).find((s: any) => s && s.gateway_subscription_id === subRef))
+            : undefined;
+          const matchedSubMeta = matchedSub ? this.parseJsonRecordSafe(matchedSub.metadata) : {};
+          const allowPostActivationRefund = Boolean(
+            matchedSub &&
+            matchedSubMeta.immediateAuthPaid === true &&
+            Number(matchedSubMeta.fulfilledCycle || 0) >= 1
+          );
+          if (
+            gev.event_type !== 'SUBSCRIPTION_AUTH_SUCCESS' &&
+            matchedSub &&
+            this.isCashfreeImmediatePaidAuth(matchedSub, payEntity, gp, pid, { allowPostActivationRefunded: allowPostActivationRefund })
+          ) {
+            const rawAmt = payEntity.payment_amount !== undefined
+              ? Math.round(Number(payEntity.payment_amount) * 100)
+              : (payEntity.amount !== undefined ? Number(payEntity.amount) : (data.payment_amount !== undefined ? Math.round(Number(data.payment_amount) * 100) : undefined));
+            const rawCurr = String(payEntity.payment_currency || payEntity.currency || data.payment_currency || '').toUpperCase() || undefined;
+            const entry = gwSettledCharges.get(pid) || {
+              gateway: typeof gev.gateway === 'string' ? gev.gateway.toLowerCase() : undefined,
+              currency: rawCurr,
+              amountMinor: rawAmt,
+              subIds: new Set<string>()
+            };
+            if (subRef) entry.subIds.add(subRef);
+            gwSettledCharges.set(pid, entry);
+            continue;
+          }
           gwAuthPaymentIds.add(pid);
           continue;
         }

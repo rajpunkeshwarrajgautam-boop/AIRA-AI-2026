@@ -104,6 +104,9 @@ jobs:
       - name: Cashfree v2025-01-01 webhook compatibility and replay window suite
         run: npx tsx --test test/cashfree-v2025-webhook-compatibility.test.ts
 
+      - name: Immediate first-payment activation & dual-gateway lifecycle suite (20 scenarios, real PostgreSQL 18)
+        run: npx tsx --test test/immediate-first-payment-activation.test.ts
+
       - name: Cashfree recurring plan dynamic provisioning and safety verification
         run: npx tsx --test test/cashfree-recurring-plan-provisioning.test.ts test/cashfree-checkout-contact-details.test.ts
 
