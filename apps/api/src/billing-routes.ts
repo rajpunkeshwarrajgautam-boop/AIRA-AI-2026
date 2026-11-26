@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { Router, Request, Response } from 'express';
 import { commercialBillingService } from './billing/commercial-billing-service.js';
-import { paymentGatewayService, isTerminalError, validateAndNormalizeIndianPhone } from './billing/payment-gateway-service.js';
+import { paymentGatewayService, isTerminalError, validateAndNormalizeIndianPhone, extractRawWebhookBody } from './billing/payment-gateway-service.js';
 import { productionReadinessService } from './billing/production-readiness.js';
 import { COMMERCIAL_PLANS } from '../../../packages/contracts/src/commercial.js';
 import { isStagingSandboxRehearsalActive } from './billing/staging-sandbox-rehearsal-guard.js';
@@ -351,10 +351,16 @@ export function createBillingRoutes(): Router {
 
       const symbol = invoice.currency === 'INR' ? '₹' : '$';
       const safeFileNum = invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '');
+      const formatPct = (rate?: number, fallbackPct = 18): string => {
+        const pct = typeof rate === 'number' && Number.isFinite(rate)
+          ? Number((rate * 100).toFixed(2))
+          : fallbackPct;
+        return `${pct}%`;
+      };
       const taxRows =
         invoice.cgstAmount !== undefined && invoice.sgstAmount !== undefined
-          ? `<tr><td>CGST (9%)</td><td class="num">${symbol}${invoice.cgstAmount.toFixed(2)}</td></tr><tr><td>SGST (9%)</td><td class="num">${symbol}${invoice.sgstAmount.toFixed(2)}</td></tr>`
-          : `<tr><td>IGST (18%)</td><td class="num">${symbol}${(invoice.igstAmount ?? invoice.gstAmount).toFixed(2)}</td></tr>`;
+          ? `<tr><td>CGST (${formatPct(invoice.cgstRate, 9)})</td><td class="num">${symbol}${invoice.cgstAmount.toFixed(2)}</td></tr><tr><td>SGST (${formatPct(invoice.sgstRate, 9)})</td><td class="num">${symbol}${invoice.sgstAmount.toFixed(2)}</td></tr>`
+          : `<tr><td>IGST (${formatPct(invoice.igstRate ?? invoice.taxRate, 18)})</td><td class="num">${symbol}${(invoice.igstAmount ?? invoice.gstAmount).toFixed(2)}</td></tr>`;
 
       const html = `<!doctype html>
 <html lang="en">
@@ -576,9 +582,10 @@ export function createBillingRoutes(): Router {
    */
   router.post('/webhook/razorpay', async (req: Request, res: Response) => {
     const signature = req.headers['x-razorpay-signature'] as string;
-    const rawBody = typeof (req as any).rawBody === 'string'
-      ? (req as any).rawBody
-      : JSON.stringify(req.body);
+    const rawBody = extractRawWebhookBody(req);
+    if (rawBody === null) {
+      return res.status(400).json({ error: 'WEBHOOK_RAW_BODY_REQUIRED: Unparsed raw request body is required for cryptographic HMAC verification.' });
+    }
 
     try {
       const result = await paymentGatewayService.processRazorpayWebhook(rawBody, signature);
@@ -606,9 +613,10 @@ export function createBillingRoutes(): Router {
       req.headers['x-webhook-event-id'] ||
       req.headers['x-event-id']
     ) as string | undefined;
-    const rawBody = typeof (req as any).rawBody === 'string'
-      ? (req as any).rawBody
-      : JSON.stringify(req.body);
+    const rawBody = extractRawWebhookBody(req);
+    if (rawBody === null) {
+      return res.status(400).json({ error: 'WEBHOOK_RAW_BODY_REQUIRED: Unparsed raw request body is required for cryptographic HMAC verification.' });
+    }
 
     try {
       const result = await paymentGatewayService.processCashfreeWebhook(
