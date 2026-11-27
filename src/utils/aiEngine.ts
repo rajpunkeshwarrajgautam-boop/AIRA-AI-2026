@@ -2,6 +2,36 @@ import type { AppSettings, Artifact, Attachment, ModelId, ArtifactType, AgentTim
 import { normalizeAgentTimelineEvent } from './agentTimeline';
 import { agentMemory } from './agentMemoryEngine';
 import { neonAuth } from '../lib/neonAuth';
+import { inferArtifactLanguageFromType } from './artifactClassification';
+
+export function normalizeArtifactOpenPayload(data: {
+  id?: string;
+  title?: string;
+  type?: string;
+  language?: string;
+  version?: number;
+}): Artifact {
+  const normalizedType = (
+    data.type === 'text/html' ||
+    data.type === 'image/svg+xml' ||
+    data.type === 'application/vnd.ant.react' ||
+    data.type === 'application/vnd.ant.mermaid' ||
+    data.type === 'text/markdown' ||
+    data.type === 'application/vnd.ant.code'
+  )
+    ? (data.type as ArtifactType)
+    : 'application/vnd.ant.code';
+
+  return {
+    id: data.id || 'art-' + Date.now(),
+    title: data.title || 'Generated Artifact',
+    type: normalizedType,
+    language: inferArtifactLanguageFromType(normalizedType, data.language),
+    content: '',
+    version: data.version || 1,
+    versions: [],
+  };
+}
 
 export interface StreamCallbacks {
   onThinkingChunk?: (chunk: string) => void;
@@ -405,15 +435,7 @@ export async function streamAIResponse(
                   wrappedCallbacks.onLatencyMetrics?.(data);
                 } else if (currentEvent === 'artifact_open') {
                   artifactCode = '';
-                  activeArtifact = {
-                    id: 'art-' + Date.now(),
-                    title: data.title || 'Interactive Artifact',
-                    type: (data.type || 'text/html') as ArtifactType,
-                    language: data.language || 'html',
-                    content: '',
-                    version: data.version || 1,
-                    versions: [],
-                  };
+                  activeArtifact = normalizeArtifactOpenPayload(data);
                   if (reconcileArtifacts && wrappedCallbacks.onArtifactFound) {
                     wrappedCallbacks.onArtifactFound(activeArtifact);
                   }

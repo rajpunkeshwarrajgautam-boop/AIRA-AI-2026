@@ -58,48 +58,62 @@ Aligned with `COMMERCIAL_PLANS` (`packages/contracts/src/commercial.ts`), `PLAN_
 2. **Upstream License Compliance:**
    - `OpenIntelligentUI`: MIT License (Copyright Atai Barkai) -> preserve MIT notice in adapted headers/ATTRIBUTION for Phases 1–3.
    - `ag-ui`: MIT; `A2UI`: Apache-2.0; `clarinet`: BSD-2-Clause; `idiomorph`: 0BSD; `chart.js`: MIT; `d3`: ISC; `three`: MIT.
-3. **Existing `src/utils/artifactSandbox.ts` Security Audit (Actionable before Phase 3):**
-   - `JSON.stringify(...)` inside `<script>` tags does not escape `</script>` or `<!--` (`\u003c` escaping required).
-   - Unpinned third-party CDNs (`cdn.tailwindcss.com`, `unpkg.com`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`) trigger CSP failures and supply-chain exposure; React mode uses `'unsafe-eval'` for Babel.
-   - HTML mode uses substring `.includes('Content-Security-Policy')` check, bypassable by HTML comments.
-   - Markdown mode runs `marked.parse` without DOMPurify under `'unsafe-inline'`; SVG mode injects unvalidated `<svg>` markup.
-   - No host-side concurrent sandbox instance limit.
-4. **Visualization Dependencies:** Not installed in Phase 0 (`chart.js@4.6.2`, `d3@7.9.2`, `three@0.187.0` deferred to Phases 1–3).
+3. **Existing `src/utils/artifactSandbox.ts` Security Audit -> REMEDIATED (Phase 0.5):**
+   - `safeJsonStringifyForHtmlScript` (`src/utils/sandboxSecurity.ts`) escapes `<`, `>`, `&`, U+2028, and U+2029 (blocks `</script>` and `<!--` breakouts).
+   - Floating unpinned external CDNs (`cdn.tailwindcss.com`, `unpkg.com`, `cdn.jsdelivr.net`, `cdnjs.cloudflare.com`) and `'unsafe-eval'` are removed from all single-file and multi-file sandbox templates (`ARTIFACT_CSP_META_TAG`, `ARTIFACT_STRICT_STATIC_CSP_META_TAG`, `ARTIFACT_REACT_CSP_META_TAG`); SVG/Markdown/React/Mermaid/Code preview render statically with `script-src 'none'`.
+   - `stripUntrustedHtmlSecurityVectors` strips model-supplied `<meta http-equiv="Content-Security-Policy|refresh">`, `<base>`, and external `script[src]` (including protocol-relative `//`) before injecting the authoritative CSP.
+   - Pure TypeScript `renderSafeMarkdownHtml` and `sanitizeSvgMarkup` neutralize HTML/script/event-handler/`javascript:`/`vbscript:`/`data:text/html`/`data:image/svg+xml` XSS vectors without unsafe inline scripts.
+   - Host `postMessage` bridge (`validateSandboxBridgeMessage`) enforces `event.source`, opaque `event.origin === 'null'`, active cryptographic `nonce`, allowed action allowlist (`CONSOLE_LOG`, `AIRA_ARTIFACT_RUNTIME_ERROR`), message/payload byte caps (`SANDBOX_LIMITS`), and a max concurrent sandbox preview slot limit (`acquireSandboxSlot`/`releaseSandboxSlot`, limit 2).
+4. **Visualization Dependencies:** Not installed in Phase 0/0.5 (`chart.js@4.6.2`, `d3@7.9.2`, `three@0.187.0` deferred to Phases 1–3).
 
 ---
 
-## 5. Phase 0 Implementation & Benchmark Metrics
+## 5. Phase 0 & Phase 0.5 Implementation Ledger
 
-### Implemented Files
-- `packages/contracts/src/index.ts` — Added optional `ModelToolDefinition`, `ModelToolChoice` schemas onto `ModelPolicySchema` (internal-only; excluded from public `CreateRunRequestSchema`).
-- `packages/model-router/src/tool-call-stream.ts` — Shared `ToolCallStreamAccumulator`, `validateToolArgumentsJson`, OpenAI/Anthropic formatters, and `isSubstantiveStreamDelta`.
-- `packages/model-router/src/index.ts` — Provider-normalized tool-call streaming across `OpenAIAdapter`, `AnthropicAdapter` (shared `buildRequestPayload`, consecutive `tool_result` merging, `extendedThinking`, `firstTokenTimeoutMs`, SSE error handling), and `DeterministicMockAdapter`.
-- `packages/model-router/src/gemini-adapter.ts` — Normalized `functionDeclarations`, `toolConfig`, `functionCall`/`functionResponse` serialization, invalid `functionCall` isolation, truncated-frame detection, `reader.releaseLock()` + `AbortSignal.any`.
-- `packages/model-router/src/resilient-adapter.ts` — First-substantive-event stickiness lock (`text` OR `tool_call_*`), tool-only fallback support, listener cleanup.
-- `packages/agent-runtime/src/presentation-router.ts` — Isolated 3-tier `PresentationRouter` covering all 8 modes (`Tier 1` deterministic -> `Tier 2` bounded `ModelRouter` Zod v4 JSON -> `Tier 3` text/Markdown fallback).
+### Lineage & Commits
+- **Original Discovery & Research Baseline:** `origin/prod-release` (`f429d90`) and `aira_genui_research_specification` (`c1e7d17`).
+- **Phase 0 Implementation Commit:** `f77fb64061415b1b466f682a00d34614ffd18db5` (`ModelRouter` normalized tool-call streaming across OpenAI/Anthropic/Gemini/Resilient/Mock adapters + isolated `PresentationRouter` PoC).
+- **Phase 0.5 Remediation & Security Hardening (Current HEAD on `feat/aira-genui-phase1-foundation`):**
+  - **P1 Guest Default Model:** `src/utils/constants.ts`, `src/utils/storage.ts`, `src/App.tsx` (`getDefaultModelForTier`, `resolveEntitledModelForTier`, reactive entitlement clamping preserving pending Pro preferences until settled, sign-in/sign-out/clear-data reset hygiene, server `PLAN_MODEL_RESTRICTED` preserved).
+  - **P3 Code & Artifact Classification:** `packages/agent-runtime/src/artifact-classifier.ts`, `packages/agent-runtime/src/index.ts`, `src/utils/artifactClassification.ts`, `src/utils/aiEngine.ts`, `src/components/UnifiedWorkspace.tsx` (normal fenced snippets remain chat Markdown; unknown/`application/vnd.ant.code` defaults to `'text'` and is excluded from HTML preview tabs).
+  - **P4 Intent, Tool Selection & PresentationRouter Integration:** `packages/agent-runtime/src/behavioral/semantic-reasoner.ts`, `packages/agent-runtime/src/router.ts`, `packages/agent-runtime/src/index.ts` (supplied-data charts/calculators/HTML-SVG route to `ANSWER`, live external queries route to `RESEARCH`, arbitrary Checkpoint 2 `'web_search'` default removed, bounded `ModelRouter` tool validation fallback, graceful Tier 3 fallback, guest `browser.read` restriction preserved).
+  - **Section 8 Sandbox Security Gate:** `src/utils/sandboxSecurity.ts`, `src/utils/artifactSandbox.ts`, `src/utils/multiFileSandbox.ts`, `src/components/ArtifactStudio.tsx`, `src/components/UnifiedWorkspace.tsx`.
 
-### Measured Benchmark (`npx tsx test/presentation-router-benchmark.ts`)
-- **Primary Corpus (28 cases across all 8 modes):** `28/28` correct (`accuracy: 1.0`), `averageLatencyMs: 0.17ms`, `p95LatencyMs: 1.12ms`, `totalEstimatedCostUsd: $0.0001746` (`$0.00000624` avg/prompt), `fallbackRate: 0`, `invalidStructuredOutputRate: 0`, `tierBreakdown: { deterministic: 24, model: 4, fallback: 0 }`. *(Note: Tier 2 4/4 cases ran against an offline deterministic model stub because no external LLM API keys are configured in this environment.)*
-- **Fault-Resilience Corpus (4 cases: malformed JSON, invalid schema, deadline timeout, valid):** `4/4` non-failing recovery, `fallbackRate: 0.75`, `invalidStructuredOutputRate: 0.5`.
+### Measured PresentationRouter Benchmarks
+- **Dev Corpus (28 cases, `test/presentation-router-benchmark.ts`):** `28/28` (`accuracy: 1.0`), `avgLatency: 0.17ms`, `p95: 1.12ms`, `fallbackRate: 0`, `tierBreakdown: { deterministic: 24, model: 4, fallback: 0 }` (Tier 2 offline stub).
+- **Fault-Resilience Corpus (4 cases):** `4/4` non-failing recovery.
+- **Independent Holdout Corpus (20 unseen prompts, `test/presentation-router-holdout.test.ts`):** Separate offline deterministic baseline (`>=10` Tier 1 matches at `<5ms` avg, graceful Tier 3 fallback on unseen ambiguous phrasing) vs model-assisted classifier (`accuracy >= 0.90`, `invalidStructuredOutputRate: 0`).
+
+### Live Provider Probe (NVIDIA NIM)
+- **Hardcoded Default Finding:** Calling `nvidia/llama-3.1-nemotron-70b-instruct` against live `integrate.api.nvidia.com/v1` on `2026-11-27` returned **HTTP 410 Gone** (`EOL 2026-11-15T00:00:00Z`).
+- **Active Model Verification (`nvidia/nemotron-3.5-lightning-30b-a3b` via `NVIDIA_API_KEY`):**
+  - Text stream: PASS (`904ms`, `2` text deltas, `finishReason: "stop"`, `totalTokens: 148`).
+  - Native tool-call streaming: PASS (`sawToolEvent: true`, `toolCalls: [{ name: "calculator", arguments: { expression: "19 * 23" } }]`, `finishReason: "tool_calls"`, `totalTokens: 296`).
+  - Cancellation (`AbortSignal`): PASS (`261ms`, aborted cleanly as `USER_CANCELLED_PROBE`).
+  - Live Tier 2 `PresentationRouter`: `1403.85ms`, `$0.00015045` (`totalTokens: 343`); lightning reasoning output exceeded compact JSON expectation and degraded safely to Tier 3 `text_markdown` (`degradedToFallback: true`).
+  - Unverified providers due to absent keys in local `.env`: Groq, Gemini, OpenAI, Anthropic (`INCOMPLETE_MISSING_PROVIDER_KEYS`).
 
 ---
 
 ## 6. Post-Fix Verification Ledger
 
-| Check / Suite | Command | Result |
+| Check / Suite | Command / Target | Result |
 | :--- | :--- | :--- |
-| Lint (9 Phase 0 files) | `npx oxlint ...` | **PASS** (0 warnings, 0 errors, 56ms/18ms) |
-| Lint (Repo) | `npm run lint` | **PASS** (0 errors, 563 pre-existing warnings) |
-| Typecheck | `npm run typecheck` | **PASS** (`tsc -b`, server, api — 0 errors) |
-| Production Build | `npm run build` | **PASS** (`tsc -b && vite build`) |
+| Targeted Lint (14 changed files) | `npx oxlint ...` | **PASS** (0 errors) |
+| Repo Lint | `npm run lint` | **PASS** (0 errors, pre-existing warnings only) |
+| Typecheck (`tsc -b`, server, api) | `npm run typecheck` | **PASS** (0 errors) |
+| Production Build | `npm run build` (`vite build`) | **PASS** |
+| Phase 0 + 0.5 + Sandbox Suites (11 files) | `npx tsx --test test/genui-defect-repro-and-guest-model.test.ts test/artifact-classification-remediation.test.ts test/intent-tool-presentation-remediation.test.ts test/presentation-router-holdout.test.ts test/artifact-sandbox-security-gate.test.ts test/artifact-sandbox-containment.test.ts test/artifact-studio-m1.test.ts test/multi-file-bundle-engine.test.ts test/adaptive-studio-preview.test.tsx test/presentation-router-poc.test.ts test/model-router-tool-streaming.test.ts` | **PASS (69/69)** |
+| Intent Router & Policy | `npm run test:router` | **PASS** |
 | Model Routing Suite | `npm run test:model-routing` | **PASS** |
-| Intent Router Suite | `npm run test:router` | **PASS** |
-| Remediations Matrix | `npm run test:remediations` | **PASS** (53/53, 16 suites) |
-| Phase 0 + Adapter Suites | `npx tsx --test test/model-router-tool-streaming.test.ts test/presentation-router-poc.test.ts test/behavioral/model-provenance-identity.test.ts test/behavioral/nemotron-stream-regression.test.ts test/tool-calls-schema-drift.test.ts test/calculator-parsing-and-nvidia-routing.test.ts` | **PASS** (52/52, 9 suites) |
-| Tool Gateway PG Cert | `npm run test:tools` | **BLOCKED (EXTERNAL)** (`AIRA_POSTGRES_CERTIFICATION=1` / PG required) |
-| Adversarial Entitlements | `npx tsx --test test/integration/entitlements/adversarial-entitlements.test.ts` | **53/54 PASS, 1 PRE-EXISTING FAIL** (Scenario 17 Razorpay webhook record lookup) |
-| Behavioral Clarification (PG) | `npm run test:behavioral` (`clarification-delivery.test.ts`) | **BLOCKED (EXTERNAL)** (`ECONNREFUSED 127.0.0.1:5432`) |
-| Live Provider Smoke | `test/presentation-router-benchmark.ts` | **SKIPPED (EXTERNAL)** (`SKIPPED_NO_LIVE_PROVIDER_KEYS`) |
+| Security & Isolation Remediations | `npm run test:remediations` | **PASS (53/53, 16 suites)** |
+| Ephemeral WSL PostgreSQL 16 Suite | `assert-disposable-postgres.mjs` + `npm run db:migrate` + `npm run test:tools` (`AIRA_POSTGRES_CERTIFICATION=1`) + `clarification-delivery.test.ts` + `cancellation-cleanup-telemetry.test.ts` + `audit-remediation-suite.test.ts` | **PASS** (`11/11` `test:tools` + `18/18` API/Behavioral/Cancellation) |
+| Ephemeral WSL PostgreSQL 18 Compat | `npm run db:migrate` + `clarification-delivery.test.ts` on PG 18 (`/usr/lib/postgresql/18`) | **PASS (9/9)** |
+| Scenario 17 Pre-Existing Check | Compared cleanly on detached base `6c90c12930a23018ff02435a7832ca5bd0578b26` | **PRE-EXISTING FAIL** (PR #217 strict Razorpay cancellation webhook lookup `sub_gw_fbe8081d`; unrelated to GenUI) |
+| Live NVIDIA NIM Probe (`nemotron-3.5-lightning`) | Text + tool-call stream + `AbortSignal` + Tier 2 `PresentationRouter` | **PASS (bounded)**; hardcoded `llama-3.1-nemotron-70b-instruct` hit upstream **HTTP 410 EOL** |
+| Live Groq/Gemini/Anthropic/OpenAI | Required API keys missing locally | **BLOCKED (EXTERNAL)** (`INCOMPLETE_MISSING_PROVIDER_KEYS`) |
+| Live Authenticated Production Agent Workspace UI | Production OAuth test credentials unavailable locally | **BLOCKED (EXTERNAL)** (`INCOMPLETE_AUTHENTICATED_UI_CREDENTIALS`; local DB-backed API auth/isolation verified via `audit-remediation-suite.test.ts`) |
+| Parallel Subagent Review | `code-review` + `research` subagents hit API quota (`429`) | Direct two-axis + AppSec review completed in-session |
 
-**Phase 0 Verdict:** `PHASE_0_INCOMPLETE_EXTERNAL_BLOCKER`  
-All Phase 0 engineering deliverables, unit/contract/regression suites, lint, typecheck, build, production discovery, entitlement/security audits, and independent two-axis reviews pass without defect. Full live-provider streaming smoke verification (`GROQ_API_KEY`/`GEMINI_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`) and PostgreSQL-backed certification (`npm run test:tools`) require external environment credentials / database connectivity not present in this local shell.
+**Current Verdict:** `PHASE_0_FOUNDATION_IMPLEMENTED_EXTERNAL_CERTIFICATION_BLOCKED`  
+All Phase 0 and Phase 0.5 deliverables, defect remediations (P1, P3, P4), AppSec sandbox hardening, local ephemeral PostgreSQL 16/18 certification (`test:tools`, `clarification-delivery`, `audit-remediation-suite`), live NVIDIA NIM tool-streaming smoke checks, lint, typecheck, and build pass with zero release-blocking regressions. Full multi-provider live certification (Groq/Gemini/OpenAI/Anthropic) and interactive OAuth Agent Workspace browser acceptance remain blocked solely by missing external provider API keys and interactive OAuth credentials in this workstation environment.

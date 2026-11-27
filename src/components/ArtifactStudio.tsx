@@ -35,7 +35,14 @@ import { adaptSingleFileArtifactToBundle } from '../utils/artifactBundleEngine';
 import { generateProjectZipArchive } from '../utils/artifactZipExporter';
 import { syncBundleToWorkspace } from '../utils/artifactWorkspaceSync';
 import { generateArtifactSandboxHtml } from '../utils/artifactSandbox';
-import { normalizeArtifactRuntimeError, type ArtifactRuntimeError } from '../utils/artifactRuntimeError';
+import {
+  SANDBOX_LIMITS,
+  acquireSandboxSlot,
+  releaseSandboxSlot,
+  sandboxAttributesForType,
+  validateSandboxBridgeMessage,
+} from '../utils/sandboxSecurity';
+import { type ArtifactRuntimeError } from '../utils/artifactRuntimeError';
 import { createRollbackRevision, diffArtifactLines } from '../utils/artifactRevisions';
 
 function newSandboxNonce(): string {
@@ -114,8 +121,24 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<ArtifactRuntimeError | null>(null);
   const [activeNonce, setActiveNonce] = useState<string>(newSandboxNonce);
+  const [hasSandboxSlot, setHasSandboxSlot] = useState<boolean>(true);
+  const sandboxInstanceId = React.useId();
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const shouldOccupySlot = Boolean(artifact && activeTab === 'preview');
+  useEffect(() => {
+    const instanceId = `studio-${sandboxInstanceId}`;
+    if (!shouldOccupySlot) {
+      releaseSandboxSlot(instanceId);
+      return;
+    }
+    const acquired = acquireSandboxSlot(instanceId);
+    setHasSandboxSlot(acquired);
+    return () => {
+      releaseSandboxSlot(instanceId);
+    };
+  }, [shouldOccupySlot, artifact?.id, refreshKey, sandboxInstanceId]);
 
   const [prevArtifactKey, setPrevArtifactKey] = useState<string | null>(null);
   const artifactKey = artifact ? `${artifact.id}-${artifact.version}` : null;
@@ -225,37 +248,28 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     setUserSelectedFilePath(null);
   }
 
-  // Cross-frame console log receiver with strict verification (CRITICAL FIX B)
+  // Cross-frame console log receiver with strict verification (Section 8)
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      // 1. Verify message source matches active iframe window
-      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) {
-        return;
-      }
-      // srcdoc without allow-same-origin has an opaque origin.
-      if (event.origin !== 'null') return;
-      // 2. Validate payload structure
-      if (!event.data || typeof event.data !== 'object') return;
-      if (event.data.type !== 'CONSOLE_LOG' && event.data.type !== 'AIRA_ARTIFACT_RUNTIME_ERROR') return;
-
-      // 3. Validate per-session secret nonce to prevent spoofed/injected cross-frame messages
-      if (!event.data.nonce || event.data.nonce !== activeNonce) {
+      const validated = validateSandboxBridgeMessage(
+        event,
+        iframeRef.current?.contentWindow ?? null,
+        activeNonce
+      );
+      if (!validated.accepted) {
         return;
       }
 
-      if (event.data.type === 'AIRA_ARTIFACT_RUNTIME_ERROR') {
+      if (validated.kind === 'RUNTIME_ERROR') {
         if (!adaptiveDock) return;
-        const normalized = normalizeArtifactRuntimeError(event.data.error);
-        if (normalized) setRuntimeError(normalized);
+        setRuntimeError(validated.error);
         return;
       }
 
-      // 4. Schema validation
-      const allowedLevels = ['info', 'warn', 'error', 'log'];
-      const level = allowedLevels.includes(event.data.level) ? event.data.level : 'info';
-      const rawMessage = typeof event.data.message === 'string' ? event.data.message : String(event.data.message || '');
-      const message = rawMessage.slice(0, 4000);
-      setConsoleLogs(prev => [...prev.slice(-99), { type: level, message }]);
+      setConsoleLogs(prev => [
+        ...prev.slice(-(SANDBOX_LIMITS.maxLogsPerSession - 1)),
+        { type: validated.level, message: validated.message },
+      ]);
     };
 
     window.addEventListener('message', handleMessage);
@@ -807,14 +821,20 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         className={`flex flex-col flex-1 h-full bg-transparent ${devicePreset !== 'desktop' ? 'border border-claude-border-dark/60 rounded-xl shadow-2xl overflow-hidden' : ''}`}
                         data-testid="artifact-device-frame"
                       >
+                        {!hasSandboxSlot ? (
+                          <div className="flex items-center justify-center flex-1 p-6 text-xs text-stone-400 text-center">
+                            Concurrent sandbox limit reached. Close another preview or inspect the Code tab.
+                          </div>
+                        ) : (
                         <iframe
                           key={refreshKey}
                           ref={iframeRef}
                           srcDoc={getIframeSrcDoc()}
-                          sandbox="allow-scripts allow-modals allow-forms"
+                          sandbox={sandboxAttributesForType(artifact.type)}
                           className="w-full flex-1 border-0 bg-transparent"
                           title={artifact.title}
                         />
+                        )}
                       </div>
                     </div>
                   )}

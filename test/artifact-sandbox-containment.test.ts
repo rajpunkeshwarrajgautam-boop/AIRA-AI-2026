@@ -24,8 +24,9 @@ test('Mission G — Executable Artifact Sandbox Containment, CSP Enforcement & T
     assert.ok(ARTIFACT_STRICT_STATIC_CSP_META_TAG.includes("connect-src 'none'"));
     assert.ok(!ARTIFACT_STRICT_STATIC_CSP_META_TAG.includes("'unsafe-eval'"));
 
-    // 1c. React CSP (permits eval only for in-browser Babel compilation, with connect-src 'none')
-    assert.ok(ARTIFACT_REACT_CSP_META_TAG.includes("'unsafe-eval'"));
+    // 1c. React CSP (hardened under Section 8: unsafe-eval & floating external CDNs prohibited)
+    assert.ok(ARTIFACT_REACT_CSP_META_TAG.includes("script-src 'none'"));
+    assert.ok(!ARTIFACT_REACT_CSP_META_TAG.includes("'unsafe-eval'"));
     assert.ok(ARTIFACT_REACT_CSP_META_TAG.includes("connect-src 'none'"), 'React sandbox must still block network exfiltration');
 
     const htmlArtifact: Artifact = {

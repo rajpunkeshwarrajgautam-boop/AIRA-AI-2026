@@ -7,6 +7,7 @@ import {
 import { ModelRouter } from '../../model-router/src/index.js';
 import { CapabilityRegistry } from './registry.js';
 import { SemanticReasoner, evaluateFreshness } from './behavioral/semantic-reasoner.js';
+import { PresentationRouter } from './presentation-router.js';
 
 export interface RoutingInput {
   prompt: string;
@@ -19,12 +20,15 @@ export interface RoutingInput {
 export class ServerIntentRouter {
   private static readonly CONFIDENCE_THRESHOLD_PRIVILEGED = 0.70;
   private reasoner: SemanticReasoner;
+  private presentationRouter: PresentationRouter;
 
   constructor(
     private registry: CapabilityRegistry,
-    private modelRouter?: ModelRouter
+    private modelRouter?: ModelRouter,
+    presentationRouter?: PresentationRouter
   ) {
     this.reasoner = new SemanticReasoner(this.modelRouter);
+    this.presentationRouter = presentationRouter || new PresentationRouter(this.modelRouter as any);
   }
 
   public async route(input: RoutingInput): Promise<RoutingDecision> {
@@ -49,6 +53,9 @@ export class ServerIntentRouter {
       advisoryIntent: input.advisoryIntent,
       sideEffectLevel
     });
+
+    const finalize = (decision: Partial<RoutingDecision>) =>
+      this.finalizeDecisionWithPresentation(decision, policyApprovalMandatory, rawPrompt, history);
 
     if (semanticAnalysis.confidence >= 0.85) {
       const intentSideEffect: SideEffectLevel =
@@ -79,13 +86,13 @@ export class ServerIntentRouter {
           topic: semanticAnalysis.topic
         }
       };
-      return this.finalizeDecision(decision, policyApprovalMandatory);
+      return finalize(decision);
     }
 
     // 2. Deterministic Rule Matching
     const deterministicDecision = this.matchDeterministicRules(promptLower, input.advisoryIntent, sideEffectLevel);
     if (deterministicDecision) {
-      return this.finalizeDecision(deterministicDecision, policyApprovalMandatory);
+      return finalize(deterministicDecision);
     }
 
     // 3. Semantic / Model Classification (if providers available and prompt is sufficiently long)
@@ -93,7 +100,7 @@ export class ServerIntentRouter {
       try {
         const modelDecision = await this.classifyWithModel(rawPrompt, input.advisoryIntent, sideEffectLevel);
         if (modelDecision) {
-          return this.finalizeDecision(modelDecision, policyApprovalMandatory);
+          return finalize(modelDecision);
         }
       } catch {
         // Fall through to safe fallback on any model classification error
@@ -102,17 +109,14 @@ export class ServerIntentRouter {
 
     // 4. Safe Non-Privileged Fallback
     // Unclear or low-confidence prompts fail safe to ANSWER with NONE side-effect
-    const targetInfo = this.registry.resolveExecutionTarget('ANSWER');
-    return {
+    return finalize({
       intent: 'ANSWER',
       confidence: 0.65,
       reason: 'Standard conversational response for general query.',
-      executionTarget: targetInfo.target,
       sideEffectLevel: 'NONE',
       approvalRequired: false,
-      capabilities: [targetInfo.capabilityId],
       metadata: { fallback: true }
-    };
+    });
   }
 
   private classifySideEffect(text: string): SideEffectLevel {
@@ -385,6 +389,40 @@ User prompt: "${prompt.slice(0, 500).replace(/"/g, '\\"')}"`;
     } catch {
       return null;
     }
+  }
+
+  private async finalizeDecisionWithPresentation(
+    partial: Partial<RoutingDecision>,
+    policyApprovalMandatory: boolean,
+    rawPrompt: string,
+    conversationHistory: Array<{ role: string; content: string }>
+  ): Promise<RoutingDecision> {
+    const decision = this.finalizeDecision(partial, policyApprovalMandatory);
+    try {
+      const presentation = await this.presentationRouter.route({
+        prompt: rawPrompt,
+        intent: decision.intent,
+        conversationHistory,
+      });
+      decision.metadata = {
+        ...decision.metadata,
+        presentationMode: presentation.mode,
+        presentationApproach: presentation.approach,
+        presentationSource: presentation.source,
+        presentationDegraded: presentation.degradedToFallback,
+        requiresExternalRetrieval: decision.intent === 'RESEARCH',
+      };
+    } catch {
+      decision.metadata = {
+        ...decision.metadata,
+        presentationMode: 'plain_text',
+        presentationApproach: 'text_markdown',
+        presentationSource: 'fallback',
+        presentationDegraded: true,
+        requiresExternalRetrieval: decision.intent === 'RESEARCH',
+      };
+    }
+    return decision;
   }
 
   private finalizeDecision(

@@ -1,4 +1,5 @@
 import { ModelInfo, AppSettings } from '../types';
+import { isModelAllowedForTier, type PlanTier } from '../types/commercial-types';
 
 /**
  * The selectable catalog only shows explicitly supported model routes.
@@ -78,6 +79,56 @@ export const DEFAULT_SETTINGS: AppSettings = {
   productUpdatesEnabled: true,
   tipsEnabled: true,
 };
+
+export function normalizeCanonicalModelId(model: unknown): AppSettings['activeModel'] {
+  let migrated = model;
+  if (
+    model === 'meta/llama-3.1-405b-instruct' ||
+    model === 'meta-llama/llama-3.1-405b-instruct' ||
+    model === 'nvidia/nemotron-3-super-120b-a12b'
+  ) {
+    migrated = 'nvidia/llama-3.1-nemotron-70b-instruct';
+  } else if (model === 'claude-3-7-sonnet') {
+    migrated = 'aira-auto';
+  } else if (model === 'claude-3-5-sonnet') {
+    migrated = 'aira-pro';
+  } else if (model === 'claude-3-5-haiku') {
+    migrated = 'aira-fast';
+  } else if (model === 'claude-3-opus') {
+    migrated = 'aira-deep';
+  }
+
+  return AVAILABLE_MODELS.some(candidate => candidate.id === migrated)
+    ? (migrated as AppSettings['activeModel'])
+    : DEFAULT_SETTINGS.activeModel;
+}
+
+export function getDefaultModelForTier(tier: PlanTier = 'guest'): AppSettings['activeModel'] {
+  const candidates: Array<AppSettings['activeModel']> =
+    tier === 'guest'
+      ? ['aira-fast']
+      : ['aira-auto', 'aira-fast'];
+
+  for (const candidate of candidates) {
+    if (isModelAllowedForTier(candidate, tier)) {
+      return candidate;
+    }
+  }
+
+  const fallback = AVAILABLE_MODELS.find(m => isModelAllowedForTier(m.id, tier));
+  return fallback ? fallback.id : 'aira-fast';
+}
+
+export function resolveEntitledModelForTier(
+  candidate: unknown,
+  tier: PlanTier = 'guest'
+): AppSettings['activeModel'] {
+  const normalized = normalizeCanonicalModelId(candidate);
+  if (isModelAllowedForTier(normalized, tier)) {
+    return normalized;
+  }
+  return getDefaultModelForTier(tier);
+}
 
 export const PROMPT_STARTERS = [
   {

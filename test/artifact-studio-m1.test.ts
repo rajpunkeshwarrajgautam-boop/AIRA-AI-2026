@@ -102,7 +102,7 @@ test('Artifact Parser: streaming detector buffers, emits clean text, and extract
   assert.equal(flushRes.remainingText, '');
 });
 
-test('Artifact Sandbox: generateArtifactSandboxHtml produces correct runtime document for React', () => {
+test('Artifact Sandbox: generateArtifactSandboxHtml produces self-contained React static containment document without external CDNs', () => {
   const artifact: Artifact = {
     id: 'test-react',
     title: 'Test React App',
@@ -114,16 +114,14 @@ test('Artifact Sandbox: generateArtifactSandboxHtml produces correct runtime doc
 
   const html = generateArtifactSandboxHtml(artifact, artifact.content, false);
 
-  assert.ok(html.includes('react.production.min.js'));
-  assert.ok(html.includes('react-dom.production.min.js'));
-  assert.ok(html.includes('babel.min.js'));
-  assert.ok(html.includes('cdn.tailwindcss.com'));
-  assert.ok(html.includes('aira-error-boundary'));
-  assert.ok(html.includes('CONSOLE_LOG'));
-  assert.ok(html.includes('root.render'));
+  assert.ok(html.includes("script-src 'none'"));
+  assert.equal(html.includes('babel.min.js'), false);
+  assert.equal(html.includes('cdn.tailwindcss.com'), false);
+  assert.ok(html.includes('Static Containment Preview'));
+  assert.ok(html.includes('export default function App()'));
 });
 
-test('Artifact Sandbox: generateArtifactSandboxHtml produces correct runtime document for Mermaid', () => {
+test('Artifact Sandbox: generateArtifactSandboxHtml produces self-contained Mermaid static document', () => {
   const artifact: Artifact = {
     id: 'test-mermaid',
     title: 'Architecture Chart',
@@ -135,10 +133,10 @@ test('Artifact Sandbox: generateArtifactSandboxHtml produces correct runtime doc
 
   const html = generateArtifactSandboxHtml(artifact, artifact.content, true);
 
-  assert.ok(html.includes('mermaid.min.js'));
-  assert.ok(html.includes("theme: 'dark'"));
-  assert.ok(html.includes('aira-mermaid-svg'));
-  assert.ok(html.includes('CONSOLE_LOG'));
+  assert.ok(html.includes("script-src 'none'"));
+  assert.equal(html.includes('mermaid.min.js'), false);
+  assert.ok(html.includes('mermaid-container'));
+  assert.ok(html.includes('graph LR; A--&gt;B;'));
 });
 
 test('Artifact Sandbox: generateArtifactSandboxHtml produces correct runtime document for SVG', () => {
@@ -158,7 +156,7 @@ test('Artifact Sandbox: generateArtifactSandboxHtml produces correct runtime doc
   assert.ok(html.includes('radial-gradient'));
 });
 
-test('Artifact Sandbox: generateArtifactSandboxHtml produces correct runtime document for Markdown', () => {
+test('Artifact Sandbox: generateArtifactSandboxHtml produces script-free HTML document for Markdown', () => {
   const artifact: Artifact = {
     id: 'test-md',
     title: 'Technical Specification',
@@ -170,9 +168,10 @@ test('Artifact Sandbox: generateArtifactSandboxHtml produces correct runtime doc
 
   const html = generateArtifactSandboxHtml(artifact, artifact.content, false);
 
-  assert.ok(html.includes('marked.min.js'));
-  assert.ok(html.includes('Newsreader'));
+  assert.ok(html.includes("script-src 'none'"));
+  assert.equal(html.includes('marked.min.js'), false);
   assert.ok(html.includes('prose-doc'));
+  assert.ok(html.includes('Project Spec'));
 });
 
 test('Zero-Emoji Policy: Artifact Studio M1 code and templates contain zero emojis', () => {

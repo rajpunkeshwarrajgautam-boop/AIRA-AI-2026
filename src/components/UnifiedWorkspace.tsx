@@ -41,7 +41,14 @@ import { adaptSingleFileArtifactToBundle } from '../utils/artifactBundleEngine';
 import { generateProjectZipArchive } from '../utils/artifactZipExporter';
 import { syncBundleToWorkspace } from '../utils/artifactWorkspaceSync';
 import { generateArtifactSandboxHtml } from '../utils/artifactSandbox';
-import { normalizeArtifactRuntimeError, type ArtifactRuntimeError } from '../utils/artifactRuntimeError';
+import { isArtifactTypePreviewable } from '../utils/artifactClassification';
+import {
+  acquireSandboxSlot,
+  releaseSandboxSlot,
+  sandboxAttributesForType,
+  validateSandboxBridgeMessage,
+} from '../utils/sandboxSecurity';
+import { type ArtifactRuntimeError } from '../utils/artifactRuntimeError';
 import { downloadBuilderFile, type BuilderStatus } from '../utils/builderClient';
 
 export interface ToolStep {
@@ -148,6 +155,8 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
   const [securityNotice, setSecurityNotice] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<ArtifactRuntimeError | null>(null);
   const [activeNonce, setActiveNonce] = useState<string>(newSandboxNonce);
+  const [hasSandboxSlot, setHasSandboxSlot] = useState<boolean>(true);
+  const sandboxInstanceId = React.useId();
 
   const activeBundle = useMemo<MultiFileArtifactBundle | null>(() => {
     if (explicitBundle) return explicitBundle;
@@ -244,16 +253,32 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose, artifact]);
 
-  // Sandbox postMessage bridge
+  const shouldOccupySlot = Boolean(isOpen && artifact && activeTab === 'preview' && !isMultiModal);
+  useEffect(() => {
+    const instanceId = `workspace-${sandboxInstanceId}`;
+    if (!shouldOccupySlot) {
+      releaseSandboxSlot(instanceId);
+      return;
+    }
+    const acquired = acquireSandboxSlot(instanceId);
+    setHasSandboxSlot(acquired);
+    return () => {
+      releaseSandboxSlot(instanceId);
+    };
+  }, [shouldOccupySlot, artifact?.id, refreshKey, sandboxInstanceId]);
+
+  // Sandbox postMessage bridge with strict source, origin, nonce & schema validation (Section 8)
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (!iframeRef.current || event.source !== iframeRef.current.contentWindow) return;
-      if (!event.data || typeof event.data !== 'object') return;
-      if (event.data.nonce !== activeNonce) return;
+      const validated = validateSandboxBridgeMessage(
+        event,
+        iframeRef.current?.contentWindow ?? null,
+        activeNonce
+      );
+      if (!validated.accepted) return;
 
-      if (event.data.type === 'RUNTIME_ERROR') {
-        const normalized = normalizeArtifactRuntimeError(event.data.error || 'Execution failed');
-        setRuntimeError(normalized);
+      if (validated.kind === 'RUNTIME_ERROR') {
+        setRuntimeError(validated.error);
       }
     };
     window.addEventListener('message', handleMessage);
@@ -264,14 +289,11 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
   const availableTabs = useMemo(() => {
     const tabs: Array<{ id: UnifiedWorkspaceTab; label: string; icon: any; count?: number; badge?: string }> = [];
 
-    // 1. Preview Tab: present strictly if artifact or builder preview exists
+    // 1. Preview Tab: present strictly for explicitly previewable artifacts or active builder previews
     const hasPreview = Boolean(
       builderPreviewUrl ||
       (artifact && (
-        artifact.type === 'application/vnd.ant.code' ||
-        artifact.type === 'application/vnd.ant.react' ||
-        artifact.type === 'text/html' ||
-        artifact.type === 'image/svg+xml' ||
+        isArtifactTypePreviewable(artifact.type) ||
         isMultiModal
       ))
     );
@@ -724,11 +746,16 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
                         : 'w-full'
                     }`}
                   >
+                    {!hasSandboxSlot ? (
+                      <div className="flex items-center justify-center w-full h-full p-6 text-xs text-stone-500 text-center">
+                        Concurrent sandbox limit reached. Close another preview or inspect the Code tab.
+                      </div>
+                    ) : (
                     <iframe
                       ref={iframeRef}
                       key={`${artifact.id}-${selectedVersion}-${refreshKey}`}
                       title={artifact.title}
-                      sandbox="allow-scripts allow-forms allow-modals"
+                      sandbox={sandboxAttributesForType(artifact.type)}
                       srcDoc={
                         isMultiFile && activeBundle
                           ? generateMultiFileArtifactSandboxHtml(activeBundle, false, activeNonce)
@@ -736,6 +763,7 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
                       }
                       className="w-full h-full border-0"
                     />
+                    )}
                   </div>
                 )
               ) : (

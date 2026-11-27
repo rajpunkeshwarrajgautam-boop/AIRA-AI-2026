@@ -7,6 +7,7 @@ import {
   loadProjects, saveProjects, loadSettings, saveSettings, clearAccountSettings, INITIAL_CONVERSATION,
   hydrateStorageFromIndexedDb, hydrateProjectsFromIndexedDb, hydrateSettingsFromIndexedDb
 } from './utils/storage';
+import { resolveEntitledModelForTier } from './utils/constants';
 import { streamAIResponse } from './utils/aiEngine';
 import { appendAgentTimelineEvent } from './utils/agentTimeline';
 import { createArtifactRepairPrompt } from './utils/artifactRuntimeError';
@@ -156,7 +157,7 @@ function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => localStorage.getItem('aira_active_project_id_v1') || undefined);
   const [settings, setSettings] = useState<AppSettings>(() => {
     const user = neonAuth.getCurrentUser();
-    return loadSettings(user ? { userId: user.id, email: user.email } : undefined);
+    return loadSettings(user ? { userId: user.id, email: user.email } : undefined, user ? undefined : 'guest');
   });
   const [workspaceMode, setWorkspaceModeState] = useState<WorkspaceMode>(() => {
     const user = neonAuth.getCurrentUser();
@@ -329,6 +330,15 @@ function App() {
       });
     return () => { active = false; };
   }, [currentUserId]);
+
+  // Clamp activeModel to account entitlements only after tier resolution settles (avoids race clobbering)
+  useEffect(() => {
+    if (entitlementState === 'pending' || entitlementState === 'unavailable') return;
+    setSettings(prev => {
+      const entitledModel = resolveEntitledModelForTier(prev.activeModel, userTier);
+      return prev.activeModel === entitledModel ? prev : { ...prev, activeModel: entitledModel };
+    });
+  }, [userTier, entitlementState, currentUserId]);
 
   // Milestone 4: Announcements, Onboarding & Feature Discovery
   const [isWhatsNewOpen, setIsWhatsNewOpen] = useState(false);
@@ -649,7 +659,7 @@ useEffect(() => {
         }
       } else {
         // Account signed out: revert to isolated guest state and clear memory
-        const guestSettings = loadSettings();
+        const guestSettings = loadSettings(undefined, 'guest');
         settingsOwnerRef.current = null;
         setSettings({
           ...guestSettings,
@@ -1290,13 +1300,15 @@ useEffect(() => {
       timestamp: Date.now(),
     };
 
+    const effectiveModel = resolveEntitledModelForTier(settings.activeModel, userTier);
+
     const assistantId = 'assistant-' + (Date.now() + 1);
     const assistantMessage: Message = {
       id: assistantId,
       role: 'assistant',
       content: '',
       timestamp: Date.now(),
-      modelUsed: settings.activeModel,
+      modelUsed: effectiveModel,
       isStreaming: true,
       thinking: settings.extendedThinking ? { text: '', isStreaming: true } : undefined,
       artifacts: [],
@@ -1434,8 +1446,8 @@ useEffect(() => {
       await streamAIResponse(
         rawText,
         history,
-        settings.activeModel,
-        settings,
+        effectiveModel,
+        effectiveModel === settings.activeModel ? settings : { ...settings, activeModel: effectiveModel },
         attachments,
         {
           onThinkingChunk: chunk => {
@@ -2091,7 +2103,7 @@ useEffect(() => {
               setActiveChatId(fresh.id);
               setProjects([]);
               setActiveProjectId(undefined);
-              setSettings(loadSettings(currentUserId));
+              setSettings(loadSettings(currentUserId, userTier));
               setActiveArtifact(null);
               agentMemory.purge(undefined, true);
             }}

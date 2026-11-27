@@ -1,30 +1,21 @@
 import type { Conversation, Project, AppSettings } from '../types';
-import { AVAILABLE_MODELS, DEFAULT_SETTINGS } from './constants';
+import type { PlanTier } from '../types/commercial-types';
+import {
+  DEFAULT_SETTINGS,
+  getDefaultModelForTier,
+  normalizeCanonicalModelId,
+  resolveEntitledModelForTier,
+} from './constants';
 import { idbGet, idbSet, openAiraDatabase, STORES, isIndexedDbSupported } from './indexedDbStorage';
 
-export function normalizeStoredModelId(model: unknown): AppSettings['activeModel'] {
-  // Existing users can carry formerly hosted models or legacy Claude alias IDs in localStorage.
-  // Migrate explicit selections to the currently supported canonical routes.
-  let migrated = model;
-  if (
-    model === 'meta/llama-3.1-405b-instruct' ||
-    model === 'meta-llama/llama-3.1-405b-instruct' ||
-    model === 'nvidia/nemotron-3-super-120b-a12b'
-  ) {
-    migrated = 'nvidia/llama-3.1-nemotron-70b-instruct';
-  } else if (model === 'claude-3-7-sonnet') {
-    migrated = 'aira-auto';
-  } else if (model === 'claude-3-5-sonnet') {
-    migrated = 'aira-pro';
-  } else if (model === 'claude-3-5-haiku') {
-    migrated = 'aira-fast';
-  } else if (model === 'claude-3-opus') {
-    migrated = 'aira-deep';
+export function normalizeStoredModelId(
+  model: unknown,
+  tier?: PlanTier
+): AppSettings['activeModel'] {
+  if (tier) {
+    return resolveEntitledModelForTier(model, tier);
   }
-
-  return AVAILABLE_MODELS.some(candidate => candidate.id === migrated)
-    ? migrated as AppSettings['activeModel']
-    : DEFAULT_SETTINGS.activeModel;
+  return normalizeCanonicalModelId(model);
 }
 
 export const STORAGE_KEYS = {
@@ -839,8 +830,9 @@ export function saveDevicePreferences(prefs: DevicePreferences): void {
   }
 }
 
-export function loadSettings(identity?: SettingsOwnerIdentity): AppSettings {
+export function loadSettings(identity?: SettingsOwnerIdentity, tier?: PlanTier): AppSettings {
   const owner = normalizeSettingsOwner(identity);
+  const resolvedTier: PlanTier = tier ?? (owner.isGuest ? 'guest' : 'free');
   const devicePrefs = loadDevicePreferences();
   const scopedKey = getAccountSettingsStorageKey(owner.userId);
 
@@ -888,11 +880,18 @@ export function loadSettings(identity?: SettingsOwnerIdentity): AppSettings {
     }
   }
 
-  const finalAccount = accountData || sanitizeAccountSettings(DEFAULT_SETTINGS);
+  const defaultTierAccount = sanitizeAccountSettings({
+    ...DEFAULT_SETTINGS,
+    activeModel: getDefaultModelForTier(resolvedTier),
+  });
+  const finalAccount = accountData || defaultTierAccount;
+  const activeModel = (tier || owner.isGuest)
+    ? resolveEntitledModelForTier(finalAccount.activeModel, resolvedTier)
+    : normalizeCanonicalModelId(finalAccount.activeModel);
   return {
     ...devicePrefs,
     ...finalAccount,
-    activeModel: normalizeStoredModelId(finalAccount.activeModel),
+    activeModel,
   };
 }
 

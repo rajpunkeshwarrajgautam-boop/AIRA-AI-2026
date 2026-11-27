@@ -37,9 +37,11 @@ import { buildResearchEvidenceContext, buildResearchSourcesAppendix, isResearchT
 import { WorkflowRepository, PostgresWorkflowRepository, InMemoryWorkflowRepository } from './workflow-repositories.js';
 import { WorkflowEngine } from './workflow-engine.js';
 import { WorkflowCompiler } from './workflow-compiler.js';
+import { classifyResponseArtifacts } from './artifact-classifier.js';
 import { buildDurableHistorySystemMessage } from './memory-policy.js';
 import { isRepositoryIntent, extractCalculatorExpression } from './intent-heuristics.js';
 export { isRepositoryIntent, extractCalculatorExpression } from './intent-heuristics.js';
+export { PresentationRouter, type PresentationMode, type PresentationDecision } from './presentation-router.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
@@ -1003,8 +1005,8 @@ export class AgentRuntime extends EventEmitter {
           return;
         }
 
-        let selectedToolName = 'web_search';
-        let selectedArgs: Record<string, unknown> = { query: promptText };
+        let selectedToolName: string | null = null;
+        let selectedArgs: Record<string, unknown> = {};
 
         const urlMatch = promptText.match(/https?:\/\/[^\s"'<>]+/);
         if (urlMatch && pLower.includes('screenshot')) {
@@ -1066,24 +1068,74 @@ export class AgentRuntime extends EventEmitter {
         } else if (pLower.includes('hang unsafe')) {
           selectedToolName = 'hang_unsafe';
           selectedArgs = {};
+        } else if (
+          /\b(search\s+(?:the\s+)?web|web\s+search|look\s+up\s+online|find\s+latest\s+on\s+the\s+web)\b/i.test(promptText) ||
+          run.routingDecision?.metadata?.requiresExternalRetrieval === true
+        ) {
+          selectedToolName = 'web_search';
+          selectedArgs = { query: promptText };
         }
 
-        const toolDef = this.toolGateway.getTool(selectedToolName)?.definition || this.toolRegistry.get(selectedToolName)?.definition;
-        const toolCall: ToolCall = {
-          id: `call_${Date.now()}`,
-          toolId: toolDef?.id || `tool_${selectedToolName}`,
-          name: selectedToolName,
-          arguments: selectedArgs,
-          timestamp: Date.now(),
-          status: 'PENDING'
-        };
+        // Bounded native ModelRouter tool-selection fallback ONLY when explicit tool action requested,
+        // no deterministic tool matched, and registered authorized tool definitions exist.
+        if (!selectedToolName && isToolAction && this.modelRouter.listProviders().some(p => p !== 'mock')) {
+          const availableDefs = this.toolGateway.listDefinitions();
+          if (availableDefs.length > 0) {
+            try {
+              const policy = this.modelRouter.resolvePolicy(run.modelPolicy.model, 'TOOL_ACTION');
+              const adapter = this.modelRouter.getAdapter(policy);
+              const selectionRes = await adapter.complete(
+                [
+                  {
+                    role: 'system',
+                    content: 'Select an appropriate tool ONLY if the request strictly requires external or workspace tool execution. Otherwise respond with text.'
+                  },
+                  { role: 'user', content: promptText }
+                ],
+                {
+                  ...policy,
+                  maxTokens: 256,
+                  temperature: 0,
+                  tools: availableDefs.map(d => ({
+                    name: d.name,
+                    description: d.description,
+                    parameters: d.parameters || { type: 'object', properties: {} }
+                  })),
+                  toolChoice: 'auto'
+                }
+              );
+              const firstValidatedCall = selectionRes.toolCalls?.[0];
+              if (firstValidatedCall && (this.toolGateway.getTool(firstValidatedCall.name) || this.toolRegistry.get(firstValidatedCall.name))) {
+                selectedToolName = firstValidatedCall.name;
+                selectedArgs = firstValidatedCall.arguments;
+              }
+            } catch {
+              // Fall through gracefully to synthesis when tool selection is unavailable
+            }
+          }
+        }
 
-        run.toolsUsed.push(selectedToolName);
-        run.toolCalls.push(toolCall);
-        run.stepCount++;
-        run.executionCheckpoint = 'TOOL_SELECTED';
-        await this.saveRun(run);
-        await this.emitRunEvent(runId, 'tool.requested', toolCall);
+        if (!selectedToolName) {
+          run.executionCheckpoint = 'SYNTHESIZING';
+          await this.saveRun(run);
+        } else {
+          const toolDef = this.toolGateway.getTool(selectedToolName)?.definition || this.toolRegistry.get(selectedToolName)?.definition;
+          const toolCall: ToolCall = {
+            id: `call_${Date.now()}`,
+            toolId: toolDef?.id || `tool_${selectedToolName}`,
+            name: selectedToolName,
+            arguments: selectedArgs,
+            timestamp: Date.now(),
+            status: 'PENDING'
+          };
+
+          run.toolsUsed.push(selectedToolName);
+          run.toolCalls.push(toolCall);
+          run.stepCount++;
+          run.executionCheckpoint = 'TOOL_SELECTED';
+          await this.saveRun(run);
+          await this.emitRunEvent(runId, 'tool.requested', toolCall);
+        }
       } else {
         run.executionCheckpoint = 'SYNTHESIZING';
         await this.saveRun(run);
@@ -1767,39 +1819,13 @@ CAPABILITY & IDENTITY INVARIANTS:
       if (checkCancelled?.state === 'CANCELLED') return;
 
       run.content = sanitizeCitationMarkers(run.content, run.citations?.length || 5);
-      if (run.content.includes('```')) {
-        const artId = `art_${Date.now()}`;
-        const artifact: Artifact = {
-          id: artId,
-          runId,
-          title: 'Generated Analysis Artifact',
-          type: 'application/vnd.ant.code',
-          content: run.content,
-          version: 1,
-          versions: [{
-            version: 1,
-            content: run.content,
-            timestamp: Date.now()
-          }]
-        };
-        run.artifacts.push(artifact);
-        await this.emitRunEvent(runId, 'artifact.created', artifact);
-      } else if (run.intent === 'AGENT_MISSION') {
-        const artId = `art_mission_${Date.now()}`;
-        const pText = run.prompt || '';
-        const artifact: Artifact = {
-          id: artId,
-          runId,
-          title: `Mission Report: ${pText.slice(0, 36)}`,
-          type: 'text/markdown',
-          content: `# Mission Execution Summary\n\n**Objective**: ${pText}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
-          version: 1,
-          versions: [{
-            version: 1,
-            content: `# Mission Execution Summary\n\n**Objective**: ${pText}\n\n**Outcome**: ${run.content}\n\n**Status**: COMPLETED`,
-            timestamp: Date.now()
-          }]
-        };
+      const { artifacts: classifiedArtifacts } = classifyResponseArtifacts({
+        content: run.content,
+        prompt: run.prompt,
+        intent: run.intent,
+        runId,
+      });
+      for (const artifact of classifiedArtifacts) {
         run.artifacts.push(artifact);
         await this.emitRunEvent(runId, 'artifact.created', artifact);
       }
