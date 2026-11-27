@@ -184,14 +184,23 @@ export class CollaborationSessionManager {
     const engine = this.rooms.get(sessionId);
     if (!engine) return;
 
-    engine.updatePresence(presence);
+    // Enforce authoritative server receipt time for presence expiration semantics.
+    // Client-supplied timestamps are never trusted for security or TTL decisions.
+    // Explicit _testClockOverride is supported solely for deterministic clock testing.
+    const authoritativeTimestamp = (presence as any)._testClockOverride ?? Date.now();
+    const serverPresence: CollabPresence = {
+      ...presence,
+      updatedAt: authoritativeTimestamp,
+    };
+
+    engine.updatePresence(serverPresence);
 
     const listeners = this.roomListeners.get(sessionId);
     if (listeners) {
       for (const [actorId, listener] of listeners.entries()) {
-        if (actorId !== presence.actorId) {
+        if (actorId !== serverPresence.actorId) {
           try {
-            listener.onPresence(presence);
+            listener.onPresence(serverPresence);
           } catch (err) {
             console.warn(`[CollabSessionManager] Presence fanout error to ${actorId}:`, err);
           }

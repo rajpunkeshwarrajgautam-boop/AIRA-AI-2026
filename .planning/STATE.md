@@ -1,10 +1,13 @@
 # AIRA-AI-2026 Release Governance & Production Baseline State
 
-## Status: CERTIFIED PASS (GOVERNANCE HARDENED)
+## Status: PHASE 5 GENUI CERTIFIED (READY FOR STAGING REVIEW)
 
 - **Repository**: `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`
-- **Certified Production Baseline SHA**: `4bba366d482c82a566abfb5e6d45ef333f53601b`
-- **Canonical Production URL**: `https://aira-ai-2026.vercel.app`
+- **Certified Production Reference SHA**: `f429d90a1f4322a0d362956fb9e55a38cb3b5508`
+- **Commercial Candidate PR #215 Baseline**: `fd2f8b9a3df8bd226a1bf05c1c79aab721e0e568` (STRICT HOLD)
+- **Active GenUI Feature Branch**: `feat/aira-genui-phase1-foundation`
+- **GenUI Phase 5 Status**: `PHASE_5_INTEGRATED_GENUI_CERTIFIED_READY_FOR_STAGING_REVIEW`
+- **Production URL**: `https://aira-ai-2026.vercel.app`
 - **Default Branch**: `main`
 
 ### Governance & CI Gates Configuration
@@ -12,11 +15,12 @@
 - **Vulnerability Alerts**: ENABLED (`/vulnerability-alerts`)
 - **Automated Security Fixes**: ENABLED (`/automated-security-fixes`)
 - **Workflow Permissions**: Default `read`, `can_approve_pull_request_reviews: false` (SECURE)
-- **Local Pre-Push Guard**: Installed at `.git/hooks/pre-push` (blocks accidental direct pushes to `main`)
-- **Server-Side Branch Protection / Rulesets**:
-  - API Result: HTTP 403 (`"Upgrade to GitHub Pro or make this repository public to enable this feature."`)
-  - Account Tier: GitHub Free personal account on private repository
-  - Resolution: Hardened via repository settings, workflow gates, local pre-push guard, and certified PR release workflow
+- **Local Pre-Push Guard**: Installed at `.git/hooks/pre-push`
+- **GitHub Ruleset**: `AIRA Production Protection` (ID `25079946`) on `refs/heads/prod-release`
+- **Database Migrations Added by GenUI**: **0** (Existing schema tables reused)
+- **GenUI Test Suite Pass Rate**: **86/86 (100% PASS across 8 suites)**
+- **Release Auth Unit Tests**: **52/52 PASS**
+- **Production Release Status**: **STRICT HOLD** (Requires staging verification and owner attestation)
 - **Discovered Reliable CI Checks**:
   - `Fast CI` (Workflow: `CI`, Job: `fast`, Duration: ~1m15s, Status: PASS)
   - `Main / PR certification` (Workflow: `CI`, Job: `certify`, Duration: ~2m45s, Status: PASS)

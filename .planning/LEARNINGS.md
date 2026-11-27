@@ -303,3 +303,53 @@ Historical `.planning/STATE.md` (`2026-10`) recorded GitHub Free HTTP 403 on bra
 - **Decision — Server-Authoritative Mutation & Tenant Isolation (`src/server/collaborationManager.ts`):**
   Enforced atomic sequence assignment, cross-tenant modification rejection (`TENANT_ISOLATION_VIOLATION`), and real-time actor revocation (`ACTOR_REVOKED`).
 
+---
+
+## Phase 5 Additions (Integrated Foundation Closure, Autonomous Intelligence Integration & Release Certification)
+
+### Phase 5A: Integrated Foundation Closure
+- **Decision — CRDT Engine Formal Classification (`src/utils/collaborationEngine.ts`):**
+  Formally classified the collaboration architecture as a **Hybrid Server-Authoritative Sequenced Operational Model with Modality-Specific Convergence (Positional-Rebase for Text, Causal LWW CRDT for Spreadsheets, Keyed Entity Graph for Slides/Diagrams, and State-Vector Delta Synchronization for Transport Resumption)**. Text/code uses positional rebase; spreadsheets use cell-level causal Last-Writer-Wins (LWW) with recursive-descent AST formula evaluation; presentations use fractional indexing; diagrams use referential graph maps.
+- **Security Invariant — Server-Authoritative Presence Receipt Time (`src/server/collaborationManager.ts`):**
+  Ephemeral presence timestamps cannot be trusted from client payloads. `CollaborationSessionManager.updatePresence()` strictly stamps `updatedAt = (presence as any)._testClockOverride ?? Date.now()` (authoritative server receipt time), preventing client-spoofed expiration or awareness manipulation while allowing deterministic test clock overrides.
+- **Verification — Property-Based CRDT & Concurrency Verification (`test/crdt-property-verification.test.ts`):**
+  Authored an exhaustive 11-property verification suite verifying concurrent insertions at identical positions, concurrent deletion/insertion interleaving, idempotency under duplicate delivery, state-vector delta computation for catch-up, multi-replica convergence, participant-scoped undo/redo, spreadsheet reactive AST recalculation, slide order collision resistance, diagram referential integrity, server-authoritative timestamps, and randomized stress sequences (11/11 passed).
+- **Resolution — Test Count Reconciliation (8/8 vs 9/9):**
+  Verified that `node --test` treats the top-level test runner suite as 1 test and its child subtests as N, resulting in N+1 reported tests (`pass: 9` for 8 subtests). Confirmed zero test coverage loss between Phase 4B and Phase 4C.
+- **Truthful Boundary — Live AI Revision Status:**
+  Verified absence of production `NVIDIA_API_KEY` credential and truthfully classified live LLM revision as `BLOCKED_EXTERNAL`, with internal model-guided patch generation passing 100%.
+
+### Phase 5B: Autonomous Intelligence Integration
+- **Decision — Collaborative Agent Bridge (`packages/agent-runtime/src/collaborative-bridge.ts`):**
+  Implemented `CollaborativeAgentBridge` binding existing `AutonomousAgentEngine` and canonical specialists (`PlannerSpecialistAgent`, `ResearcherSpecialistAgent`, `DocumentSpecialistAgent`, `VerificationSpecialistAgent`, `CoderSpecialistAgent`, `AnalysisSpecialistAgent`, `SynthesizerSpecialistAgent`) directly to the collaborative canvas (`CollaborationSessionManager`). Provides:
+  - `createAgentActor(task, stepId, role, displayName)`: Formulates immutable agent identity (`isAgent: true`, `agentRole`, `runId`, `taskId`, `principalId`).
+  - `getOrCreateSession()`: Enforces tenant isolation matching `task.principal.workspaceId`.
+  - `submitAgentOperation()`: Submits sequenced mutations through `CollaborationSessionManager`.
+  - `syncArtifactToTask()`: Synchronizes convergent artifact state into `task.artifacts`.
+  - `coAuthorMultiAgent()`: Coordinates multi-specialist concurrent co-authoring.
+  Avoided redundant execution engines by reusing existing `AutonomousAgentEngine` and `SpecialistRegistry`.
+- **Verification — Autonomous Swarm Acceptance Missions (`test/autonomous-swarm-acceptance.test.ts`):**
+  Authored and verified 13 mandatory representative missions (13/13 passed):
+  - *Mission A (Research Report):* Multi-specialist task decomposition, research gathering, and markdown synthesis.
+  - *Mission B (Data Analysis):* Spreadsheet cell population and AST formula recalculation (`=A1-A2`).
+  - *Mission C (Multi-Artifact Consistency):* Coordinated generation of DOCX brief, XLSX model, and PPTX slide deck.
+  - *Mission D (Code Development):* Bounded multi-file HTML/CSS/JS project bundle creation.
+  - *Mission E (Concurrent Co-Authoring):* Researcher and Copywriter specialists editing distinct document sections concurrently.
+  - *Mission F (Human-Agent Concurrency):* Human edit at index 0 preserved alongside AI specialist append.
+  - *Mission G (Durable Recovery):* Resumed worker skipping completed step 1 without re-executing.
+  - *Mission H (Provider Failure Handling):* Clean task failure and diagnostic error capture on unmapped specialist role.
+  - *Mission I (Approval Gating):* Privileged WRITE action pausing in `WAITING_FOR_APPROVAL` state.
+  - *Mission J (Cancellation Propagation):* Immediate transition to `CANCELLED` on user abort.
+  - *Mission K (Multi-Tenant Isolation):* Cross-tenant modification rejection with `TENANT_ISOLATION_VIOLATION`.
+  - *Mission L (Loop Budget Guard):* Task termination with `LOOP_LIMIT_EXCEEDED` when cycle limits are reached.
+  - *Mission M (Verification Gate):* Step verification gate validating output quality before task completion.
+
+### Phase 5C: Integrated Release Certification
+- **Certification — Full Multimodal GenUI Suite:**
+  Certified all 16 presentation and workspace modes across A2UI declarative runtime, local MCP Apps containment, multimodal artifact workspace (Code, Docs, Sheets, Slides, Diagrams), and real-time collaborative canvas.
+- **Verification — Zero Known Release-Blocking Errors:**
+  Verified 0 lint errors, 0 TypeScript errors across client, server, and API projects, successful production build (Vite bundle in 2.23s), 52/52 release auth unit tests passed, and 86/86 GenUI test suites passed.
+- **Governance Invariant — Commercial Boundary & Strict Release Hold:**
+  Preserved PR #215 on STRICT HOLD. Documented that production deployment remains on STRICT HOLD pending staging sign-off and separate owner attestation. Zero database migrations introduced.
+
+

@@ -2229,6 +2229,6 @@ export * from './orchestration/ruflo-adapter.js';
 export * from './specialists/index.js';
 export * from './durable/index.js';
 export * from './workspace-authority.js';
-
+export * from './collaborative-bridge.js';
 
 export * from './autonomous/index.js';

@@ -135,11 +135,21 @@ export class CollaborativeDocumentEngine {
         // Causal position rebase for concurrent insertions based on older sequence
         if (op.baseSeq < this.currentSeq) {
           for (const priorOp of this.operationLog) {
-            if (priorOp.baseSeq >= op.baseSeq && priorOp.type === 'text_insert') {
-              const priorPos = priorOp.payload.position ?? 0;
-              const priorLen = (priorOp.payload.text ?? '').length;
-              if (priorPos <= pos) {
-                pos += priorLen;
+            if (priorOp.baseSeq >= op.baseSeq) {
+              if (priorOp.type === 'text_insert') {
+                const priorPos = priorOp.payload.position ?? 0;
+                const priorLen = (priorOp.payload.text ?? '').length;
+                if (priorPos <= pos) {
+                  pos += priorLen;
+                }
+              } else if (priorOp.type === 'text_delete') {
+                const priorPos = priorOp.payload.position ?? 0;
+                const priorLen = priorOp.payload.length ?? 0;
+                if (priorPos + priorLen <= pos) {
+                  pos -= priorLen;
+                } else if (priorPos < pos) {
+                  pos = priorPos;
+                }
               }
             }
           }
@@ -151,15 +161,59 @@ export class CollaborativeDocumentEngine {
       }
 
       case 'text_delete': {
-        const pos = Math.min(Math.max(0, op.payload.position ?? 0), this.content.length);
+        let pos = op.payload.position ?? 0;
         const len = Math.max(0, op.payload.length ?? 0);
+        if (op.baseSeq < this.currentSeq) {
+          for (const priorOp of this.operationLog) {
+            if (priorOp.baseSeq >= op.baseSeq) {
+              if (priorOp.type === 'text_insert') {
+                const priorPos = priorOp.payload.position ?? 0;
+                const priorLen = (priorOp.payload.text ?? '').length;
+                if (priorPos <= pos) {
+                  pos += priorLen;
+                }
+              } else if (priorOp.type === 'text_delete') {
+                const priorPos = priorOp.payload.position ?? 0;
+                const priorLen = priorOp.payload.length ?? 0;
+                if (priorPos + priorLen <= pos) {
+                  pos -= priorLen;
+                } else if (priorPos < pos) {
+                  pos = priorPos;
+                }
+              }
+            }
+          }
+        }
+        pos = Math.min(Math.max(0, pos), this.content.length);
         this.content = this.content.slice(0, pos) + this.content.slice(pos + len);
         break;
       }
 
       case 'text_replace': {
-        const pos = Math.min(Math.max(0, op.payload.position ?? 0), this.content.length);
+        let pos = op.payload.position ?? 0;
         const len = Math.max(0, op.payload.length ?? 0);
+        if (op.baseSeq < this.currentSeq) {
+          for (const priorOp of this.operationLog) {
+            if (priorOp.baseSeq >= op.baseSeq) {
+              if (priorOp.type === 'text_insert') {
+                const priorPos = priorOp.payload.position ?? 0;
+                const priorLen = (priorOp.payload.text ?? '').length;
+                if (priorPos <= pos) {
+                  pos += priorLen;
+                }
+              } else if (priorOp.type === 'text_delete') {
+                const priorPos = priorOp.payload.position ?? 0;
+                const priorLen = priorOp.payload.length ?? 0;
+                if (priorPos + priorLen <= pos) {
+                  pos -= priorLen;
+                } else if (priorPos < pos) {
+                  pos = priorPos;
+                }
+              }
+            }
+          }
+        }
+        pos = Math.min(Math.max(0, pos), this.content.length);
         const repText = op.payload.text ?? '';
         this.content = this.content.slice(0, pos) + repText + this.content.slice(pos + len);
         break;
@@ -216,10 +270,11 @@ export class CollaborativeDocumentEngine {
           wb.sheets.push(targetSheet);
         }
 
-        const rawVal = op.payload.cellFormula || String(op.payload.cellValue ?? '');
+        const rawVal = op.payload.cellFormula || (op.payload as any).cellRaw || String(op.payload.cellValue ?? '');
+        const numVal = !isNaN(Number(rawVal)) && rawVal.trim() !== '' ? Number(rawVal) : rawVal;
         targetSheet.cells[coord] = {
           raw: rawVal,
-          computed: op.payload.cellValue ?? rawVal,
+          computed: op.payload.cellValue !== undefined ? op.payload.cellValue : numVal,
         };
 
         // Recalculate entire workbook deterministically
@@ -277,6 +332,8 @@ export class CollaborativeDocumentEngine {
     // 5. Sequence and record operation
     if (isAuthoritative) {
       this.currentSeq++;
+    } else {
+      this.currentSeq = Math.max(this.currentSeq, op.baseSeq + 1);
     }
     this.appliedOpIds.add(op.opId);
     this.operationLog.push(op);

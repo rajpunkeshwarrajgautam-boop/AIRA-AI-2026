@@ -1,6 +1,6 @@
 
-import type { MultiFileArtifactBundle } from './multiFileArtifact';
-import type { GenUISurface, GenUIStateRecord, GenUIApp } from '../../packages/contracts/src/genui';
+import type { MultiFileArtifactBundle } from './multiFileArtifact.js';
+import type { GenUISurface, GenUIStateRecord, GenUIApp } from '../../packages/contracts/src/genui.js';
 export type { GenUISurface, GenUIStateRecord, GenUIApp };
 
 export type WorkspaceMode = 'chat' | 'agent';
@@ -174,7 +174,7 @@ export interface Project {
   instructions: string;
   docs: ProjectDoc[];
   createdAt: number;
-  knowledgeGraph?: import('../utils/knowledgeGraph').KnowledgeGraph;
+  knowledgeGraph?: import('../utils/knowledgeGraph.js').KnowledgeGraph;
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system';
