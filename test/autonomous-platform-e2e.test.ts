@@ -394,7 +394,7 @@ test('8. Persistent Memory: tenant scoping, search, budget compaction, export, a
 test('9. Interactive Artifact Sandbox: React TSX, SVG, Markdown, and secret nonce log bridge', () => {
   const nonce = 'secret_nonce_test_xyz123';
 
-  // 9a. React TSX artifact
+  // 9a. React TSX artifact (Static Containment under strict CSP)
   const reactArtifact = {
     id: 'art_react_01',
     type: 'application/vnd.ant.react',
@@ -418,13 +418,24 @@ export default function DashboardCard() {
   };
 
   const html = generateArtifactSandboxHtml(reactArtifact as any, reactArtifact.content, true, nonce);
-  assert.ok(html.includes('react.production.min.js'));
-  assert.ok(html.includes('babel.min.js'));
-  assert.ok(html.includes('tailwindcss.com'));
-  assert.ok(html.includes('CONSOLE_LOG'));
-  assert.ok(html.includes(nonce), 'HTML must embed session secret nonce for log bridge verification');
+  assert.ok(html.includes('Static Containment Preview'));
+  assert.ok(html.includes('DashboardCard'));
+  assert.ok(html.includes("script-src 'none'"));
 
-  // 9b. SVG artifact
+  // 9b. HTML artifact with secret nonce log bridge
+  const htmlArtifact = {
+    id: 'art_html_01',
+    type: 'text/html',
+    title: 'Interactive Dashboard App',
+    language: 'html',
+    content: '<!DOCTYPE html><html><head><title>App</title></head><body><h1>Card</h1></body></html>',
+    version: 1
+  };
+  const appHtml = generateArtifactSandboxHtml(htmlArtifact as any, htmlArtifact.content, false, nonce);
+  assert.ok(appHtml.includes('CONSOLE_LOG'));
+  assert.ok(appHtml.includes(nonce), 'HTML must embed session secret nonce for log bridge verification');
+
+  // 9c. SVG artifact
   const svgArtifact = {
     id: 'art_svg_01',
     type: 'image/svg+xml',
@@ -436,5 +447,4 @@ export default function DashboardCard() {
 
   const svgHtml = generateArtifactSandboxHtml(svgArtifact as any, svgArtifact.content, false, nonce);
   assert.ok(svgHtml.includes('<circle cx="50" cy="50" r="40"'));
-  assert.ok(svgHtml.includes(nonce));
 });
