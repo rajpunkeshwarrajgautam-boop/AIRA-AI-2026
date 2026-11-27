@@ -262,3 +262,23 @@ Historical `.planning/STATE.md` (`2026-10`) recorded GitHub Free HTTP 403 on bra
 - **Security Invariant — Fail-Closed Remote MCP Destination Enforcement:**
   `assertApprovedPublicMcpDestination()` strictly enforces `MCP_EGRESS_ENFORCEMENT_REQUIRED` (503) in production environments until kernel-level socket binding and connection-time address pinning are implemented, protecting against DNS rebinding and SSRF to cloud metadata endpoints (`169.254.169.254`).
 
+---
+
+## Phase 4B Additions (Advanced Multimodal Artifact Workspace & Unified Interactive Canvas)
+- **Decision — Unified Multimodal Contract (`aira-artifact/v1` in `packages/contracts/src/artifacts.ts`):**
+  Introduced `AIRA_ARTIFACT_CONTRACT_VERSION = 'aira-artifact/v1'` covering 8 artifact classes (`code`, `document`, `sheet`, `slide`, `diagram`, `markdown`, `svg`, `html`). Defined structured Zod schemas for spreadsheets (`SpreadsheetWorkbookSchema`, `SpreadsheetWorksheetSchema`, `SpreadsheetCellSchema`), slide decks (`PresentationDeckSchema`, `SlideSchema`, `SlideLayoutSchema`), multimodal descriptors (`AiraArtifactDescriptorSchema`), and atomic patch specifications (`ArtifactPatchSchema`).
+- **Decision — Bounded AST Spreadsheet Recalculation Engine (`src/utils/spreadsheetEngine.ts`):**
+  Implemented recursive-descent formula evaluation supporting arithmetic, comparisons, logical expressions, and essential functions (`SUM`, `AVERAGE`, `MIN`, `MAX`, `COUNT`, `PRODUCT`, `IF`, `ABS`, `ROUND`, `CONCAT`). Built an acyclic dependency graph with cycle detection (`#CYCLE!`) and division by zero detection (`#DIV/0!`). Zero dynamic `eval()` or `new Function()` prevents client-side code execution vulnerabilities.
+- **Security Invariant — Formula Injection Neutralization in CSV Exports:**
+  `sanitizeSpreadsheetCsvCell` automatically detects leading dangerous characters (`=`, `+`, `-`, `@`) and prepends a single quote (`'`), defending against CSV formula injection (DDE execution) in desktop spreadsheet software (Excel/Calc) while adhering to RFC 4180 quoting.
+- **Decision — Pure TypeScript In-Memory OpenXML Packager (`src/utils/officeDocumentExporter.ts`):**
+  Leveraged IEEE 802.3 CRC-32 and PKZip binary serialization to build valid OpenXML document packages (`.docx`, `.xlsx`, `.pptx`) completely in-memory with zero third-party npm dependencies and zero external network calls:
+  - DOCX: `[Content_Types].xml`, `_rels/.rels`, `word/document.xml`, `word/styles.xml`
+  - XLSX: `[Content_Types].xml`, `_rels/.rels`, `xl/workbook.xml`, `xl/worksheets/sheet1.xml`, `xl/styles.xml`
+  - PPTX: `[Content_Types].xml`, `_rels/.rels`, `ppt/presentation.xml`, `ppt/slides/slide*.xml`
+  All generated archives begin with standard PKZip magic bytes `PK\x03\x04` and open seamlessly in Microsoft Office and LibreOffice.
+- **Decision — Atomic Artifact Patching with Optimistic Concurrency Control (`src/utils/artifactPatchEngine.ts`):**
+  Supported granular operations (`replace_section`, `update_cells`, `update_slide`, `insert_slide`, `replace_all`) avoiding full content re-generation. Enforced optimistic concurrency checking against `patch.baseVersion !== artifact.version`, safely returning `STALE_BASE_VERSION` on concurrent conflicting updates.
+- **Decision — Zero-Migration Conversation Metadata Artifact Persistence (`src/utils/conversationSearch.ts`):**
+  Persisted multimodal artifacts directly within existing PostgreSQL JSONB `conversation_messages.metadata` (Migration `013`). Validated, normalized, and hydrated artifact descriptors on client reload with zero new database schema migrations.
+

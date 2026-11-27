@@ -20,6 +20,10 @@ export function inferArtifactLanguageFromType(
       return 'tsx';
     case 'application/vnd.ant.mermaid':
       return 'mermaid';
+    case 'application/vnd.aira.sheet':
+      return 'json';
+    case 'application/vnd.aira.slide':
+      return 'json';
     case 'text/markdown':
       return 'markdown';
     case 'application/vnd.ant.code':
@@ -38,6 +42,9 @@ export function isArtifactTypePreviewable(type?: ArtifactType | string): boolean
     type === 'image/svg+xml' ||
     type === 'application/vnd.ant.react' ||
     type === 'application/vnd.ant.mermaid' ||
+    type === 'application/vnd.aira.sheet' ||
+    type === 'application/vnd.aira.slide' ||
+    type === 'application/vnd.aira.app' ||
     type === 'text/markdown'
   );
 }

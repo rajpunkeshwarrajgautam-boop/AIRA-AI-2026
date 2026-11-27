@@ -49,7 +49,9 @@ export type ArtifactType =
   | 'text/html'
   | 'text/markdown'
   | 'application/vnd.ant.mermaid'
-  | 'application/vnd.aira.app';
+  | 'application/vnd.aira.app'
+  | 'application/vnd.aira.sheet'
+  | 'application/vnd.aira.slide';
 
 export interface ArtifactVersion {
   version: number;

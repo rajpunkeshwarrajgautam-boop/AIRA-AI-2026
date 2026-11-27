@@ -44,6 +44,37 @@ import {
 } from '../utils/sandboxSecurity';
 import { type ArtifactRuntimeError } from '../utils/artifactRuntimeError';
 import { createRollbackRevision, diffArtifactLines } from '../utils/artifactRevisions';
+import { GenUISheetEditor } from './genui/GenUISheetEditor';
+import { GenUISlideEditor } from './genui/GenUISlideEditor';
+import { GenUIDiagram } from './genui/GenUIDiagram';
+import { generateDocxArchive, generateXlsxArchive, generatePptxArchive } from '../utils/officeDocumentExporter';
+import type { SpreadsheetWorkbook, PresentationDeck } from '../../packages/contracts/src/artifacts';
+
+function parseSpreadsheetWorkbook(content: string, title: string): SpreadsheetWorkbook {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && Array.isArray(parsed.sheets) && parsed.sheets.length > 0) return parsed;
+  } catch {}
+  return {
+    activeSheet: 'Sheet1',
+    sheets: [{ name: 'Sheet1', rowCount: 20, colCount: 10, cells: { A1: { raw: title || 'Title', computed: title || 'Title' } } }],
+  };
+}
+
+function parsePresentationDeck(content: string, title: string): PresentationDeck {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && Array.isArray(parsed.slides) && parsed.slides.length > 0) return parsed;
+  } catch {}
+  return {
+    title: title || 'Presentation',
+    theme: 'default',
+    slides: [
+      { id: 'slide-1', title: title || 'Title', layout: 'title-slide', bullets: [] },
+      { id: 'slide-2', title: 'Overview', layout: 'content', bullets: ['Key takeaway 1', 'Key takeaway 2'] }
+    ],
+  };
+}
 
 function newSandboxNonce(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -235,7 +266,9 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
       artifact.type === 'application/vnd.ant.react' ||
       artifact.type === 'application/vnd.ant.mermaid' ||
       artifact.type === 'text/markdown' ||
-      artifact.type === 'application/vnd.aira.app'
+      artifact.type === 'application/vnd.aira.app' ||
+      artifact.type === 'application/vnd.aira.sheet' ||
+      artifact.type === 'application/vnd.aira.slide'
     ) {
       setActiveTab('preview');
     } else {
@@ -298,6 +331,30 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
   };
 
   const handleDownload = () => {
+    if (artifact.type === 'application/vnd.aira.sheet') {
+      const wb = parseSpreadsheetWorkbook(currentContent, artifact.title);
+      const bytes = generateXlsxArchive(wb);
+      const blob = new Blob([bytes as any], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${artifact.title.toLowerCase().replace(/[^a-z0-9]/g, '-')}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
+    if (artifact.type === 'application/vnd.aira.slide') {
+      const deck = parsePresentationDeck(currentContent, artifact.title);
+      const bytes = generatePptxArchive(deck);
+      const blob = new Blob([bytes as any], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${artifact.title.toLowerCase().replace(/[^a-z0-9]/g, '-')}.pptx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
     const ext = artifact.language === 'python' ? '.py' :
                 artifact.type === 'image/svg+xml' ? '.svg' :
                 artifact.type === 'application/vnd.ant.mermaid' ? '.mmd' :
@@ -310,6 +367,17 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     const a = document.createElement('a');
     a.href = url;
     a.download = `${artifact.title.toLowerCase().replace(/[^a-z0-9]/g, '-')}${ext}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadDocx = () => {
+    const bytes = generateDocxArchive(artifact.title, currentContent);
+    const blob = new Blob([bytes as any], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${artifact.title.toLowerCase().replace(/[^a-z0-9]/g, '-')}.docx`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -808,6 +876,28 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                         key={`${selectedFile.path}:${selectedFile.lastModified}`}
                         file={selectedFile}
                       />
+                    </div>
+                  ) : artifact.type === 'application/vnd.aira.sheet' ? (
+                    <div className="flex-1 w-full h-full overflow-hidden flex flex-col" data-testid="artifact-sheet-editor">
+                      <GenUISheetEditor
+                        workbook={parseSpreadsheetWorkbook(currentContent, artifact.title)}
+                        onChange={(updatedWb) => {
+                          onUpdateArtifact?.({ ...artifact, content: JSON.stringify(updatedWb, null, 2) });
+                        }}
+                      />
+                    </div>
+                  ) : artifact.type === 'application/vnd.aira.slide' ? (
+                    <div className="flex-1 w-full h-full overflow-hidden flex flex-col" data-testid="artifact-slide-editor">
+                      <GenUISlideEditor
+                        deck={parsePresentationDeck(currentContent, artifact.title)}
+                        onChange={(updatedDeck) => {
+                          onUpdateArtifact?.({ ...artifact, content: JSON.stringify(updatedDeck, null, 2) });
+                        }}
+                      />
+                    </div>
+                  ) : artifact.type === 'application/vnd.ant.mermaid' ? (
+                    <div className="flex-1 w-full h-full overflow-hidden flex flex-col" data-testid="artifact-diagram-viewer">
+                      <GenUIDiagram source={currentContent} />
                     </div>
                   ) : (
                     <div className="flex-1 w-full h-full overflow-auto bg-stone-900/30 dark:bg-black/30 flex flex-col items-center justify-start p-1 sm:p-2" data-testid="artifact-viewport-container">

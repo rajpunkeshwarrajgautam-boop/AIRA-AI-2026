@@ -22,6 +22,12 @@ export function normalizeArtifactType(rawType?: string, language?: string): Arti
   if (t === 'application/vnd.ant.mermaid' || t.includes('mermaid') || lang === 'mermaid') {
     return 'application/vnd.ant.mermaid';
   }
+  if (t === 'application/vnd.aira.sheet' || t.includes('sheet') || t.includes('spreadsheet') || lang === 'sheet') {
+    return 'application/vnd.aira.sheet';
+  }
+  if (t === 'application/vnd.aira.slide' || t.includes('slide') || t.includes('presentation') || lang === 'slide') {
+    return 'application/vnd.aira.slide';
+  }
   if (t === 'text/markdown' || t.includes('markdown') || lang === 'markdown' || lang === 'md') {
     return 'text/markdown';
   }

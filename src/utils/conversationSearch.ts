@@ -1,4 +1,4 @@
-import type { Conversation } from '../types';
+import type { Conversation, Artifact } from '../types';
 import {
   AIRA_GENUI_LIMITS,
   containsForbiddenObjectKey,
@@ -14,17 +14,21 @@ import { authenticatedApiFetch } from '../lib/neonAuth';
 function extractGenUIMetadata(message: Conversation['messages'][number]): Record<string, unknown> | undefined {
   const hasSurfaces = (message.genuiSurfaces && message.genuiSurfaces.length > 0) || message.genuiSurfaceState;
   const hasApps = (message.genuiApps && message.genuiApps.length > 0) || message.genuiAppState;
-  if (!hasSurfaces && !hasApps) {
+  const hasArtifacts = message.artifacts && message.artifacts.length > 0;
+  if (!hasSurfaces && !hasApps && !hasArtifacts) {
     return undefined;
   }
   return {
-    genui: {
-      ...(message.genuiSurfaces?.length ? { surfaces: message.genuiSurfaces } : {}),
-      ...(message.genuiSurfaceState ? { surfaceState: message.genuiSurfaceState } : {}),
-      ...(message.genuiApps?.length ? { apps: message.genuiApps } : {}),
-      ...(message.genuiAppState ? { appState: message.genuiAppState } : {}),
-      updatedAt: message.timestamp,
-    },
+    ...(hasSurfaces || hasApps ? {
+      genui: {
+        ...(message.genuiSurfaces?.length ? { surfaces: message.genuiSurfaces } : {}),
+        ...(message.genuiSurfaceState ? { surfaceState: message.genuiSurfaceState } : {}),
+        ...(message.genuiApps?.length ? { apps: message.genuiApps } : {}),
+        ...(message.genuiAppState ? { appState: message.genuiAppState } : {}),
+        updatedAt: message.timestamp,
+      },
+    } : {}),
+    ...(hasArtifacts ? { artifacts: message.artifacts } : {}),
   };
 }
 
@@ -33,11 +37,38 @@ function hydrateGenUIMetadata(metadata: unknown): {
   genuiSurfaceState?: Record<string, GenUIStateRecord>;
   genuiApps?: GenUIApp[];
   genuiAppState?: Record<string, GenUIStateRecord>;
+  artifacts?: Artifact[];
 } {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
   if (containsForbiddenObjectKey(metadata)) return {};
-  const genui = (metadata as Record<string, unknown>).genui;
-  if (!genui || typeof genui !== 'object' || Array.isArray(genui)) return {};
+  const record = metadata as Record<string, unknown>;
+
+  // Hydrate multimodal artifacts
+  const validArtifacts: Artifact[] = [];
+  const rawArtifacts = record.artifacts;
+  if (Array.isArray(rawArtifacts)) {
+    for (const art of rawArtifacts.slice(0, 8)) {
+      if (!art || typeof art !== 'object') continue;
+      const a = art as any;
+      if (typeof a.id === 'string' && typeof a.title === 'string' && typeof a.type === 'string' && typeof a.content === 'string') {
+        validArtifacts.push({
+          id: a.id,
+          title: a.title,
+          type: a.type,
+          language: typeof a.language === 'string' ? a.language : undefined,
+          content: a.content,
+          version: typeof a.version === 'number' ? a.version : 1,
+          versions: Array.isArray(a.versions) ? a.versions : [{ version: a.version || 1, content: a.content, timestamp: Date.now() }],
+          bundle: a.bundle,
+        });
+      }
+    }
+  }
+
+  const genui = record.genui;
+  if (!genui || typeof genui !== 'object' || Array.isArray(genui)) {
+    return validArtifacts.length > 0 ? { artifacts: validArtifacts } : {};
+  }
 
   const validSurfaces: GenUISurface[] = [];
   const rawSurfaces = (genui as Record<string, unknown>).surfaces;
@@ -90,6 +121,7 @@ function hydrateGenUIMetadata(metadata: unknown): {
     ...(Object.keys(genuiSurfaceState).length > 0 ? { genuiSurfaceState } : {}),
     ...(validApps.length > 0 ? { genuiApps: validApps } : {}),
     ...(Object.keys(genuiAppState).length > 0 ? { genuiAppState } : {}),
+    ...(validArtifacts.length > 0 ? { artifacts: validArtifacts } : {}),
   };
 }
 
