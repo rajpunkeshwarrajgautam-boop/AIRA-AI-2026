@@ -15,6 +15,8 @@ import {
   sanitizeSvgMarkup,
   renderSafeMarkdownHtml,
 } from './sandboxSecurity';
+import { validateGenUIApp } from '../../packages/contracts/src/genui';
+import { buildSandboxAppHtml } from './genuiAppBridge';
 
 export { safeJsonStringifyForHtmlScript, sanitizeSvgMarkup, renderSafeMarkdownHtml };
 
@@ -28,6 +30,22 @@ export function generateArtifactSandboxHtml(
   const byteLength = new TextEncoder().encode(safeContent).length;
   if (byteLength > SANDBOX_LIMITS.maxContentBytes) {
     return `<!DOCTYPE html><html lang="en"><head>${ARTIFACT_STRICT_STATIC_CSP_META_TAG}<meta charset="UTF-8"><style>body{margin:0;padding:24px;font-family:monospace;background:${isDark ? '#1F1E1D' : '#FAF9F5'};color:${isDark ? '#ECEAE4' : '#1F1E1D'};}</style></head><body><div id="aira-limit-error"><strong>SANDBOX_CONTENT_LIMIT_EXCEEDED</strong>: Artifact exceeds maximum sandbox size (${SANDBOX_LIMITS.maxContentBytes} bytes). View or download from the Code tab instead.</div></body></html>`;
+  }
+
+  // Open Generative UI Application (aira-app/v1)
+  if (artifact.type === 'application/vnd.aira.app') {
+    try {
+      const parsed = typeof safeContent === 'string' ? JSON.parse(safeContent) : safeContent;
+      const val = validateGenUIApp(parsed);
+      if (val.ok) {
+        return buildSandboxAppHtml(val.app, {
+          nonce,
+          isDark,
+        });
+      }
+    } catch {
+      // Fall through to error/fallback
+    }
   }
 
   const logBridgeScript = buildSandboxLogBridgeScript(nonce);

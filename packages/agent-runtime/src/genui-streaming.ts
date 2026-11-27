@@ -1,8 +1,10 @@
 import { EventType, type BaseEvent } from '@ag-ui/core';
 import {
   AIRA_GENUI_CONTRACT_VERSION,
+  AIRA_GENUI_APP_CONTRACT_VERSION,
   A2UISurfaceReducer,
   validateGenUISurface,
+  validateGenUIApp,
   applyGenUILifecycleEventToMap,
   buildCalculatorSurface,
   type GenUICalculatorKind,
@@ -10,7 +12,9 @@ import {
   type GenUIInteractionEvent,
   type GenUIStateRecord,
   type GenUISurface,
+  type GenUIApp,
   type GenUIValidationResult,
+  type GenUIBlockItem,
   type StreamingEvent,
 } from '../../contracts/src/index.js';
 
@@ -18,6 +22,8 @@ export { applyGenUILifecycleEventToMap };
 
 const GENUI_OPEN_TAG = '<airaGenUI>';
 const GENUI_CLOSE_TAG = '</airaGenUI>';
+const GENUI_APP_OPEN_TAG = '<airaApp>';
+const GENUI_APP_CLOSE_TAG = '</airaApp>';
 
 /**
  * Narrow AG-UI compatibility adapter: translates authoritative AIRA StreamingEvents
@@ -129,6 +135,37 @@ export function adaptAiraEventToAGUI(event: StreamingEvent): BaseEvent[] {
           timestamp: ts,
         },
       ];
+    case 'genui.app.created': {
+      const app = (event.data as any)?.app;
+      const out: BaseEvent[] = [
+        {
+          type: EventType.CUSTOM,
+          name: 'aira.genui.app.created',
+          value: event.data,
+          timestamp: ts,
+        },
+      ];
+      if (app && app.appId) {
+        out.unshift({
+          type: EventType.STATE_SNAPSHOT,
+          snapshot: { genuiApps: { [app.appId]: app } },
+          timestamp: ts,
+        });
+      }
+      return out;
+    }
+    case 'genui.app.completed':
+    case 'genui.app.state_updated':
+    case 'genui.app.error':
+    case 'genui.app.action':
+      return [
+        {
+          type: EventType.CUSTOM,
+          name: `aira.${event.type}`,
+          value: event.data,
+          timestamp: ts,
+        },
+      ];
     case 'run.completed':
       return [
         {
@@ -173,35 +210,47 @@ export function adaptAiraEventToAGUI(event: StreamingEvent): BaseEvent[] {
 function tryParseGenUIBlock(
   rawInner: string,
   a2uiReducer: A2UISurfaceReducer
-): { surfaces: GenUIValidationResult[]; deletedSurfaceIds: string[] } {
+): { surfaces: GenUIBlockItem[]; deletedSurfaceIds: string[] } {
   const cleaned = rawInner
     .trim()
     .replace(/^```(?:json|jsonl)?\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
-  const surfaces: GenUIValidationResult[] = [];
+  const surfaces: GenUIBlockItem[] = [];
   const deletedSurfaceIds: string[] = [];
 
   const handleParsed = (obj: unknown) => {
-    if (obj && typeof obj === 'object' && (obj as any).version === '1.0') {
-      const res = a2uiReducer.applyMessage(obj);
-      if (!res.ok && res.error) {
-        surfaces.push({
-          ok: false,
-          code: res.error.code,
-          error: res.error.message,
-        });
-      } else if (res.deleted && res.surfaceId) {
-        const idx = surfaces.findIndex((s) => s.ok && s.surface.surfaceId === res.surfaceId);
-        if (idx >= 0) surfaces.splice(idx, 1);
-        deletedSurfaceIds.push(res.surfaceId);
-      } else if (res.ok && res.surface) {
-        // Keep latest reduced snapshot for same surfaceId inside the same block
-        const idx = surfaces.findIndex((s) => s.ok && s.surface.surfaceId === res.surface!.surfaceId);
-        if (idx >= 0) surfaces[idx] = { ok: true, surface: res.surface };
-        else surfaces.push({ ok: true, surface: res.surface });
+    if (obj && typeof obj === 'object') {
+      const o = obj as any;
+      if (o.schemaVersion === AIRA_GENUI_APP_CONTRACT_VERSION || (o.html && (o.appId || o.appType))) {
+        const appRes = validateGenUIApp(obj);
+        if (appRes.ok) {
+          surfaces.push({ ok: true, app: appRes.app } as any);
+        } else {
+          surfaces.push({ ok: false, code: appRes.code, error: appRes.error });
+        }
+        return;
       }
-      return;
+      if (o.version === '1.0') {
+        const res = a2uiReducer.applyMessage(obj);
+        if (!res.ok && res.error) {
+          surfaces.push({
+            ok: false,
+            code: res.error.code,
+            error: res.error.message,
+          });
+        } else if (res.deleted && res.surfaceId) {
+          const idx = surfaces.findIndex((s) => s.ok && s.surface?.surfaceId === res.surfaceId);
+          if (idx >= 0) surfaces.splice(idx, 1);
+          deletedSurfaceIds.push(res.surfaceId);
+        } else if (res.ok && res.surface) {
+          // Keep latest reduced snapshot for same surfaceId inside the same block
+          const idx = surfaces.findIndex((s) => s.ok && s.surface?.surfaceId === res.surface!.surfaceId);
+          if (idx >= 0) surfaces[idx] = { ok: true, surface: res.surface };
+          else surfaces.push({ ok: true, surface: res.surface });
+        }
+        return;
+      }
     }
     surfaces.push(validateGenUISurface(obj));
   };
@@ -264,35 +313,68 @@ function tryParseGenUIBlock(
 export class GenUIStreamTagExtractor {
   private buffer = '';
   private insideTag = false;
+  private currentCloseTag = GENUI_CLOSE_TAG;
   private tagBuffer = '';
-  private readonly maxTagBytes = 256 * 1024;
+  private readonly maxTagBytes = 768 * 1024;
   private readonly a2uiReducer = new A2UISurfaceReducer();
 
   public pushChunk(chunk: string): {
     visibleText: string;
-    surfaces: GenUIValidationResult[];
+    surfaces: GenUIBlockItem[];
     deletedSurfaceIds: string[];
   } {
     this.buffer += chunk;
     let visibleText = '';
-    const surfaces: GenUIValidationResult[] = [];
+    const surfaces: GenUIBlockItem[] = [];
     const deletedSurfaceIds: string[] = [];
 
     while (this.buffer.length > 0) {
       if (!this.insideTag) {
-        const openIdx = this.buffer.indexOf(GENUI_OPEN_TAG);
+        const genuiIdx = this.buffer.indexOf(GENUI_OPEN_TAG);
+        const appIdx = this.buffer.indexOf(GENUI_APP_OPEN_TAG);
+
+        let openIdx = -1;
+        let openTag = '';
+        let closeTag = '';
+
+        if (genuiIdx >= 0 && appIdx >= 0) {
+          if (genuiIdx < appIdx) {
+            openIdx = genuiIdx;
+            openTag = GENUI_OPEN_TAG;
+            closeTag = GENUI_CLOSE_TAG;
+          } else {
+            openIdx = appIdx;
+            openTag = GENUI_APP_OPEN_TAG;
+            closeTag = GENUI_APP_CLOSE_TAG;
+          }
+        } else if (genuiIdx >= 0) {
+          openIdx = genuiIdx;
+          openTag = GENUI_OPEN_TAG;
+          closeTag = GENUI_CLOSE_TAG;
+        } else if (appIdx >= 0) {
+          openIdx = appIdx;
+          openTag = GENUI_APP_OPEN_TAG;
+          closeTag = GENUI_APP_CLOSE_TAG;
+        }
+
         if (openIdx >= 0) {
-          visibleText += this.buffer.slice(0, openIdx);
-          this.buffer = this.buffer.slice(openIdx + GENUI_OPEN_TAG.length);
+          let preSlice = this.buffer.slice(0, openIdx);
+          // Strip preceding markdown fence opening (e.g. ```json\n) so user prose stays clean
+          preSlice = preSlice.replace(/```(?:json|jsonl)?\s*$/i, '');
+          visibleText += preSlice;
+          this.buffer = this.buffer.slice(openIdx + openTag.length);
           this.insideTag = true;
+          this.currentCloseTag = closeTag;
           this.tagBuffer = '';
           continue;
         }
 
-        // Preserve any trailing prefix that could start <airaGenUI>
+        // Preserve any trailing prefix that could start <airaGenUI> or <airaApp>
         let partialStart = -1;
-        for (let i = Math.max(0, this.buffer.length - GENUI_OPEN_TAG.length + 1); i < this.buffer.length; i++) {
-          if (GENUI_OPEN_TAG.startsWith(this.buffer.slice(i))) {
+        const maxPrefixLen = Math.max(GENUI_OPEN_TAG.length, GENUI_APP_OPEN_TAG.length);
+        for (let i = Math.max(0, this.buffer.length - maxPrefixLen + 1); i < this.buffer.length; i++) {
+          const slice = this.buffer.slice(i);
+          if (GENUI_OPEN_TAG.startsWith(slice) || GENUI_APP_OPEN_TAG.startsWith(slice)) {
             partialStart = i;
             break;
           }
@@ -306,10 +388,10 @@ export class GenUIStreamTagExtractor {
         this.buffer = '';
         break;
       } else {
-        const closeIdx = this.buffer.indexOf(GENUI_CLOSE_TAG);
+        const closeIdx = this.buffer.indexOf(this.currentCloseTag);
         if (closeIdx >= 0) {
           if (this.tagBuffer.length + closeIdx > this.maxTagBytes) {
-            this.buffer = this.buffer.slice(closeIdx + GENUI_CLOSE_TAG.length);
+            this.buffer = this.buffer.slice(closeIdx + this.currentCloseTag.length);
             this.insideTag = false;
             this.tagBuffer = '';
             surfaces.push({
@@ -320,7 +402,10 @@ export class GenUIStreamTagExtractor {
             continue;
           }
           this.tagBuffer += this.buffer.slice(0, closeIdx);
-          this.buffer = this.buffer.slice(closeIdx + GENUI_CLOSE_TAG.length);
+          let remaining = this.buffer.slice(closeIdx + this.currentCloseTag.length);
+          // Strip following markdown fence close (e.g. ```\n)
+          remaining = remaining.replace(/^\s*```/i, '');
+          this.buffer = remaining;
           this.insideTag = false;
           const blockResult = tryParseGenUIBlock(this.tagBuffer, this.a2uiReducer);
           surfaces.push(...blockResult.surfaces);
@@ -331,8 +416,8 @@ export class GenUIStreamTagExtractor {
 
         // Keep partial close tag suffix buffered
         let partialClose = -1;
-        for (let i = Math.max(0, this.buffer.length - GENUI_CLOSE_TAG.length + 1); i < this.buffer.length; i++) {
-          if (GENUI_CLOSE_TAG.startsWith(this.buffer.slice(i))) {
+        for (let i = Math.max(0, this.buffer.length - this.currentCloseTag.length + 1); i < this.buffer.length; i++) {
+          if (this.currentCloseTag.startsWith(this.buffer.slice(i))) {
             partialClose = i;
             break;
           }
@@ -358,16 +443,25 @@ export class GenUIStreamTagExtractor {
     return { visibleText, surfaces, deletedSurfaceIds };
   }
 
-  public flush(): { visibleText: string; surfaces: GenUIValidationResult[]; deletedSurfaceIds: string[] } {
+  public flush(): { visibleText: string; surfaces: GenUIBlockItem[]; deletedSurfaceIds: string[] } {
     if (this.insideTag) {
-      const result: GenUIValidationResult = {
+      // First attempt graceful recovery: parse any complete payload accumulated in tagBuffer
+      const raw = (this.tagBuffer + this.buffer)
+        .replace(/```(?:json|jsonl)?\s*/gi, '')
+        .replace(/\s*```$/gi, '')
+        .trim();
+      const blockResult = tryParseGenUIBlock(raw, this.a2uiReducer);
+      this.insideTag = false;
+      this.tagBuffer = '';
+      this.buffer = '';
+      if (blockResult.surfaces.some((s) => s.ok)) {
+        return { visibleText: '', surfaces: blockResult.surfaces, deletedSurfaceIds: blockResult.deletedSurfaceIds };
+      }
+      const result: GenUIBlockItem = {
         ok: false,
         code: 'GENUI_UNTERMINATED_BLOCK',
         error: 'GenUI stream ended before closing </airaGenUI> tag.',
       };
-      this.insideTag = false;
-      this.tagBuffer = '';
-      this.buffer = '';
       return { visibleText: '', surfaces: [result], deletedSurfaceIds: [] };
     }
     const visibleText = this.buffer;
@@ -617,13 +711,34 @@ export function buildRuntimeExecutionGenUISurface(params: {
 }
 
 export function buildGenUISystemInstruction(presentationMode: string): string {
+  if (presentationMode === 'sandboxed_app') {
+    const example =
+      '{"schemaVersion":"aira-app/v1","appId":"app_sim","appType":"simulation_2d","title":"Physics Simulation","html":"<canvas id=\\"sim\\" width=\\"400\\" height=\\"300\\"></canvas>","css":"canvas { border: 1px solid #444; border-radius: 6px; }","js":"const canvas = document.getElementById(\\"sim\\"); const ctx = canvas.getContext(\\"2d\\"); ctx.fillStyle = \\"#3b82f6\\"; ctx.fillRect(20, 20, 100, 100);","state":{"step":1},"textFallback":"Interactive physics simulation"}';
+    return [
+      'Presentation guidance (sandboxed_app):',
+      'After a 1-2 sentence intro, emit one <airaApp>{...}</airaApp> JSON block matching schemaVersion "aira-app/v1".',
+      'Supported appType: simulation_2d, dashboard, dynamic_chart, custom_tool, force_graph, spatial_3d, data_explorer.',
+      'Provide self-contained html, css, and js. You may use window.airaBridge to send messages and update state.',
+      'FORMATTING RULES:',
+      '1. Do NOT wrap <airaApp> in markdown code fences or backticks (no ```json). Emit <airaApp> directly in prose.',
+      '2. You MUST close with the exact closing tag </airaApp>.',
+      '3. Do NOT include remote <script src="..."> tags, remote CSS, or network requests (fetch/XHR). Everything must be self-contained in html/css/js.',
+      `<airaApp>${example}</airaApp>`,
+    ].join('\n');
+  }
+
   if (presentationMode === 'declarative_interactive') {
     const example =
       '{"schemaVersion":"aira-genui/v1","surfaceId":"surf_app","rootId":"root","textFallback":"Interactive workspace summary","state":{"weightCost":50,"rows":[]},"computed":[{"target":"/derived/top","kind":"math","expression":"weightCost * 2"}],"components":[{"id":"root","type":"vertical_group","props":{"gap":"md","children":["s1","m1"]}},{"id":"s1","type":"slider","props":{"label":"Weight","stateKey":"weightCost","min":0,"max":100,"step":5,"defaultValue":50}},{"id":"m1","type":"metric_display","props":{"label":"Score","value":100,"dataRef":"/derived/top"}}]}';
     return [
       'Presentation guidance (declarative_interactive):',
       'After a 1-2 sentence intro, emit one <airaGenUI>{...}</airaGenUI> JSON matching schemaVersion "aira-genui/v1" using only safe catalog types (vertical_group, horizontal_group, responsive_grid, card, section, heading, text, metric_display, progress_indicator, data_table, bar_chart, line_chart, pie_chart, doughnut_chart, numeric_input, text_input, slider, select_control, checkbox, radio_group, segmented_control, reset_control, action_button).',
-      'For multi-component live updates without extra LLM calls, declare state + reactive computed rules (kinds: math, compound_growth, amortization, function_series, weighted_decision, table_filter_aggregate, progress_ratio, format_value) and bind dataRef/rowsRef/labelsRef/datasetsRef. Never emit HTML/JS/eval:',
+      'For multi-component live updates without extra LLM calls, declare state + reactive computed rules (kinds: math, compound_growth, amortization, function_series, weighted_decision, table_filter_aggregate, progress_ratio, format_value) and bind dataRef/rowsRef/labelsRef/datasetsRef.',
+      'FORMATTING RULES:',
+      '1. Do NOT wrap <airaGenUI> in markdown code fences or backticks (no ```json or ```). Emit <airaGenUI> directly in prose.',
+      '2. You MUST close with the exact closing tag </airaGenUI>.',
+      '3. The "components" array must be a flat list of component objects. Container components (vertical_group, horizontal_group, card, section, responsive_grid) must list child IDs as an array of strings in props.children: ["id1", "id2"], NEVER nested objects.',
+      '4. Never emit HTML/JS/eval.',
       `<airaGenUI>${example}</airaGenUI>`,
     ].join('\n');
   }
@@ -636,6 +751,7 @@ export function buildGenUISystemInstruction(presentationMode: string): string {
   return [
     `Presentation guidance (${presentationMode}):`,
     'After a short 1-2 sentence explanation, include exactly one <airaGenUI>{...}</airaGenUI> JSON block matching this exact structure (strict keys only, no extra properties, no HTML/JS):',
+    'Do NOT wrap in markdown code fences. Close with </airaGenUI>.',
     `<airaGenUI>${example}</airaGenUI>`,
   ].join('\n');
 }

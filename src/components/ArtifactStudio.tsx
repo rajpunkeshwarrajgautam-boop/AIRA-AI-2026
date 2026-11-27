@@ -234,7 +234,8 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
       artifact.type === 'image/svg+xml' ||
       artifact.type === 'application/vnd.ant.react' ||
       artifact.type === 'application/vnd.ant.mermaid' ||
-      artifact.type === 'text/markdown'
+      artifact.type === 'text/markdown' ||
+      artifact.type === 'application/vnd.aira.app'
     ) {
       setActiveTab('preview');
     } else {
@@ -302,6 +303,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                 artifact.type === 'application/vnd.ant.mermaid' ? '.mmd' :
                 artifact.type === 'text/markdown' ? '.md' :
                 artifact.type === 'application/vnd.ant.react' || artifact.language === 'tsx' ? '.tsx' :
+                artifact.type === 'application/vnd.aira.app' ? '.json' :
                 artifact.type === 'text/html' ? '.html' : '.txt';
     const blob = new Blob([currentContent], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -314,7 +316,7 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
 
   // CRITICAL FIX A: Never open untrusted executable generated HTML as an unrestricted same-origin Blob document
   const handleOpenInNewTab = () => {
-    const isExecutable = artifact.type === 'text/html' || artifact.type === 'application/vnd.ant.react';
+    const isExecutable = artifact.type === 'text/html' || artifact.type === 'application/vnd.ant.react' || artifact.type === 'application/vnd.aira.app';
     if (isExecutable) {
       setSecurityNotice('New-tab execution of dynamic code is disabled for origin isolation. Use safe download to run locally, or view safely in this sandboxed preview.');
       setTimeout(() => setSecurityNotice(null), 6000);

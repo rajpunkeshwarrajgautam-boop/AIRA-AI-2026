@@ -1614,7 +1614,7 @@ CAPABILITY & IDENTITY INVARIANTS:
       const presentationMode = String(run.routingDecision?.metadata?.presentationMode || 'plain_text');
       const calcSurface = buildDeterministicCalculatorPromptSurface(run.prompt || '', runId);
       const isMockModel = run.modelPolicy?.model === 'mock-deterministic';
-      if (!calcSurface && !guardedSearchSynthesis && !isMockModel && ['table', 'native_visualization', 'declarative_interactive'].includes(presentationMode)) {
+      if (!calcSurface && !guardedSearchSynthesis && !isMockModel && ['table', 'native_visualization', 'declarative_interactive', 'sandboxed_app'].includes(presentationMode)) {
         messages.push({
           role: 'system',
           content: buildGenUISystemInstruction(presentationMode),
@@ -1641,6 +1641,19 @@ CAPABILITY & IDENTITY INVARIANTS:
             sequence: genuiSequence++,
           });
         }
+      };
+
+      const emitGenUIApp = async (app: any) => {
+        genuiEmittedCount += 1;
+        await this.emitRunEvent(runId, 'genui.app.created', {
+          appId: app.appId,
+          sequence: genuiSequence++,
+          app,
+        });
+        await this.emitRunEvent(runId, 'genui.app.completed', {
+          appId: app.appId,
+          sequence: genuiSequence++,
+        });
       };
 
       const emitGenUIDeleted = async (surfaceId: string) => {
@@ -1782,12 +1795,21 @@ CAPABILITY & IDENTITY INVARIANTS:
                 }
                 for (const s of extracted.surfaces) {
                   if (s.ok) {
-                    await emitGenUISurface({
-                      ...s.surface,
-                      modelId: run.provenance?.executedModel || run.modelPolicy?.model,
-                      presentationMode,
-                      generatedAt: Date.now(),
-                    });
+                    if (s.app) {
+                      await emitGenUIApp({
+                        ...s.app,
+                        modelId: run.provenance?.executedModel || run.modelPolicy?.model,
+                        presentationMode,
+                        generatedAt: Date.now(),
+                      });
+                    } else if (s.surface) {
+                      await emitGenUISurface({
+                        ...s.surface,
+                        modelId: run.provenance?.executedModel || run.modelPolicy?.model,
+                        presentationMode,
+                        generatedAt: Date.now(),
+                      });
+                    }
                   } else {
                     await this.emitRunEvent(runId, 'genui.surface.error', {
                       surfaceId: `surf_err_${runId}_${genuiSequence}`,
@@ -1883,12 +1905,21 @@ CAPABILITY & IDENTITY INVARIANTS:
         }
         for (const s of flushedGenUI.surfaces) {
           if (s.ok) {
-            await emitGenUISurface({
-              ...s.surface,
-              modelId: run.provenance?.executedModel || run.modelPolicy?.model,
-              presentationMode,
-              generatedAt: Date.now(),
-            });
+            if (s.app) {
+              await emitGenUIApp({
+                ...s.app,
+                modelId: run.provenance?.executedModel || run.modelPolicy?.model,
+                presentationMode,
+                generatedAt: Date.now(),
+              });
+            } else if (s.surface) {
+              await emitGenUISurface({
+                ...s.surface,
+                modelId: run.provenance?.executedModel || run.modelPolicy?.model,
+                presentationMode,
+                generatedAt: Date.now(),
+              });
+            }
           } else {
             await this.emitRunEvent(runId, 'genui.surface.error', {
               surfaceId: `surf_err_${runId}_${genuiSequence}`,

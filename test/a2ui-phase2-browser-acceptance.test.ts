@@ -331,7 +331,7 @@ test('Phase 2 E2E Acceptance: 7 Interactive Apps, A2UI Streaming, Persistence, L
   const persistedConvs = new Map<string, { owner: string; data: any }>();
   const actionReplayCache = new Map<string, { hash: string; body: any }>();
   const chatCalls: string[] = [];
-  const liveTelemetry: any = { completed: false, terminated: false, error: '', surfaces: 0, textLen: 0, ttftMs: 0, completeMs: 0 };
+  const liveTelemetry: any = { completed: false, terminated: false, error: '', surfaces: 0, textLen: 0, ttftMs: 0, completeMs: 0, fullText: '', surfaceErrors: [] };
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -430,9 +430,11 @@ test('Phase 2 E2E Acceptance: 7 Interactive Apps, A2UI Streaming, Persistence, L
           if (evt.type === 'content.delta') {
             if (!liveTelemetry.ttftMs) liveTelemetry.ttftMs = Math.round(performance.now() - t0);
             liveTelemetry.textLen += String(evt.data.delta || '').length;
+            liveTelemetry.fullText += String(evt.data.delta || '');
             writeSse('content_delta', { text: evt.data.delta });
           } else if (evt.type === 'genui.surface.created' || evt.type === 'genui.surface.completed' || evt.type === 'genui.surface.error') {
             if (evt.type === 'genui.surface.created') liveTelemetry.surfaces += 1;
+            if (evt.type === 'genui.surface.error') liveTelemetry.surfaceErrors.push(evt.data?.error || 'unknown surface error');
             writeSse('genui_event', {
               eventId: evt.eventId,
               type: evt.type,
@@ -695,7 +697,7 @@ test('Phase 2 E2E Acceptance: 7 Interactive Apps, A2UI Streaming, Persistence, L
         await page.waitForTimeout(150);
       }
       assert.equal(liveTelemetry.completed, true, `Live NIM declarative turn must complete (${liveTelemetry.error || 'timeout'})`);
-      assert.ok(liveTelemetry.surfaces >= 1 || liveTelemetry.textLen > 20, 'Must deliver surface or safe text fallback');
+      assert.ok(liveTelemetry.surfaces >= 1, `Live NIM must generate at least 1 verified GenUI surface (surfaces=${liveTelemetry.surfaces}, textLen=${liveTelemetry.textLen})`);
       assert.equal(chatCalls.length, liveCallsBefore + 1);
       console.log(
         `[PHASE2_E2E_METRICS] invReactMs=${invReactMs}ms restoreMs=${restoreMs}ms liveCompleted=${liveTelemetry.completed} liveSurfaces=${liveTelemetry.surfaces} liveTtftMs=${liveTelemetry.ttftMs}ms liveCompleteMs=${liveTelemetry.completeMs}ms liveTextLen=${liveTelemetry.textLen}`

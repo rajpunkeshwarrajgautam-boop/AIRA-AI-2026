@@ -4,4 +4,5 @@ export {
   renderRegisteredComponent,
 } from './registry';
 export { GenUISurfaceRenderer, type GenUISurfaceRendererProps } from './GenUISurfaceRenderer';
+export { GenUISandboxApp, type GenUISandboxAppProps } from './GenUISandboxApp';
 export type { GenUIRenderContext, GenUIComponentRenderer } from './types';

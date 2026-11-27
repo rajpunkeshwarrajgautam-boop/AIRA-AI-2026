@@ -4,19 +4,25 @@ import {
   containsForbiddenObjectKey,
   GenUIStateRecordSchema,
   validateGenUISurface,
+  validateGenUIApp,
   type GenUISurface,
+  type GenUIApp,
   type GenUIStateRecord,
 } from '../../packages/contracts/src/genui';
 import { authenticatedApiFetch } from '../lib/neonAuth';
 
 function extractGenUIMetadata(message: Conversation['messages'][number]): Record<string, unknown> | undefined {
-  if ((!message.genuiSurfaces || message.genuiSurfaces.length === 0) && !message.genuiSurfaceState) {
+  const hasSurfaces = (message.genuiSurfaces && message.genuiSurfaces.length > 0) || message.genuiSurfaceState;
+  const hasApps = (message.genuiApps && message.genuiApps.length > 0) || message.genuiAppState;
+  if (!hasSurfaces && !hasApps) {
     return undefined;
   }
   return {
     genui: {
-      surfaces: message.genuiSurfaces || [],
-      surfaceState: message.genuiSurfaceState || {},
+      ...(message.genuiSurfaces?.length ? { surfaces: message.genuiSurfaces } : {}),
+      ...(message.genuiSurfaceState ? { surfaceState: message.genuiSurfaceState } : {}),
+      ...(message.genuiApps?.length ? { apps: message.genuiApps } : {}),
+      ...(message.genuiAppState ? { appState: message.genuiAppState } : {}),
       updatedAt: message.timestamp,
     },
   };
@@ -25,6 +31,8 @@ function extractGenUIMetadata(message: Conversation['messages'][number]): Record
 function hydrateGenUIMetadata(metadata: unknown): {
   genuiSurfaces?: GenUISurface[];
   genuiSurfaceState?: Record<string, GenUIStateRecord>;
+  genuiApps?: GenUIApp[];
+  genuiAppState?: Record<string, GenUIStateRecord>;
 } {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
   if (containsForbiddenObjectKey(metadata)) return {};
@@ -37,6 +45,15 @@ function hydrateGenUIMetadata(metadata: unknown): {
     for (const raw of rawSurfaces.slice(0, 6)) {
       const checked = validateGenUISurface(raw);
       if (checked.ok) validSurfaces.push(checked.surface);
+    }
+  }
+
+  const validApps: GenUIApp[] = [];
+  const rawApps = (genui as Record<string, unknown>).apps;
+  if (Array.isArray(rawApps)) {
+    for (const raw of rawApps.slice(0, 6)) {
+      const checked = validateGenUIApp(raw);
+      if (checked.ok) validApps.push(checked.app);
     }
   }
 
@@ -54,9 +71,25 @@ function hydrateGenUIMetadata(metadata: unknown): {
     }
   }
 
+  const rawAppState = (genui as Record<string, unknown>).appState;
+  const genuiAppState: Record<string, GenUIStateRecord> = {};
+  if (rawAppState && typeof rawAppState === 'object' && !Array.isArray(rawAppState)) {
+    const encoder = new TextEncoder();
+    for (const [aid, rec] of Object.entries(rawAppState as Record<string, unknown>).slice(0, 8)) {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,95}$/.test(aid)) continue;
+      if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
+      const parsed = GenUIStateRecordSchema.safeParse(rec);
+      if (!parsed.success) continue;
+      if (encoder.encode(JSON.stringify(parsed.data)).length > AIRA_GENUI_LIMITS.maxStateBytes) continue;
+      genuiAppState[aid] = parsed.data;
+    }
+  }
+
   return {
     ...(validSurfaces.length > 0 ? { genuiSurfaces: validSurfaces } : {}),
     ...(Object.keys(genuiSurfaceState).length > 0 ? { genuiSurfaceState } : {}),
+    ...(validApps.length > 0 ? { genuiApps: validApps } : {}),
+    ...(Object.keys(genuiAppState).length > 0 ? { genuiAppState } : {}),
   };
 }
 

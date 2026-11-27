@@ -6,9 +6,14 @@ import {
 } from './genui-reactive.js';
 
 export const AIRA_GENUI_CONTRACT_VERSION = 'aira-genui/v1' as const;
+export const AIRA_GENUI_APP_CONTRACT_VERSION = 'aira-app/v1' as const;
 
 export const AIRA_GENUI_LIMITS = {
   maxPayloadBytes: 256 * 1024,
+  maxAppHtmlBytes: 512 * 1024,
+  maxAppCssBytes: 128 * 1024,
+  maxAppJsBytes: 256 * 1024,
+  maxAppPayloadBytes: 768 * 1024,
   maxStateBytes: 64 * 1024,
   maxComponents: 100,
   maxNestingDepth: 8,
@@ -1030,6 +1035,150 @@ export const GenUISurfaceSchema = z
 
 export type GenUISurface = z.infer<typeof GenUISurfaceSchema>;
 
+export const GenUIAppTypeSchema = z.enum([
+  'html_application',
+  'd3_visualization',
+  'three_scene',
+  'simulation',
+  'interactive_article',
+]);
+export type GenUIAppType = z.infer<typeof GenUIAppTypeSchema>;
+
+export const GenUIAppSchema = z
+  .object({
+    schemaVersion: z.literal(AIRA_GENUI_APP_CONTRACT_VERSION),
+    appId: IdSchema,
+    appType: GenUIAppTypeSchema,
+    title: z.string().min(1).max(200),
+    description: z.string().max(500).optional(),
+    html: z.string().max(AIRA_GENUI_LIMITS.maxAppHtmlBytes),
+    css: z.string().max(AIRA_GENUI_LIMITS.maxAppCssBytes).default(''),
+    javascript: z.string().max(AIRA_GENUI_LIMITS.maxAppJsBytes).default(''),
+    libraries: z.array(z.enum(['d3', 'three'])).max(2).default([]),
+    initialState: GenUIStateRecordSchema.default({}),
+    actions: z.array(GenUIActionDefinitionSchema).max(AIRA_GENUI_LIMITS.maxActions).default([]),
+    height: z.number().int().min(150).max(1400).default(500),
+    allowResize: z.boolean().default(true),
+    textFallback: z.string().min(1).max(32768),
+    origin: z.enum(['model', 'runtime_execution', 'tool_output']).default('model'),
+    presentationMode: z.string().max(64).optional(),
+    modelId: z.string().max(120).optional(),
+    generatedAt: z.number().finite().optional(),
+  })
+  .strict();
+export type GenUIApp = z.infer<typeof GenUIAppSchema>;
+
+export const GenUIBridgeMessageTypeSchema = z.enum([
+  'GENUI_APP_INIT',
+  'GENUI_APP_READY',
+  'GENUI_APP_RESIZE',
+  'GENUI_APP_STATE_UPDATE',
+  'GENUI_APP_ACTION',
+  'GENUI_APP_FOLLOWUP',
+  'GENUI_APP_ERROR',
+]);
+export type GenUIBridgeMessageType = z.infer<typeof GenUIBridgeMessageTypeSchema>;
+
+export const GenUIBridgeMessageSchema = z
+  .object({
+    type: GenUIBridgeMessageTypeSchema,
+    nonce: z.string().min(8).max(128),
+    appId: IdSchema,
+    payload: z.record(z.string().max(64), z.unknown()).default({}),
+    timestamp: z.number().finite().optional(),
+  })
+  .strict();
+export type GenUIBridgeMessage = z.infer<typeof GenUIBridgeMessageSchema>;
+
+export type GenUIAppValidationResult =
+  | { ok: true; app: GenUIApp }
+  | { ok: false; code: string; error: string };
+
+export function normalizeGenUIAppPayload(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const rawObj = raw as Record<string, any>;
+  const input: Record<string, any> = {};
+
+  input.schemaVersion = AIRA_GENUI_APP_CONTRACT_VERSION;
+  input.appId = String(rawObj.appId || rawObj.id || `app_${Date.now()}`);
+  const rawType = String(rawObj.appType || rawObj.type || 'html_application').toLowerCase();
+  const validTypes = new Set(['html_application', 'd3_visualization', 'three_scene', 'simulation', 'interactive_article']);
+  input.appType = validTypes.has(rawType) ? rawType : 'html_application';
+  input.title = String(rawObj.title || 'Interactive Application').slice(0, 200);
+  if (rawObj.description) input.description = String(rawObj.description).slice(0, 500);
+  input.html = String(rawObj.html || '');
+  input.css = typeof rawObj.css === 'string' ? rawObj.css : '';
+  input.javascript = typeof rawObj.javascript === 'string' ? rawObj.javascript : typeof rawObj.js === 'string' ? rawObj.js : '';
+  input.libraries = Array.isArray(rawObj.libraries) ? rawObj.libraries.filter((l: any) => l === 'd3' || l === 'three') : [];
+  input.initialState = rawObj.initialState && typeof rawObj.initialState === 'object' && !Array.isArray(rawObj.initialState)
+    ? rawObj.initialState
+    : rawObj.state && typeof rawObj.state === 'object' && !Array.isArray(rawObj.state)
+      ? rawObj.state
+      : {};
+  input.actions = Array.isArray(rawObj.actions) ? rawObj.actions : [];
+  input.height = typeof rawObj.height === 'number' && Number.isFinite(rawObj.height) ? Math.max(150, Math.min(1400, Math.round(rawObj.height))) : 500;
+  input.allowResize = rawObj.allowResize !== false;
+  input.textFallback = String(rawObj.textFallback || rawObj.fallbackText || input.title || 'Interactive Application');
+  if (rawObj.presentationMode) input.presentationMode = String(rawObj.presentationMode);
+  if (rawObj.modelId) input.modelId = String(rawObj.modelId);
+  if (typeof rawObj.generatedAt === 'number') input.generatedAt = rawObj.generatedAt;
+  input.origin = rawObj.origin === 'runtime_execution' || rawObj.origin === 'tool_output' ? rawObj.origin : 'model';
+
+  return input;
+}
+
+export function validateGenUIApp(input: unknown): GenUIAppValidationResult {
+  if (containsForbiddenObjectKey(input)) {
+    return {
+      ok: false,
+      code: 'GENUI_FORBIDDEN_KEY',
+      error: 'App payload contains forbidden prototype-manipulation property keys.',
+    };
+  }
+
+  const normalizedInput = normalizeGenUIAppPayload(input);
+
+  let serializedBytes = 0;
+  try {
+    serializedBytes = new TextEncoder().encode(JSON.stringify(normalizedInput) ?? '').length;
+  } catch {
+    return {
+      ok: false,
+      code: 'GENUI_UNSERIALIZABLE',
+      error: 'App payload cannot be JSON serialized.',
+    };
+  }
+
+  if (serializedBytes > AIRA_GENUI_LIMITS.maxAppPayloadBytes) {
+    return {
+      ok: false,
+      code: 'GENUI_PAYLOAD_TOO_LARGE',
+      error: `App payload (${serializedBytes} bytes) exceeds limit (${AIRA_GENUI_LIMITS.maxAppPayloadBytes} bytes).`,
+    };
+  }
+
+  const parsed = GenUIAppSchema.safeParse(normalizedInput);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      code: 'GENUI_SCHEMA_INVALID',
+      error: parsed.error.issues.map((i) => `${i.path.join('.') || 'root'}: ${i.message}`).join('; '),
+    };
+  }
+
+  const app = parsed.data;
+  const stateBytes = new TextEncoder().encode(JSON.stringify(app.initialState)).length;
+  if (stateBytes > AIRA_GENUI_LIMITS.maxStateBytes) {
+    return {
+      ok: false,
+      code: 'GENUI_STATE_TOO_LARGE',
+      error: `App initial state (${stateBytes} bytes) exceeds limit (${AIRA_GENUI_LIMITS.maxStateBytes} bytes).`,
+    };
+  }
+
+  return { ok: true, app };
+}
+
 export const GenUILifecycleEventSchema = z.discriminatedUnion('type', [
   z
     .object({
@@ -1088,6 +1237,49 @@ export const GenUILifecycleEventSchema = z.discriminatedUnion('type', [
       fallbackText: z.string().max(32768).optional(),
     })
     .strict(),
+  z
+    .object({
+      eventId: IdSchema,
+      type: z.literal('genui.app.created'),
+      appId: IdSchema,
+      runId: IdSchema.optional(),
+      sequence: z.number().int().nonnegative(),
+      timestamp: z.number().finite(),
+      app: GenUIAppSchema,
+    })
+    .strict(),
+  z
+    .object({
+      eventId: IdSchema,
+      type: z.literal('genui.app.completed'),
+      appId: IdSchema,
+      runId: IdSchema.optional(),
+      sequence: z.number().int().nonnegative(),
+      timestamp: z.number().finite(),
+    })
+    .strict(),
+  z
+    .object({
+      eventId: IdSchema,
+      type: z.literal('genui.app.state_updated'),
+      appId: IdSchema,
+      runId: IdSchema.optional(),
+      sequence: z.number().int().nonnegative(),
+      timestamp: z.number().finite(),
+      stateSnapshot: GenUIStateRecordSchema,
+    })
+    .strict(),
+  z
+    .object({
+      eventId: IdSchema,
+      type: z.literal('genui.app.error'),
+      appId: IdSchema,
+      runId: IdSchema.optional(),
+      sequence: z.number().int().nonnegative(),
+      timestamp: z.number().finite(),
+      error: z.string().min(1).max(500),
+    })
+    .strict(),
 ]);
 
 export type GenUILifecycleEvent = z.infer<typeof GenUILifecycleEventSchema>;
@@ -1096,7 +1288,7 @@ export const GenUIInteractionEventSchema = z
   .object({
     eventId: IdSchema,
     surfaceId: IdSchema,
-    componentId: IdSchema,
+    componentId: IdSchema.default('app'),
     actionId: IdSchema,
     kind: GenUIActionKindSchema,
     runId: IdSchema.optional(),
@@ -1124,11 +1316,115 @@ export type GenUIValidationResult =
   | { ok: true; surface: GenUISurface }
   | { ok: false; code: string; error: string };
 
+export type GenUIBlockItem =
+  | { ok: true; surface: GenUISurface; app?: never }
+  | { ok: true; app: GenUIApp; surface?: never }
+  | { ok: false; code: string; error: string; surface?: never; app?: never };
+
 function getChildIds(component: GenUIComponent): readonly string[] {
   if ('children' in component.props && Array.isArray(component.props.children)) {
     return component.props.children;
   }
   return [];
+}
+
+/**
+ * Normalizes an untrusted GenUI surface payload:
+ * - Ensures required top-level default arrays and objects (actions, evidence, state).
+ * - Recursively flattens any nested component trees in layout `props.children`
+ *   into top-level component entries with string ID references.
+ * - Deduplicates component IDs and resolves rootId when omitted.
+ */
+export function normalizeGenUISurfacePayload(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const input: Record<string, any> = { ...(raw as Record<string, any>) };
+
+  if (!input.actions || !Array.isArray(input.actions)) input.actions = [];
+  if (!input.evidence || !Array.isArray(input.evidence)) input.evidence = [];
+  if (!input.state || typeof input.state !== 'object' || Array.isArray(input.state)) input.state = {};
+  if (!input.schemaVersion) input.schemaVersion = 'aira-genui/v1';
+  if (!input.surfaceId) input.surfaceId = `surf_${Date.now()}`;
+  if (!input.textFallback) input.textFallback = 'Interactive application';
+
+  if (Array.isArray(input.components)) {
+    const flattened: any[] = [];
+
+    const sanitizeCompKeys = (comp: any): any => {
+      if (!comp || typeof comp !== 'object') return comp;
+      const { id, type, props = {}, checks, visibleWhen, stateRef, dataRef, stateKey } = comp;
+      const clonedProps = { ...props };
+
+      if (stateRef && !clonedProps.stateKey && !clonedProps.dataRef) {
+        if (type === 'metric_display' || type === 'progress_indicator') {
+          clonedProps.dataRef = String(stateRef);
+        } else {
+          clonedProps.stateKey = String(stateRef).replace(/^\/(?:state\/)?/, '');
+        }
+      }
+      if (dataRef && !clonedProps.dataRef) {
+        clonedProps.dataRef = String(dataRef);
+      }
+      if (stateKey && !clonedProps.stateKey) {
+        clonedProps.stateKey = String(stateKey);
+      }
+      if (clonedProps.stateRef) {
+        if (!clonedProps.stateKey && !clonedProps.dataRef) {
+          if (type === 'metric_display' || type === 'progress_indicator') {
+            clonedProps.dataRef = String(clonedProps.stateRef);
+          } else {
+            clonedProps.stateKey = String(clonedProps.stateRef).replace(/^\/(?:state\/)?/, '');
+          }
+        }
+        delete clonedProps.stateRef;
+      }
+
+      const res: Record<string, any> = { id, type, props: clonedProps };
+      if (checks !== undefined) res.checks = checks;
+      if (visibleWhen !== undefined) res.visibleWhen = visibleWhen;
+      return res;
+    };
+
+    const processComponent = (comp: any): string => {
+      if (typeof comp === 'string') return comp;
+      if (!comp || typeof comp !== 'object') return 'unknown_comp';
+
+      const sanitized = sanitizeCompKeys(comp);
+      const origId = String(sanitized.id || `comp_${flattened.length + 1}`);
+      const cloned = { ...sanitized, id: origId, props: { ...(sanitized.props || {}) } };
+
+      if (Array.isArray(cloned.props.children)) {
+        cloned.props.children = cloned.props.children.map((child: any) => processComponent(child));
+      }
+
+      flattened.push(cloned);
+      return origId;
+    };
+
+    for (const topComp of input.components) {
+      if (topComp && typeof topComp === 'object') {
+        const sanitized = sanitizeCompKeys(topComp);
+        const cloned = { ...sanitized, props: { ...(sanitized.props || {}) } };
+        if (Array.isArray(cloned.props.children)) {
+          cloned.props.children = cloned.props.children.map((child: any) => processComponent(child));
+        }
+        flattened.push(cloned);
+      }
+    }
+
+    input.components = flattened;
+    if (!input.rootId && flattened.length > 0) {
+      const childReferencedIds = new Set<string>();
+      for (const c of flattened) {
+        if (Array.isArray(c.props?.children)) {
+          for (const cid of c.props.children) childReferencedIds.add(String(cid));
+        }
+      }
+      const potentialRoots = flattened.filter((c) => !childReferencedIds.has(c.id));
+      input.rootId = potentialRoots[0]?.id || flattened[0].id;
+    }
+  }
+
+  return input;
 }
 
 /**
@@ -1144,9 +1440,11 @@ export function validateGenUISurface(input: unknown): GenUIValidationResult {
     };
   }
 
+  const normalizedInput = normalizeGenUISurfacePayload(input);
+
   let serializedBytes = 0;
   try {
-    serializedBytes = new TextEncoder().encode(JSON.stringify(input) ?? '').length;
+    serializedBytes = new TextEncoder().encode(JSON.stringify(normalizedInput) ?? '').length;
   } catch {
     return {
       ok: false,
@@ -1163,7 +1461,7 @@ export function validateGenUISurface(input: unknown): GenUIValidationResult {
     };
   }
 
-  const parsed = GenUISurfaceSchema.safeParse(input);
+  const parsed = GenUISurfaceSchema.safeParse(normalizedInput);
   if (!parsed.success) {
     return {
       ok: false,
@@ -1303,6 +1601,9 @@ export function applyGenUILifecycleEventToMap(
   }
 
   const event = parsed.data;
+  if (!('surfaceId' in event)) {
+    return current instanceof Map ? (current as Map<string, GenUISurfaceEntry>) : new Map(current);
+  }
   if (activeRunId && event.runId && event.runId !== activeRunId) {
     return current instanceof Map ? (current as Map<string, GenUISurfaceEntry>) : new Map(current);
   }

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, MessageSquareText } from 'lucide-react';
-import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode, GenUISurface, GenUIStateRecord } from './types';
+import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode, GenUISurface, GenUIStateRecord, GenUIApp } from './types';
 import {
   applyGenUILifecycleEventToMap,
   type GenUIInteractionEvent,
@@ -1444,6 +1444,7 @@ useEffect(() => {
     const requestOwnerId = currentUserId;
     let streamRunId: string | undefined;
     let genuiSurfaceMap = new Map<string, GenUISurfaceEntry>();
+    let genuiAppMap = new Map<string, GenUIApp>();
     const isSameRequestIdentity = () => (
       authEpochRef.current === requestEpoch &&
       activeUserIdRef.current === requestOwnerId
@@ -1582,6 +1583,20 @@ useEffect(() => {
           },
           onGenUIEvent: genuiEvt => {
             if (!isSameRequestIdentity()) return;
+            if (genuiEvt.type === 'genui.app.created') {
+              const app = (genuiEvt as any).app;
+              if (app && app.appId) {
+                genuiAppMap.set(app.appId, app);
+                const apps = Array.from(genuiAppMap.values());
+                updateConversation(id, c => ({
+                  ...c,
+                  messages: c.messages.map(m =>
+                    m.id === assistantId ? { ...m, genuiApps: apps } : m
+                  ),
+                }));
+              }
+              return;
+            }
             genuiSurfaceMap = applyGenUILifecycleEventToMap(genuiSurfaceMap, genuiEvt, streamRunId);
             const surfaces = Array.from(genuiSurfaceMap.values()).map(entry => entry.surface);
             updateConversation(id, c => ({
@@ -1978,6 +1993,26 @@ useEffect(() => {
                             : m
                         ),
                       }));
+                    }}
+                    onGenUIAppStateChange={(messageId, appId, nextState) => {
+                      updateConversation(activeConversation.id, c => ({
+                        ...c,
+                        updatedAt: Date.now(),
+                        messages: c.messages.map(m =>
+                          m.id === messageId
+                            ? {
+                                ...m,
+                                genuiAppState: {
+                                  ...(m.genuiAppState || {}),
+                                  [appId]: nextState,
+                                },
+                              }
+                            : m
+                        ),
+                      }));
+                    }}
+                    onGenUIAppFollowUp={(prompt) => {
+                      if (prompt) void handleSendMessage(prompt, []);
                     }}
                     onGenUIAction={async (event, surface) => {
                       const actionDef = surface.actions.find((a) => a.id === event.actionId);

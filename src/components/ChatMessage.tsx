@@ -13,7 +13,7 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import type { Message, Artifact, GenUISurface, GenUIStateRecord } from '../types';
+import type { Message, Artifact, GenUISurface, GenUIStateRecord, GenUIApp } from '../types';
 import type { GenUIInteractionEvent } from '../../packages/contracts/src/genui';
 import { AVAILABLE_MODELS } from '../utils/constants';
 import { AiraMark } from './AiraMark';
@@ -22,6 +22,7 @@ import { copyMessageAsRichText } from '../utils/richClipboard';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ArtifactCard } from './ArtifactCard';
 import { GenUISurfaceRenderer } from './genui/GenUISurfaceRenderer';
+import { GenUISandboxApp } from './genui/GenUISandboxApp';
 import { extractArtifactsFromText } from '../utils/artifactParser';
 
 interface ChatMessageProps {
@@ -32,6 +33,9 @@ interface ChatMessageProps {
   onOpenArtifactById?: (artifactId: string) => void;
   onGenUIStateChange?: (messageId: string, surfaceId: string, nextState: GenUIStateRecord) => void;
   onGenUIAction?: (event: GenUIInteractionEvent, surface: GenUISurface) => void | Promise<void>;
+  onGenUIAppStateChange?: (messageId: string, appId: string, nextState: GenUIStateRecord) => void;
+  onGenUIAppAction?: (actionId: string, payload: unknown, app: GenUIApp) => void | Promise<void>;
+  onGenUIAppFollowUp?: (prompt: string, app: GenUIApp) => void;
   onResolveGenUIApproval?: (approvalId: string, runId: string, decision: 'ALLOW_ONCE' | 'ALLOW_SESSION' | 'REJECT') => void;
   onRetry?: () => void;
   onSwitchToAgentAndReview?: (prompt: string) => void;
@@ -115,6 +119,9 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   onOpenArtifactById,
   onGenUIStateChange,
   onGenUIAction,
+  onGenUIAppStateChange,
+  onGenUIAppAction,
+  onGenUIAppFollowUp,
   onResolveGenUIApproval,
   onRetry,
   onSwitchToAgentAndReview,
@@ -349,6 +356,23 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                       else onOpenArtifactById?.(artifactId);
                     }}
                     onResolveApproval={onResolveGenUIApproval}
+                  />
+                ))}
+              </div>
+            )}
+
+            {message.genuiApps && message.genuiApps.length > 0 && (
+              <div className="space-y-3 pt-2" data-testid="message-genui-apps">
+                {message.genuiApps.map(app => (
+                  <GenUISandboxApp
+                    key={app.appId}
+                    app={app}
+                    initialStateOverride={message.genuiAppState?.[app.appId]}
+                    onStateChange={(appId, nextState) =>
+                      onGenUIAppStateChange?.(message.id, appId, nextState)
+                    }
+                    onAction={onGenUIAppAction}
+                    onFollowUp={onGenUIAppFollowUp}
                   />
                 ))}
               </div>

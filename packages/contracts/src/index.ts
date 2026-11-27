@@ -658,7 +658,12 @@ export const StreamingEventTypeSchema = z.enum([
   'genui.surface.completed',
   'genui.surface.deleted',
   'genui.surface.error',
-  'genui.interaction'
+  'genui.interaction',
+  'genui.app.created',
+  'genui.app.completed',
+  'genui.app.state_updated',
+  'genui.app.error',
+  'genui.app.action'
 ]);
 export type StreamingEventType = z.infer<typeof StreamingEventTypeSchema>;
 

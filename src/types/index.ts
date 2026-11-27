@@ -1,7 +1,7 @@
 
 import type { MultiFileArtifactBundle } from './multiFileArtifact';
-import type { GenUISurface, GenUIStateRecord } from '../../packages/contracts/src/genui';
-export type { GenUISurface, GenUIStateRecord };
+import type { GenUISurface, GenUIStateRecord, GenUIApp } from '../../packages/contracts/src/genui';
+export type { GenUISurface, GenUIStateRecord, GenUIApp };
 
 export type WorkspaceMode = 'chat' | 'agent';
 
@@ -48,7 +48,8 @@ export type ArtifactType =
   | 'application/pdf'
   | 'text/html'
   | 'text/markdown'
-  | 'application/vnd.ant.mermaid';
+  | 'application/vnd.ant.mermaid'
+  | 'application/vnd.aira.app';
 
 export interface ArtifactVersion {
   version: number;
@@ -98,6 +99,8 @@ export interface Message {
   agentEvents?: AgentTimelineEvent[];
   genuiSurfaces?: GenUISurface[];
   genuiSurfaceState?: Record<string, GenUIStateRecord>;
+  genuiApps?: GenUIApp[];
+  genuiAppState?: Record<string, GenUIStateRecord>;
   routingPresentationMode?: string;
   artifacts?: Artifact[];
   attachments?: Attachment[];
