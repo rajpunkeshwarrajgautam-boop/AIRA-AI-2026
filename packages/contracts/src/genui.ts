@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  isSafeGenUIRegexPattern,
+  validateComputedDependencyGraph,
+  writeStateKeyOrPointer,
+} from './genui-reactive.js';
 
 export const AIRA_GENUI_CONTRACT_VERSION = 'aira-genui/v1' as const;
 
@@ -23,18 +28,24 @@ export const AIRA_GENUI_LIMITS = {
 } as const;
 
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_OBJECT_WALK_DEPTH = 16;
 
-export function containsForbiddenObjectKey(value: unknown, seen = new WeakSet<object>()): boolean {
+export function containsForbiddenObjectKey(
+  value: unknown,
+  seen = new WeakSet<object>(),
+  depth = 0
+): boolean {
+  if (depth > MAX_OBJECT_WALK_DEPTH) return true;
   if (!value || typeof value !== 'object') return false;
   if (seen.has(value)) return false;
   seen.add(value);
   if (Array.isArray(value)) {
-    return value.some((item) => containsForbiddenObjectKey(item, seen));
+    return value.some((item) => containsForbiddenObjectKey(item, seen, depth + 1));
   }
   for (const key of Object.getOwnPropertyNames(value)) {
     if (FORBIDDEN_KEYS.has(key)) return true;
     const child = (value as Record<string, unknown>)[key];
-    if (containsForbiddenObjectKey(child, seen)) return true;
+    if (containsForbiddenObjectKey(child, seen, depth + 1)) return true;
   }
   return false;
 }
@@ -48,15 +59,21 @@ const IdSchema = z
 const StateKeySchema = z
   .string()
   .min(1)
-  .max(64)
-  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/, 'Invalid GenUI state key')
-  .refine((k) => !FORBIDDEN_KEYS.has(k), 'Forbidden state key');
+  .max(120)
+  .regex(/^(?:\/[a-zA-Z0-9_.\/~-]{1,118}|[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63})$/, 'Invalid GenUI state key or JSON Pointer')
+  .refine(
+    (k) =>
+      !FORBIDDEN_KEYS.has(k) &&
+      !k.includes('..') &&
+      !k.split('/').some((seg) => FORBIDDEN_KEYS.has(seg)),
+    'Forbidden state key'
+  );
 
 export const GenUIDataReferenceSchema = z
   .string()
   .min(2)
-  .max(120)
-  .regex(/^\/[a-zA-Z0-9_./-]{1,119}$/, 'Data reference must start with /')
+  .max(160)
+  .regex(/^\/[a-zA-Z0-9_.\/~-]{1,159}$/, 'Data reference must start with /')
   .refine(
     (ref) =>
       !ref.includes('..') &&
@@ -80,22 +97,160 @@ export const HttpUrlSchema = z
 
 const SafeFiniteNumberSchema = z.number().finite();
 
-export const GenUIStateValueSchema = z.union([
+const SafePrimitiveSchema = z.union([
   z.string().max(4096),
   SafeFiniteNumberSchema,
   z.boolean(),
   z.null(),
-  z.array(z.string().max(512)).max(64),
-  z.array(SafeFiniteNumberSchema).max(128),
 ]);
 
-export type GenUIStateValue = z.infer<typeof GenUIStateValueSchema>;
+const MAX_GENUI_STATE_DEPTH = 8;
+
+function buildGenUIStateValueSchema(depth: number): z.ZodType<any> {
+  if (depth >= MAX_GENUI_STATE_DEPTH) {
+    return SafePrimitiveSchema;
+  }
+  return z.lazy(() =>
+    z.union([
+      SafePrimitiveSchema,
+      z.array(buildGenUIStateValueSchema(depth + 1)).max(500),
+      z.record(
+        z.string().min(1).max(80).refine((k) => !FORBIDDEN_KEYS.has(k), 'Forbidden state key'),
+        buildGenUIStateValueSchema(depth + 1)
+      ),
+    ])
+  );
+}
+
+export const GenUIStateValueSchema: z.ZodType<any> = buildGenUIStateValueSchema(0);
+
+export type GenUIStateValue =
+  | string
+  | number
+  | boolean
+  | null
+  | GenUIStateValue[]
+  | { [key: string]: GenUIStateValue };
 
 export const GenUIStateRecordSchema = z
   .record(StateKeySchema, GenUIStateValueSchema)
   .refine((rec) => !containsForbiddenObjectKey(rec), 'Forbidden key in GenUI state');
 
-export type GenUIStateRecord = z.infer<typeof GenUIStateRecordSchema>;
+export type GenUIStateRecord = Record<string, GenUIStateValue>;
+
+export const GenUICheckRuleSchema = z
+  .object({
+    kind: z.enum(['required', 'regex', 'length', 'numeric', 'email']),
+    valueRef: GenUIDataReferenceSchema.optional(),
+    pattern: z
+      .string()
+      .max(120)
+      .refine((p) => isSafeGenUIRegexPattern(p), 'Unsafe or overly complex regex pattern')
+      .optional(),
+    min: SafeFiniteNumberSchema.optional(),
+    max: SafeFiniteNumberSchema.optional(),
+    message: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+export type GenUICheckRule = z.infer<typeof GenUICheckRuleSchema>;
+
+export const GenUIVisibleConditionSchema = z
+  .object({
+    stateKey: StateKeySchema,
+    equals: SafePrimitiveSchema.optional(),
+    notEquals: SafePrimitiveSchema.optional(),
+    min: SafeFiniteNumberSchema.optional(),
+    max: SafeFiniteNumberSchema.optional(),
+    truthy: z.boolean().optional(),
+  })
+  .strict();
+
+export type GenUIVisibleCondition = z.infer<typeof GenUIVisibleConditionSchema>;
+
+export const GenUIComputedRuleSchema = z.discriminatedUnion('kind', [
+  z.object({
+    target: GenUIDataReferenceSchema,
+    kind: z.literal('math'),
+    expression: z.string().min(1).max(240),
+    bindings: z.record(z.string().min(1).max(48), StateKeySchema).optional(),
+    decimals: z.number().int().min(0).max(8).optional(),
+    deps: z.array(StateKeySchema).max(24).optional(),
+  }).strict(),
+  z.object({
+    target: GenUIDataReferenceSchema,
+    kind: z.literal('compound_growth'),
+    principalRef: StateKeySchema,
+    monthlyContributionRef: StateKeySchema.optional(),
+    annualRateRef: StateKeySchema,
+    yearsRef: StateKeySchema,
+    currency: z.string().max(8).optional(),
+    deps: z.array(StateKeySchema).max(16).optional(),
+  }).strict(),
+  z.object({
+    target: GenUIDataReferenceSchema,
+    kind: z.literal('amortization'),
+    principalRef: StateKeySchema,
+    annualRateRef: StateKeySchema,
+    termMonthsRef: StateKeySchema,
+    termIsYears: z.boolean().optional(),
+    currency: z.string().max(8).optional(),
+    deps: z.array(StateKeySchema).max(16).optional(),
+  }).strict(),
+  z.object({
+    target: GenUIDataReferenceSchema,
+    kind: z.literal('function_series'),
+    expressionRef: StateKeySchema,
+    xMinRef: StateKeySchema.optional(),
+    xMaxRef: StateKeySchema.optional(),
+    steps: z.number().int().min(5).max(80).optional(),
+    deps: z.array(StateKeySchema).max(16).optional(),
+  }).strict(),
+  z.object({
+    target: GenUIDataReferenceSchema,
+    kind: z.literal('weighted_decision'),
+    candidatesRef: StateKeySchema,
+    weightsRef: StateKeySchema,
+    filterRef: StateKeySchema.optional(),
+    filterField: z.string().max(64).optional(),
+    nameField: z.string().max(64).optional(),
+    criteria: z.array(z.object({ key: z.string().min(1).max(64), label: z.string().min(1).max(120) }).strict()).min(1).max(16),
+    deps: z.array(StateKeySchema).max(16).optional(),
+  }).strict(),
+  z.object({
+    target: GenUIDataReferenceSchema,
+    kind: z.literal('table_filter_aggregate'),
+    rowsRef: StateKeySchema,
+    searchRef: StateKeySchema.optional(),
+    categoryRef: StateKeySchema.optional(),
+    categoryField: z.string().max(64).optional(),
+    minValueRef: StateKeySchema.optional(),
+    labelField: z.string().max(64).optional(),
+    valueField: z.string().max(64).optional(),
+    metricLabel: z.string().max(80).optional(),
+    currency: z.string().max(8).optional(),
+    deps: z.array(StateKeySchema).max(16).optional(),
+  }).strict(),
+  z.object({
+    target: GenUIDataReferenceSchema,
+    kind: z.literal('progress_ratio'),
+    itemKeys: z.array(StateKeySchema).max(64).optional(),
+    itemsRef: StateKeySchema.optional(),
+    doneField: z.string().max(64).optional(),
+    deps: z.array(StateKeySchema).max(24).optional(),
+  }).strict(),
+  z.object({
+    target: GenUIDataReferenceSchema,
+    kind: z.literal('format_value'),
+    valueRef: StateKeySchema,
+    format: z.enum(['currency', 'number', 'percent']),
+    currency: z.string().max(8).optional(),
+    decimals: z.number().int().min(0).max(6).optional(),
+    deps: z.array(StateKeySchema).max(8).optional(),
+  }).strict(),
+]);
+
+export type GenUIComputedRule = z.infer<typeof GenUIComputedRuleSchema>;
 
 export const GenUIEvidenceItemSchema = z
   .object({
@@ -245,6 +400,8 @@ const TableCellValueSchema = z.union([z.string().max(500), SafeFiniteNumberSchem
 const DataTableComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('data_table'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       title: z.string().max(160).optional(),
@@ -252,6 +409,7 @@ const DataTableComponentSchema = z.object({
       rows: z
         .array(z.record(z.string().max(64), TableCellValueSchema))
         .max(AIRA_GENUI_LIMITS.maxTableRows),
+      rowsRef: GenUIDataReferenceSchema.optional(),
       sortable: z.boolean().default(true),
       compact: z.boolean().default(false),
     })
@@ -333,6 +491,8 @@ const CardComponentSchema = z.object({
 const SectionComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('section'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       title: z.string().min(1).max(160),
@@ -369,13 +529,19 @@ const CartesianChartPropsSchema = z
   .object({
     title: z.string().min(1).max(160),
     subtitle: z.string().max(240).optional(),
-    labels: z.array(z.string().min(1).max(80)).min(1).max(AIRA_GENUI_LIMITS.maxChartLabels),
-    datasets: z.array(ChartDatasetSchema).min(1).max(AIRA_GENUI_LIMITS.maxChartDatasets),
+    labels: z.array(z.string().min(1).max(80)).max(AIRA_GENUI_LIMITS.maxChartLabels),
+    datasets: z.array(ChartDatasetSchema).max(AIRA_GENUI_LIMITS.maxChartDatasets),
+    labelsRef: GenUIDataReferenceSchema.optional(),
+    datasetsRef: GenUIDataReferenceSchema.optional(),
     unit: z.string().max(32).optional(),
     stacked: z.boolean().default(false),
     allowTableToggle: z.boolean().default(true),
   })
-  .strict();
+  .strict()
+  .refine(
+    (p) => (p.labels.length >= 1 && p.datasets.length >= 1) || Boolean(p.labelsRef || p.datasetsRef),
+    'Cartesian chart requires labels and datasets or reactive bindings'
+  );
 
 const BarChartComponentSchema = z.object({
   id: IdSchema,
@@ -419,7 +585,8 @@ const ScatterChartComponentSchema = z.object({
       subtitle: z.string().max(240).optional(),
       xLabel: z.string().max(80).default('X'),
       yLabel: z.string().max(80).default('Y'),
-      series: z.array(ScatterSeriesSchema).min(1).max(AIRA_GENUI_LIMITS.maxChartDatasets),
+      series: z.array(ScatterSeriesSchema).max(AIRA_GENUI_LIMITS.maxChartDatasets),
+      seriesRef: GenUIDataReferenceSchema.optional(),
       allowTableToggle: z.boolean().default(true),
     })
     .strict(),
@@ -429,13 +596,18 @@ const RadialChartPropsSchema = z
   .object({
     title: z.string().min(1).max(160),
     subtitle: z.string().max(240).optional(),
-    labels: z.array(z.string().min(1).max(80)).min(1).max(20),
-    values: z.array(z.number().finite().nonnegative()).min(1).max(20),
+    labels: z.array(z.string().min(1).max(80)).max(20),
+    values: z.array(z.number().finite().nonnegative()).max(20),
+    labelsRef: GenUIDataReferenceSchema.optional(),
+    valuesRef: GenUIDataReferenceSchema.optional(),
     unit: z.string().max(32).optional(),
     allowTableToggle: z.boolean().default(true),
   })
   .strict()
-  .refine((p) => p.labels.length === p.values.length, 'Radial chart labels and values length must match');
+  .refine(
+    (p) => (p.labels.length === p.values.length && p.labels.length >= 1) || Boolean(p.labelsRef && p.valuesRef),
+    'Radial chart labels and values length must match'
+  );
 
 const PieChartComponentSchema = z.object({
   id: IdSchema,
@@ -456,6 +628,7 @@ const ProgressIndicatorComponentSchema = z.object({
     .object({
       label: z.string().min(1).max(160),
       value: z.number().finite().min(0),
+      valueRef: GenUIDataReferenceSchema.optional(),
       max: z.number().finite().positive().default(100),
       unit: z.string().max(24).optional(),
       tone: z.enum(['neutral', 'accent', 'success', 'warning', 'danger']).default('accent'),
@@ -471,6 +644,7 @@ const MetricDisplayComponentSchema = z.object({
       label: z.string().min(1).max(120),
       value: z.union([z.string().max(80), SafeFiniteNumberSchema]),
       stateKey: StateKeySchema.optional(),
+      dataRef: GenUIDataReferenceSchema.optional(),
       delta: z.string().max(64).optional(),
       deltaTone: z.enum(['positive', 'negative', 'neutral']).default('neutral'),
       caption: z.string().max(200).optional(),
@@ -505,6 +679,8 @@ const ComparisonVizComponentSchema = z.object({
 const NumericInputComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('numeric_input'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(120),
@@ -522,6 +698,8 @@ const NumericInputComponentSchema = z.object({
 const TextInputComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('text_input'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(120),
@@ -536,6 +714,8 @@ const TextInputComponentSchema = z.object({
 const SliderComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('slider'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(120),
@@ -553,6 +733,8 @@ const SliderComponentSchema = z.object({
 const SelectControlComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('select_control'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(120),
@@ -566,6 +748,8 @@ const SelectControlComponentSchema = z.object({
 const CheckboxComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('checkbox'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(160),
@@ -579,6 +763,8 @@ const CheckboxComponentSchema = z.object({
 const RadioGroupComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('radio_group'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(120),
@@ -592,6 +778,8 @@ const RadioGroupComponentSchema = z.object({
 const SegmentedControlComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('segmented_control'),
+  checks: z.array(GenUICheckRuleSchema).max(16).optional(),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(120),
@@ -605,6 +793,7 @@ const SegmentedControlComponentSchema = z.object({
 const ResetControlComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('reset_control'),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(80).default('Reset inputs'),
@@ -616,12 +805,15 @@ const ResetControlComponentSchema = z.object({
 const ActionButtonComponentSchema = z.object({
   id: IdSchema,
   type: z.literal('action_button'),
+  visibleWhen: GenUIVisibleConditionSchema.optional(),
   props: z
     .object({
       label: z.string().min(1).max(100),
       actionId: IdSchema,
       variant: z.enum(['primary', 'secondary', 'ghost', 'danger']).default('secondary'),
       disabled: z.boolean().default(false),
+      requiresValidState: z.boolean().optional(),
+      setState: z.record(StateKeySchema, SafePrimitiveSchema).optional(),
     })
     .strict(),
 }).strict();
@@ -822,6 +1014,7 @@ export const GenUISurfaceSchema = z
     rootId: IdSchema,
     components: z.array(GenUIComponentSchema).min(1).max(AIRA_GENUI_LIMITS.maxComponents),
     state: GenUIStateRecordSchema.default({}),
+    computed: z.array(GenUIComputedRuleSchema).max(32).optional(),
     actions: z.array(GenUIActionDefinitionSchema).max(AIRA_GENUI_LIMITS.maxActions).default([]),
     textFallback: z.string().min(1).max(32768),
     evidence: z.array(GenUIEvidenceItemSchema).max(AIRA_GENUI_LIMITS.maxEvidenceItems).default([]),
@@ -858,6 +1051,7 @@ export const GenUILifecycleEventSchema = z.discriminatedUnion('type', [
       sequence: z.number().int().nonnegative(),
       timestamp: z.number().finite(),
       upsertComponents: z.array(GenUIComponentSchema).max(AIRA_GENUI_LIMITS.maxComponents).optional(),
+      removeComponentIds: z.array(IdSchema).max(AIRA_GENUI_LIMITS.maxComponents).optional(),
       statePatch: GenUIStateRecordSchema.optional(),
       textFallback: z.string().min(1).max(32768).optional(),
     })
@@ -866,6 +1060,16 @@ export const GenUILifecycleEventSchema = z.discriminatedUnion('type', [
     .object({
       eventId: IdSchema,
       type: z.literal('genui.surface.completed'),
+      surfaceId: IdSchema,
+      runId: IdSchema.optional(),
+      sequence: z.number().int().nonnegative(),
+      timestamp: z.number().finite(),
+    })
+    .strict(),
+  z
+    .object({
+      eventId: IdSchema,
+      type: z.literal('genui.surface.deleted'),
       surfaceId: IdSchema,
       runId: IdSchema.optional(),
       sequence: z.number().int().nonnegative(),
@@ -902,7 +1106,17 @@ export const GenUIInteractionEventSchema = z
     stateSnapshot: GenUIStateRecordSchema.default({}),
     timestamp: z.number().finite(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (evt) => {
+      try {
+        return new TextEncoder().encode(JSON.stringify(evt.stateSnapshot)).length <= AIRA_GENUI_LIMITS.maxStateBytes;
+      } catch {
+        return false;
+      }
+    },
+    'GenUI action stateSnapshot exceeds size limit.'
+  );
 
 export type GenUIInteractionEvent = z.infer<typeof GenUIInteractionEventSchema>;
 
@@ -1032,6 +1246,13 @@ export function validateGenUISurface(input: unknown): GenUIValidationResult {
     return { ok: false, code: 'GENUI_GRAPH_INVALID', error: graphError };
   }
 
+  if (surface.computed && surface.computed.length > 0) {
+    const depCheck = validateComputedDependencyGraph(surface.computed);
+    if (!depCheck.ok) {
+      return { ok: false, code: depCheck.code, error: depCheck.error };
+    }
+  }
+
   return { ok: true, surface };
 }
 
@@ -1112,7 +1333,10 @@ export function applyGenUILifecycleEventToMap(
   }
 
   if (event.type === 'genui.surface.patched' && existing) {
-    const mergedComponents = [...existing.surface.components];
+    const removeSet = new Set(event.removeComponentIds || []);
+    let mergedComponents = removeSet.size > 0
+      ? existing.surface.components.filter((c) => !removeSet.has(c.id))
+      : [...existing.surface.components];
     if (event.upsertComponents) {
       for (const comp of event.upsertComponents) {
         const idx = mergedComponents.findIndex((c) => c.id === comp.id);
@@ -1120,10 +1344,17 @@ export function applyGenUILifecycleEventToMap(
         else mergedComponents.push(comp);
       }
     }
+    let patchedState = existing.surface.state;
+    if (event.statePatch) {
+      patchedState = { ...existing.surface.state };
+      for (const [k, v] of Object.entries(event.statePatch)) {
+        patchedState = writeStateKeyOrPointer(patchedState, k, v);
+      }
+    }
     const candidate: GenUISurface = {
       ...existing.surface,
       components: mergedComponents,
-      state: event.statePatch ? { ...existing.surface.state, ...event.statePatch } : existing.surface.state,
+      state: patchedState,
       textFallback: event.textFallback ?? existing.surface.textFallback,
     };
     const validated = validateGenUISurface(candidate);
@@ -1144,6 +1375,11 @@ export function applyGenUILifecycleEventToMap(
       lastSequence: event.sequence,
       seenEventIds: seen,
     });
+    return next;
+  }
+
+  if (event.type === 'genui.surface.deleted') {
+    next.delete(event.surfaceId);
     return next;
   }
 

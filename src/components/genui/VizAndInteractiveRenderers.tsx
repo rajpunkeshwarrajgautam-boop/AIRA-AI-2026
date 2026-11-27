@@ -1,10 +1,12 @@
 import React, { useId } from 'react';
 import { RotateCcw } from 'lucide-react';
-import { getActionById, type GenUIComponentRenderer } from './types';
+import { getActionById, resolveDataRefValue, type GenUIComponentRenderer } from './types';
 
-export const ProgressIndicatorRenderer: GenUIComponentRenderer<'progress_indicator'> = ({ component }) => {
-  const { label, value, max, unit, tone } = component.props;
-  const pct = Math.min(100, Math.max(0, Math.round((value / max) * 100)));
+export const ProgressIndicatorRenderer: GenUIComponentRenderer<'progress_indicator'> = ({ component, ctx }) => {
+  const { label, value, valueRef, max, unit, tone } = component.props;
+  const liveRaw = valueRef ? resolveDataRefValue(ctx.state, valueRef) : undefined;
+  const liveValue = typeof liveRaw === 'number' && Number.isFinite(liveRaw) ? liveRaw : value;
+  const pct = Math.min(100, Math.max(0, Math.round((liveValue / max) * 100)));
   const fillCls =
     tone === 'success'
       ? 'bg-emerald-500'
@@ -20,14 +22,14 @@ export const ProgressIndicatorRenderer: GenUIComponentRenderer<'progress_indicat
       <div className="flex items-center justify-between text-xs">
         <span className="font-medium text-claude-text-light dark:text-claude-text-dark">{label}</span>
         <span className="font-mono tabular-nums text-claude-subtext-light dark:text-claude-subtext-dark">
-          {value} / {max}
+          {liveValue} / {max}
           {unit ? ` ${unit}` : ''} ({pct}%)
         </span>
       </div>
       <div
         role="progressbar"
         aria-label={label}
-        aria-valuenow={value}
+        aria-valuenow={liveValue}
         aria-valuemin={0}
         aria-valuemax={max}
         className="h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10"
@@ -39,8 +41,9 @@ export const ProgressIndicatorRenderer: GenUIComponentRenderer<'progress_indicat
 };
 
 export const MetricDisplayRenderer: GenUIComponentRenderer<'metric_display'> = ({ component, ctx }) => {
-  const { label, value, stateKey, delta, deltaTone, caption } = component.props;
-  const liveVal = stateKey && Object.hasOwn(ctx.state, stateKey) ? ctx.state[stateKey] : value;
+  const { label, value, stateKey, dataRef, delta, deltaTone, caption } = component.props;
+  const bound = dataRef ? resolveDataRefValue(ctx.state, dataRef) : stateKey ? resolveDataRefValue(ctx.state, stateKey) : undefined;
+  const liveVal = bound !== undefined ? bound : value;
   const deltaCls =
     deltaTone === 'positive'
       ? 'text-emerald-600 dark:text-emerald-400'
@@ -130,11 +133,34 @@ export const ComparisonVizRenderer: GenUIComponentRenderer<'comparison_viz'> = (
   );
 };
 
+const FieldErrorBanner: React.FC<{ errors: string[] }> = ({ errors }) => {
+  if (errors.length === 0) return null;
+  return (
+    <span role="alert" className="text-[11px] font-medium text-red-600 dark:text-red-400">
+      {errors[0]}
+    </span>
+  );
+};
+
+function getFieldErrors(ctx: Parameters<GenUIComponentRenderer<'numeric_input'>>[0]['ctx'], componentId: string, stateKey: string): string[] {
+  return ctx.fieldErrors[componentId] || ctx.fieldErrors[stateKey] || [];
+}
+
 export const NumericInputRenderer: GenUIComponentRenderer<'numeric_input'> = ({ component, ctx }) => {
   const inputId = useId();
   const { label, stateKey, min, max, step, defaultValue, unit, helperText } = component.props;
-  const raw = ctx.state[stateKey];
+  const raw = resolveDataRefValue(ctx.state, stateKey);
   const val = typeof raw === 'number' && Number.isFinite(raw) ? raw : defaultValue;
+  const errors = getFieldErrors(ctx, component.id, stateKey);
+  const [draft, setDraft] = React.useState<string>(String(val));
+  const [focused, setFocused] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!focused) setDraft(String(val));
+  }, [val, focused]);
+
+  const clampNum = (n: number) =>
+    min !== undefined && n < min ? min : max !== undefined && n > max ? max : n;
 
   return (
     <div className="flex flex-col gap-1">
@@ -148,14 +174,35 @@ export const NumericInputRenderer: GenUIComponentRenderer<'numeric_input'> = ({ 
           min={min}
           max={max}
           step={step}
-          value={val}
+          value={focused ? draft : String(val)}
+          aria-invalid={errors.length > 0 || undefined}
           disabled={ctx.disabled}
+          onFocus={() => {
+            setFocused(true);
+            setDraft(String(val));
+          }}
+          onBlur={() => {
+            setFocused(false);
+            const parsed = Number(draft);
+            if (draft.trim() === '' || !Number.isFinite(parsed)) {
+              setDraft(String(val));
+              return;
+            }
+            const clamped = clampNum(parsed);
+            setDraft(String(clamped));
+            if (clamped !== val) ctx.setStateValue(stateKey, clamped);
+          }}
           onChange={(e) => {
-            const parsed = Number(e.target.value);
+            const nextStr = e.target.value;
+            setDraft(nextStr);
+            if (nextStr.trim() === '' || nextStr === '-' || nextStr.endsWith('.')) return;
+            const parsed = Number(nextStr);
             if (!Number.isFinite(parsed)) return;
-            const clamped =
-              min !== undefined && parsed < min ? min : max !== undefined && parsed > max ? max : parsed;
-            ctx.setStateValue(stateKey, clamped);
+            const withinMin = min === undefined || parsed >= min;
+            const withinMax = max === undefined || parsed <= max;
+            if (withinMin && withinMax) {
+              ctx.setStateValue(stateKey, parsed);
+            }
           }}
           className="w-full rounded-lg border border-claude-border-light bg-claude-surface-light px-3 py-1.5 pr-12 text-sm tabular-nums text-claude-text-light focus:border-[#c25938] focus:outline-none dark:border-claude-border-dark dark:bg-claude-surface-dark dark:text-claude-text-dark"
         />
@@ -165,6 +212,7 @@ export const NumericInputRenderer: GenUIComponentRenderer<'numeric_input'> = ({ 
           </span>
         )}
       </div>
+      <FieldErrorBanner errors={errors} />
       {helperText && (
         <span className="text-[11px] text-claude-subtext-light dark:text-claude-subtext-dark">{helperText}</span>
       )}
@@ -175,7 +223,9 @@ export const NumericInputRenderer: GenUIComponentRenderer<'numeric_input'> = ({ 
 export const TextInputRenderer: GenUIComponentRenderer<'text_input'> = ({ component, ctx }) => {
   const inputId = useId();
   const { label, stateKey, placeholder, defaultValue, maxLength } = component.props;
-  const val = typeof ctx.state[stateKey] === 'string' ? (ctx.state[stateKey] as string) : defaultValue;
+  const raw = resolveDataRefValue(ctx.state, stateKey);
+  const val = typeof raw === 'string' ? raw : defaultValue;
+  const errors = getFieldErrors(ctx, component.id, stateKey);
 
   return (
     <div className="flex flex-col gap-1">
@@ -188,10 +238,12 @@ export const TextInputRenderer: GenUIComponentRenderer<'text_input'> = ({ compon
         value={val}
         maxLength={maxLength}
         placeholder={placeholder}
+        aria-invalid={errors.length > 0 || undefined}
         disabled={ctx.disabled}
         onChange={(e) => ctx.setStateValue(stateKey, e.target.value)}
         className="w-full rounded-lg border border-claude-border-light bg-claude-surface-light px-3 py-1.5 text-sm text-claude-text-light focus:border-[#c25938] focus:outline-none dark:border-claude-border-dark dark:bg-claude-surface-dark dark:text-claude-text-dark"
       />
+      <FieldErrorBanner errors={errors} />
     </div>
   );
 };
@@ -199,8 +251,9 @@ export const TextInputRenderer: GenUIComponentRenderer<'text_input'> = ({ compon
 export const SliderRenderer: GenUIComponentRenderer<'slider'> = ({ component, ctx }) => {
   const inputId = useId();
   const { label, stateKey, min, max, step, defaultValue, unit } = component.props;
-  const raw = ctx.state[stateKey];
+  const raw = resolveDataRefValue(ctx.state, stateKey);
   const val = typeof raw === 'number' && Number.isFinite(raw) ? raw : defaultValue;
+  const errors = getFieldErrors(ctx, component.id, stateKey);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -220,11 +273,13 @@ export const SliderRenderer: GenUIComponentRenderer<'slider'> = ({ component, ct
         max={max}
         step={step}
         value={val}
+        aria-invalid={errors.length > 0 || undefined}
         disabled={ctx.disabled}
         onChange={(e) => ctx.setStateValue(stateKey, Number(e.target.value))}
         style={{ accentColor: '#d97757' }}
         className="h-2 w-full cursor-pointer"
       />
+      <FieldErrorBanner errors={errors} />
     </div>
   );
 };
@@ -232,7 +287,9 @@ export const SliderRenderer: GenUIComponentRenderer<'slider'> = ({ component, ct
 export const SelectControlRenderer: GenUIComponentRenderer<'select_control'> = ({ component, ctx }) => {
   const selectId = useId();
   const { label, stateKey, defaultValue, options } = component.props;
-  const val = typeof ctx.state[stateKey] === 'string' ? (ctx.state[stateKey] as string) : defaultValue;
+  const raw = resolveDataRefValue(ctx.state, stateKey);
+  const val = typeof raw === 'string' ? raw : defaultValue;
+  const errors = getFieldErrors(ctx, component.id, stateKey);
 
   return (
     <div className="flex flex-col gap-1">
@@ -242,6 +299,7 @@ export const SelectControlRenderer: GenUIComponentRenderer<'select_control'> = (
       <select
         id={selectId}
         value={val}
+        aria-invalid={errors.length > 0 || undefined}
         disabled={ctx.disabled}
         onChange={(e) => ctx.setStateValue(stateKey, e.target.value)}
         className="w-full rounded-lg border border-claude-border-light bg-claude-surface-light px-3 py-1.5 text-sm text-claude-text-light focus:border-[#c25938] focus:outline-none dark:border-claude-border-dark dark:bg-claude-surface-dark dark:text-claude-text-dark"
@@ -252,6 +310,7 @@ export const SelectControlRenderer: GenUIComponentRenderer<'select_control'> = (
           </option>
         ))}
       </select>
+      <FieldErrorBanner errors={errors} />
     </div>
   );
 };
@@ -259,36 +318,44 @@ export const SelectControlRenderer: GenUIComponentRenderer<'select_control'> = (
 export const CheckboxRenderer: GenUIComponentRenderer<'checkbox'> = ({ component, ctx }) => {
   const checkId = useId();
   const { label, stateKey, defaultChecked, description } = component.props;
-  const checked = typeof ctx.state[stateKey] === 'boolean' ? (ctx.state[stateKey] as boolean) : defaultChecked;
+  const raw = resolveDataRefValue(ctx.state, stateKey);
+  const checked = typeof raw === 'boolean' ? raw : defaultChecked;
+  const errors = getFieldErrors(ctx, component.id, stateKey);
 
   return (
-    <label htmlFor={checkId} className="flex cursor-pointer items-start gap-2.5 text-sm">
-      <input
-        id={checkId}
-        type="checkbox"
-        checked={checked}
-        disabled={ctx.disabled}
-        onChange={(e) => ctx.setStateValue(stateKey, e.target.checked)}
-        style={{ accentColor: '#c25938' }}
-        className="mt-0.5 h-4 w-4 rounded"
-      />
-      <span>
-        <span className="font-medium text-claude-text-light dark:text-claude-text-dark">{label}</span>
-        {description && (
-          <span className="block text-xs text-claude-subtext-light dark:text-claude-subtext-dark">{description}</span>
-        )}
-      </span>
-    </label>
+    <div className="flex flex-col gap-1">
+      <label htmlFor={checkId} className="flex cursor-pointer items-start gap-2.5 text-sm">
+        <input
+          id={checkId}
+          type="checkbox"
+          checked={checked}
+          aria-invalid={errors.length > 0 || undefined}
+          disabled={ctx.disabled}
+          onChange={(e) => ctx.setStateValue(stateKey, e.target.checked)}
+          style={{ accentColor: '#c25938' }}
+          className="mt-0.5 h-4 w-4 rounded"
+        />
+        <span>
+          <span className="font-medium text-claude-text-light dark:text-claude-text-dark">{label}</span>
+          {description && (
+            <span className="block text-xs text-claude-subtext-light dark:text-claude-subtext-dark">{description}</span>
+          )}
+        </span>
+      </label>
+      <FieldErrorBanner errors={errors} />
+    </div>
   );
 };
 
 export const RadioGroupRenderer: GenUIComponentRenderer<'radio_group'> = ({ component, ctx }) => {
   const groupName = useId();
   const { label, stateKey, defaultValue, options } = component.props;
-  const current = typeof ctx.state[stateKey] === 'string' ? (ctx.state[stateKey] as string) : defaultValue;
+  const raw = resolveDataRefValue(ctx.state, stateKey);
+  const current = typeof raw === 'string' ? raw : defaultValue;
+  const errors = getFieldErrors(ctx, component.id, stateKey);
 
   return (
-    <fieldset className="space-y-1.5">
+    <fieldset className="space-y-1.5" aria-invalid={errors.length > 0 || undefined}>
       <legend className="text-xs font-medium text-claude-subtext-light dark:text-claude-subtext-dark">
         {label}
       </legend>
@@ -309,13 +376,16 @@ export const RadioGroupRenderer: GenUIComponentRenderer<'radio_group'> = ({ comp
           </label>
         ))}
       </div>
+      <FieldErrorBanner errors={errors} />
     </fieldset>
   );
 };
 
 export const SegmentedControlRenderer: GenUIComponentRenderer<'segmented_control'> = ({ component, ctx }) => {
   const { label, stateKey, defaultValue, options } = component.props;
-  const current = typeof ctx.state[stateKey] === 'string' ? (ctx.state[stateKey] as string) : defaultValue;
+  const raw = resolveDataRefValue(ctx.state, stateKey);
+  const current = typeof raw === 'string' ? raw : defaultValue;
+  const errors = getFieldErrors(ctx, component.id, stateKey);
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -323,6 +393,7 @@ export const SegmentedControlRenderer: GenUIComponentRenderer<'segmented_control
       <div
         role="group"
         aria-label={label}
+        aria-invalid={errors.length > 0 || undefined}
         className="inline-flex flex-wrap gap-1 rounded-xl border border-claude-border-light bg-black/[0.03] p-1 dark:border-claude-border-dark dark:bg-white/[0.04]"
       >
         {options.map((opt) => {
@@ -345,6 +416,7 @@ export const SegmentedControlRenderer: GenUIComponentRenderer<'segmented_control
           );
         })}
       </div>
+      <FieldErrorBanner errors={errors} />
     </div>
   );
 };
@@ -367,10 +439,11 @@ export const ResetControlRenderer: GenUIComponentRenderer<'reset_control'> = ({ 
 );
 
 export const ActionButtonRenderer: GenUIComponentRenderer<'action_button'> = ({ component, ctx }) => {
-  const { label, actionId, variant, disabled } = component.props;
+  const { label, actionId, variant, disabled, requiresValidState, setState } = component.props;
   const action = getActionById(ctx.surface, actionId);
   const isBusy = ctx.pendingActionId === actionId;
-  const isDisabled = Boolean(disabled || ctx.disabled || !action || isBusy);
+  const blockedByValidation = Boolean(requiresValidState && !ctx.isValid);
+  const isDisabled = Boolean(disabled || ctx.disabled || !action || isBusy || blockedByValidation);
 
   const variantCls =
     variant === 'primary'
@@ -387,6 +460,10 @@ export const ActionButtonRenderer: GenUIComponentRenderer<'action_button'> = ({ 
       disabled={isDisabled}
       onClick={() => {
         if (!action || isDisabled) return;
+        if (setState && action.kind === 'local_recompute') {
+          ctx.setStateBatch(setState);
+          return;
+        }
         if (action.requiresApproval && action.confirmMessage && typeof window !== 'undefined') {
           if (!window.confirm(action.confirmMessage)) return;
         }

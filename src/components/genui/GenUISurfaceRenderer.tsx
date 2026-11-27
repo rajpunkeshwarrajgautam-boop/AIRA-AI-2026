@@ -8,16 +8,30 @@ import {
   validateGenUISurface,
 } from '../../../packages/contracts/src/genui';
 import { recomputeCalculatorSurface } from '../../../packages/contracts/src/genui-calculators';
+import {
+  evaluateReactiveSurface,
+  evaluateVisibilityCondition,
+  writeStateKeyOrPointer,
+} from '../../../packages/contracts/src/genui-reactive';
 import { renderRegisteredComponent } from './registry';
 import type { GenUIRenderContext } from './types';
 
 class SurfaceErrorBoundary extends React.Component<
-  { fallbackText: string; children: React.ReactNode },
-  { hasError: boolean }
+  { fallbackText: string; resetKey: string; children: React.ReactNode },
+  { hasError: boolean; lastResetKey: string }
 > {
-  constructor(props: { fallbackText: string; children: React.ReactNode }) {
+  constructor(props: { fallbackText: string; resetKey: string; children: React.ReactNode }) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, lastResetKey: props.resetKey };
+  }
+  static getDerivedStateFromProps(
+    nextProps: { resetKey: string },
+    prevState: { hasError: boolean; lastResetKey: string }
+  ) {
+    if (nextProps.resetKey !== prevState.lastResetKey) {
+      return { hasError: false, lastResetKey: nextProps.resetKey };
+    }
+    return null;
   }
   static getDerivedStateFromError() {
     return { hasError: true };
@@ -55,7 +69,13 @@ export const GenUISurfaceRenderer: React.FC<GenUISurfaceRendererProps> = ({
 }) => {
   const validation = useMemo(() => validateGenUISurface(rawSurface), [rawSurface]);
   const baseSurface = validation.ok ? validation.surface : null;
-  const surfaceKey = baseSurface ? `${baseSurface.surfaceId}:${baseSurface.components.length}` : 'invalid';
+  const serializedServerState = useMemo(
+    () => (baseSurface ? JSON.stringify(baseSurface.state) : ''),
+    [baseSurface]
+  );
+  const surfaceKey = baseSurface
+    ? `${baseSurface.surfaceId}:${baseSurface.components.length}:${serializedServerState}`
+    : 'invalid';
 
   const [localState, setLocalState] = useState<GenUIStateRecord>(() => ({
     ...(baseSurface?.state ?? {}),
@@ -64,10 +84,12 @@ export const GenUISurfaceRenderer: React.FC<GenUISurfaceRendererProps> = ({
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const lastSurfaceKeyRef = useRef(surfaceKey);
+  const pendingStateNotifyRef = useRef(false);
 
   useEffect(() => {
     if (lastSurfaceKeyRef.current !== surfaceKey && baseSurface) {
       lastSurfaceKeyRef.current = surfaceKey;
+      pendingStateNotifyRef.current = false;
       setLocalState({
         ...baseSurface.state,
         ...(initialStateOverride ?? {}),
@@ -75,13 +97,40 @@ export const GenUISurfaceRenderer: React.FC<GenUISurfaceRendererProps> = ({
     }
   }, [surfaceKey, baseSurface, initialStateOverride]);
 
-  const effectiveSurface = useMemo(() => {
+  useEffect(() => {
+    if (!pendingStateNotifyRef.current || !baseSurface) return;
+    pendingStateNotifyRef.current = false;
+    onStateChange?.(baseSurface.surfaceId, localState);
+  }, [localState, baseSurface, onStateChange]);
+
+  const evaluation = useMemo(() => {
     if (!baseSurface) return null;
     if (baseSurface.calculatorKind) {
-      return recomputeCalculatorSurface(baseSurface, localState);
+      const calcSurf = recomputeCalculatorSurface(baseSurface, localState);
+      if (calcSurf.computed && calcSurf.computed.length > 0) {
+        return evaluateReactiveSurface(calcSurf, calcSurf.state);
+      }
+      return {
+        surface: calcSurf,
+        state: calcSurf.state,
+        fieldErrors: {} as Record<string, string[]>,
+        isValid: true,
+        computedErrors: [] as string[],
+      };
     }
-    return { ...baseSurface, state: localState };
+    if ((baseSurface.computed && baseSurface.computed.length > 0) || baseSurface.components.some((c) => Boolean(('checks' in c && c.checks?.length) || ('visibleWhen' in c && c.visibleWhen)))) {
+      return evaluateReactiveSurface(baseSurface, localState);
+    }
+    return {
+      surface: { ...baseSurface, state: localState },
+      state: localState,
+      fieldErrors: {} as Record<string, string[]>,
+      isValid: true,
+      computedErrors: [] as string[],
+    };
   }, [baseSurface, localState]);
+
+  const effectiveSurface = evaluation?.surface ?? null;
 
   const componentMap = useMemo(() => {
     const map = new Map<string, GenUISurface['components'][number]>();
@@ -95,21 +144,32 @@ export const GenUISurfaceRenderer: React.FC<GenUISurfaceRendererProps> = ({
   const setStateValue = useCallback(
     (key: string, value: GenUIStateValue) => {
       if (!baseSurface) return;
+      pendingStateNotifyRef.current = true;
+      setLocalState((prev) => writeStateKeyOrPointer(prev, key, value));
+    },
+    [baseSurface]
+  );
+
+  const setStateBatch = useCallback(
+    (patch: Record<string, GenUIStateValue>) => {
+      if (!baseSurface) return;
+      pendingStateNotifyRef.current = true;
       setLocalState((prev) => {
-        const next = { ...prev, [key]: value };
-        onStateChange?.(baseSurface.surfaceId, next);
+        let next = prev;
+        for (const [k, v] of Object.entries(patch)) {
+          next = writeStateKeyOrPointer(next, k, v);
+        }
         return next;
       });
     },
-    [baseSurface, onStateChange]
+    [baseSurface]
   );
 
   const resetState = useCallback(() => {
     if (!baseSurface) return;
-    const reset = { ...baseSurface.state };
-    setLocalState(reset);
-    onStateChange?.(baseSurface.surfaceId, reset);
-  }, [baseSurface, onStateChange]);
+    pendingStateNotifyRef.current = true;
+    setLocalState({ ...baseSurface.state });
+  }, [baseSurface]);
 
   const handleTriggerAction = useCallback(
     async (componentId: string, actionId: string) => {
@@ -163,24 +223,30 @@ export const GenUISurfaceRenderer: React.FC<GenUISurfaceRendererProps> = ({
   const renderComponentById = (componentId: string): React.ReactNode => {
     const comp = componentMap.get(componentId);
     if (!comp) return null;
+    if ('visibleWhen' in comp && !evaluateVisibilityCondition(comp.visibleWhen, evaluation?.state ?? localState)) {
+      return null;
+    }
     return renderRegisteredComponent(comp, ctx);
   };
 
   const ctx: GenUIRenderContext = {
     surface: effectiveSurface,
-    state: localState,
+    state: evaluation?.state ?? localState,
     setStateValue,
+    setStateBatch,
     resetState,
     onTriggerAction: handleTriggerAction,
     onOpenArtifact,
     onResolveApproval,
     renderComponentById,
+    fieldErrors: evaluation?.fieldErrors ?? {},
+    isValid: evaluation?.isValid ?? true,
     pendingActionId,
     disabled,
   };
 
   return (
-    <SurfaceErrorBoundary fallbackText={effectiveSurface.textFallback}>
+    <SurfaceErrorBoundary fallbackText={effectiveSurface.textFallback} resetKey={surfaceKey}>
       <div
         className="my-3 rounded-2xl border border-claude-border-light bg-claude-surface-light/60 p-4 shadow-sm dark:border-claude-border-dark dark:bg-claude-surface-dark/60"
         data-testid={`genui-surface-${effectiveSurface.surfaceId}`}

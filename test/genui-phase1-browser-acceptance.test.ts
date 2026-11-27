@@ -189,9 +189,11 @@ test('Phase 1 GenUI E2E Acceptance (Scenarios A-O, Live NIM + Chart.js + Interac
     if (!parsed.success) return res.status(400).json({ error: 'Invalid payload' });
     const evt = parsed.data;
     const runOwnerUserId = evt.runId ? ownerPrincipal.userId : undefined;
+    const conversationOwnerUserId = evt.conversationId ? ownerPrincipal.userId : undefined;
     const authz = authorizeGenUIActionServerSide({
       principalUserId: req.principal.userId,
       runOwnerUserId,
+      conversationOwnerUserId,
       event: evt,
     });
     if (!authz.allowed) {

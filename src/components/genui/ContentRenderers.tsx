@@ -229,9 +229,8 @@ export const DataSummaryRenderer: GenUIComponentRenderer<'data_summary'> = ({ co
     )}
     <dl className="divide-y divide-claude-border-light/60 dark:divide-claude-border-dark/60">
       {component.props.items.map((item, idx) => {
-        const liveVal = item.stateKey && Object.hasOwn(ctx.state, item.stateKey)
-          ? ctx.state[item.stateKey]
-          : item.value;
+        const refVal = item.stateKey ? resolveDataRefValue(ctx.state, item.stateKey) : undefined;
+        const liveVal = refVal !== undefined ? refVal : item.value;
         return (
           <div key={item.label + idx} className="flex flex-wrap items-baseline justify-between gap-2 py-1.5 text-xs sm:text-sm">
             <dt className="text-claude-subtext-light dark:text-claude-subtext-dark">{item.label}</dt>

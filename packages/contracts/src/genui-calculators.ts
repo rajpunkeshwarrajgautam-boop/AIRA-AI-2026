@@ -310,18 +310,22 @@ type Token =
   | { type: 'ident'; value: string }
   | { type: 'op'; value: '+' | '-' | '*' | '/' | '^' }
   | { type: 'lparen' }
-  | { type: 'rparen' };
+  | { type: 'rparen' }
+  | { type: 'comma' };
 
 const ALLOWED_CONSTANTS: Record<string, number> = {
   pi: Math.PI,
   e: Math.E,
 };
 
-const ALLOWED_FUNCTIONS: Record<string, (x: number) => number> = {
+const ALLOWED_FUNCTIONS: Record<string, (...args: number[]) => number> = {
   sin: Math.sin,
   cos: Math.cos,
   tan: Math.tan,
-  sqrt: Math.sqrt,
+  sqrt: (v) => {
+    if (v < 0) throw new Error('Square root of negative number.');
+    return Math.sqrt(v);
+  },
   abs: Math.abs,
   ln: Math.log,
   log: Math.log10,
@@ -329,10 +333,16 @@ const ALLOWED_FUNCTIONS: Record<string, (x: number) => number> = {
   exp: Math.exp,
   floor: Math.floor,
   ceil: Math.ceil,
-  round: Math.round,
+  round: (v, decimals = 0) => {
+    const d = Math.min(8, Math.max(0, Math.round(decimals)));
+    const factor = 10 ** d;
+    return Math.round((v + Number.EPSILON) * factor) / factor;
+  },
+  min: (...args) => Math.min(...args),
+  max: (...args) => Math.max(...args),
 };
 
-function tokenizeMath(expr: string): Token[] {
+function tokenizeMath(expr: string, extraIdentifiers?: ReadonlySet<string>): Token[] {
   if (typeof expr !== 'string' || expr.length === 0 || expr.length > 240) {
     throw new Error('Expression length out of bounds (1..240 chars).');
   }
@@ -358,18 +368,24 @@ function tokenizeMath(expr: string): Token[] {
       i = end;
       continue;
     }
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch === '_') {
       let end = i;
       while (
         end < expr.length &&
         ((expr[end] >= 'a' && expr[end] <= 'z') ||
           (expr[end] >= 'A' && expr[end] <= 'Z') ||
-          (expr[end] >= '0' && expr[end] <= '9'))
+          (expr[end] >= '0' && expr[end] <= '9') ||
+          expr[end] === '_')
       ) {
         end++;
       }
       const ident = expr.slice(i, end).toLowerCase();
-      if (!(ident in ALLOWED_CONSTANTS) && !(ident in ALLOWED_FUNCTIONS) && ident !== 'x') {
+      if (
+        !(ident in ALLOWED_CONSTANTS) &&
+        !(ident in ALLOWED_FUNCTIONS) &&
+        ident !== 'x' &&
+        !extraIdentifiers?.has(ident)
+      ) {
         throw new Error(`Unsupported identifier "${ident}".`);
       }
       tokens.push({ type: 'ident', value: ident });
@@ -391,6 +407,11 @@ function tokenizeMath(expr: string): Token[] {
       i++;
       continue;
     }
+    if (ch === ',') {
+      tokens.push({ type: 'comma' });
+      i++;
+      continue;
+    }
     throw new Error(`Unsupported character "${ch}" in expression.`);
   }
   if (tokens.length === 0 || tokens.length > 128) {
@@ -401,10 +422,19 @@ function tokenizeMath(expr: string): Token[] {
 
 export function evaluateSafeMathExpression(
   expr: string,
-  variables: { x?: number } = {}
+  variables: Record<string, number | undefined> = {}
 ): CalculatorResult<{ value: number }> {
   try {
-    const tokens = tokenizeMath(expr);
+    const normalizedVars: Record<string, number> = {};
+    const extraIdents = new Set<string>();
+    for (const [k, v] of Object.entries(variables)) {
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        const lower = k.toLowerCase();
+        normalizedVars[lower] = v;
+        extraIdents.add(lower);
+      }
+    }
+    const tokens = tokenizeMath(expr, extraIdents);
     let pos = 0;
     const peek = () => tokens[pos];
     const consume = () => tokens[pos++];
@@ -425,23 +455,25 @@ export function evaluateSafeMathExpression(
       }
       if (tok.type === 'ident') {
         consume();
-        if (tok.value === 'x') {
-          if (typeof variables.x !== 'number' || !Number.isFinite(variables.x)) {
-            throw new Error('Variable x is not defined.');
-          }
-          return variables.x;
+        if (Object.hasOwn(normalizedVars, tok.value)) {
+          return normalizedVars[tok.value];
         }
-        if (tok.value in ALLOWED_CONSTANTS) {
+        if (Object.hasOwn(ALLOWED_CONSTANTS, tok.value)) {
           return ALLOWED_CONSTANTS[tok.value];
         }
-        const fn = ALLOWED_FUNCTIONS[tok.value];
+        const fn = Object.hasOwn(ALLOWED_FUNCTIONS, tok.value) ? ALLOWED_FUNCTIONS[tok.value] : undefined;
         if (!fn) throw new Error(`Unknown function "${tok.value}".`);
         const next = consume();
         if (!next || next.type !== 'lparen') throw new Error(`Expected "(" after function "${tok.value}".`);
-        const arg = parseAdditive(depth + 1);
+        const args: number[] = [parseAdditive(depth + 1)];
+        while (peek()?.type === 'comma') {
+          consume();
+          if (args.length >= 6) throw new Error(`Too many arguments to "${tok.value}".`);
+          args.push(parseAdditive(depth + 1));
+        }
         const close = consume();
         if (!close || close.type !== 'rparen') throw new Error(`Expected ")" after "${tok.value}" argument.`);
-        const out = fn(arg);
+        const out = fn(...args);
         if (!Number.isFinite(out)) throw new Error(`Function "${tok.value}" produced non-finite value.`);
         return out;
       }

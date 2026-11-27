@@ -1,5 +1,64 @@
 import type { Conversation } from '../types';
-import { neonAuth, authenticatedApiFetch } from '../lib/neonAuth';
+import {
+  AIRA_GENUI_LIMITS,
+  containsForbiddenObjectKey,
+  GenUIStateRecordSchema,
+  validateGenUISurface,
+  type GenUISurface,
+  type GenUIStateRecord,
+} from '../../packages/contracts/src/genui';
+import { authenticatedApiFetch } from '../lib/neonAuth';
+
+function extractGenUIMetadata(message: Conversation['messages'][number]): Record<string, unknown> | undefined {
+  if ((!message.genuiSurfaces || message.genuiSurfaces.length === 0) && !message.genuiSurfaceState) {
+    return undefined;
+  }
+  return {
+    genui: {
+      surfaces: message.genuiSurfaces || [],
+      surfaceState: message.genuiSurfaceState || {},
+      updatedAt: message.timestamp,
+    },
+  };
+}
+
+function hydrateGenUIMetadata(metadata: unknown): {
+  genuiSurfaces?: GenUISurface[];
+  genuiSurfaceState?: Record<string, GenUIStateRecord>;
+} {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return {};
+  if (containsForbiddenObjectKey(metadata)) return {};
+  const genui = (metadata as Record<string, unknown>).genui;
+  if (!genui || typeof genui !== 'object' || Array.isArray(genui)) return {};
+
+  const validSurfaces: GenUISurface[] = [];
+  const rawSurfaces = (genui as Record<string, unknown>).surfaces;
+  if (Array.isArray(rawSurfaces)) {
+    for (const raw of rawSurfaces.slice(0, 6)) {
+      const checked = validateGenUISurface(raw);
+      if (checked.ok) validSurfaces.push(checked.surface);
+    }
+  }
+
+  const rawState = (genui as Record<string, unknown>).surfaceState;
+  const genuiSurfaceState: Record<string, GenUIStateRecord> = {};
+  if (rawState && typeof rawState === 'object' && !Array.isArray(rawState)) {
+    const encoder = new TextEncoder();
+    for (const [sid, rec] of Object.entries(rawState as Record<string, unknown>).slice(0, 8)) {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,95}$/.test(sid)) continue;
+      if (!rec || typeof rec !== 'object' || Array.isArray(rec)) continue;
+      const parsed = GenUIStateRecordSchema.safeParse(rec);
+      if (!parsed.success) continue;
+      if (encoder.encode(JSON.stringify(parsed.data)).length > AIRA_GENUI_LIMITS.maxStateBytes) continue;
+      genuiSurfaceState[sid] = parsed.data;
+    }
+  }
+
+  return {
+    ...(validSurfaces.length > 0 ? { genuiSurfaces: validSurfaces } : {}),
+    ...(Object.keys(genuiSurfaceState).length > 0 ? { genuiSurfaceState } : {}),
+  };
+}
 
 export interface ConversationSearchResult {
   conversationId: string;
@@ -45,10 +104,12 @@ async function authenticatedFetch(
 }
 
 const inFlightSyncs = new Map<string, Promise<boolean>>();
+const pendingTrailingSyncs = new Map<string, Conversation>();
 
 export async function syncConversationToServer(conversation: Conversation): Promise<boolean> {
   const existing = inFlightSyncs.get(conversation.id);
   if (existing) {
+    pendingTrailingSyncs.set(conversation.id, conversation);
     console.log(`[ConversationSync] conversationSyncDeduped=true conversationId=${conversation.id}`);
     return existing;
   }
@@ -66,7 +127,8 @@ export async function syncConversationToServer(conversation: Conversation): Prom
         id: message.id,
         role: message.role,
         content: message.content,
-        createdAt: message.timestamp
+        createdAt: message.timestamp,
+        ...(extractGenUIMetadata(message) ? { metadata: extractGenUIMetadata(message) } : {}),
       }))
     });
 
@@ -106,6 +168,11 @@ export async function syncConversationToServer(conversation: Conversation): Prom
       return false;
     } finally {
       inFlightSyncs.delete(conversation.id);
+      const trailing = pendingTrailingSyncs.get(conversation.id);
+      if (trailing) {
+        pendingTrailingSyncs.delete(conversation.id);
+        void syncConversationToServer(trailing);
+      }
     }
   })();
 
@@ -136,6 +203,7 @@ export async function fetchConversationFromServer(
           role: 'user' | 'assistant';
           content: string;
           createdAt: number;
+          metadata?: Record<string, unknown>;
         }>;
       };
     };
@@ -154,7 +222,8 @@ export async function fetchConversationFromServer(
         id: message.id,
         role: message.role,
         content: message.content,
-        timestamp: Number(message.createdAt)
+        timestamp: Number(message.createdAt),
+        ...hydrateGenUIMetadata(message.metadata),
       }))
     };
   } catch {
@@ -245,6 +314,7 @@ export async function fetchAllConversationsFromServer(): Promise<Conversation[]>
           role: 'user' | 'assistant';
           content: string;
           createdAt: number;
+          metadata?: Record<string, unknown>;
         }>;
       }>;
     };
@@ -263,7 +333,8 @@ export async function fetchAllConversationsFromServer(): Promise<Conversation[]>
         id: m.id,
         role: m.role,
         content: m.content,
-        timestamp: Number(m.createdAt)
+        timestamp: Number(m.createdAt),
+        ...hydrateGenUIMetadata(m.metadata),
       }))
     }));
   } catch (err) {

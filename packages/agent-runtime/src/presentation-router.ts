@@ -184,6 +184,41 @@ export class PresentationRouter {
       };
     }
 
+    const lower = rawPrompt.toLowerCase();
+    // Respect explicit plain-text overrides and pure conceptual inquiries before calculator heuristics
+    if (/\b(plain\s+text(\s+only)?|no\s+charts?|without\s+charts?|text\s+only)\b/i.test(lower)) {
+      return {
+        mode: 'plain_text',
+        approach: approachForMode('plain_text'),
+        source: 'deterministic',
+        confidence: 0.97,
+        reason: 'User requested plain text presentation.',
+        degradedToFallback: false,
+        invalidStructuredOutput: false,
+        latencyMs: Math.round((performance.now() - startNs) * 100) / 100,
+        usage: zeroUsage,
+        estimatedCostUsd: 0,
+      };
+    }
+
+    const isConceptualExplanationEarly =
+      /^(explain|when\s+to\s+use|how\s+does|how\s+do|why\s+does|what\s+are\s+the\s+differences|describe)\b/i.test(lower) &&
+      !/\b(create|build|generate|plot|render|draw|make|interactive)\b/i.test(lower);
+    if (isConceptualExplanationEarly) {
+      return {
+        mode: 'structured_explanation',
+        approach: approachForMode('structured_explanation'),
+        source: 'deterministic',
+        confidence: 0.94,
+        reason: 'Conceptual inquiry routed to structured Markdown explanation.',
+        degradedToFallback: false,
+        invalidStructuredOutput: false,
+        latencyMs: Math.round((performance.now() - startNs) * 100) / 100,
+        usage: zeroUsage,
+        estimatedCostUsd: 0,
+      };
+    }
+
     const calcKind = detectDeterministicCalculatorIntent(rawPrompt);
     if (calcKind) {
       return {
@@ -314,14 +349,14 @@ export class PresentationRouter {
       };
     }
 
-    // 7. Declarative interactive controls (calculators, sliders, forms, configurators)
+    // 7. Declarative interactive controls (calculators, sliders, forms, decision matrices, planners, filterable dashboards)
     if (
-      /\b(interactive\s+[a-z\s]{0,30}(?:calculator|converter|picker|filter|form|dashboard)|calculator\s+with\s+sliders?|sliders?\s+for)\b/i.test(lower)
+      /\b(interactive\s+[a-z\s]{0,36}(?:calculator|converter|picker|filter|form|dashboard|planner|matrix|scheduler|tracker|explorer|wizard)|calculator\s+with\s+sliders?|sliders?\s+for|decision\s+matrix|study\s+planner|investment\s+planner|multi-?step\s+(?:onboarding\s+)?form|weighted\s+criteria)\b/i.test(lower)
     ) {
       return {
         mode: 'declarative_interactive',
         confidence: 0.93,
-        reason: 'Structured interactive controls/calculator routed to declarative interactive surface.',
+        reason: 'Structured interactive controls/planner routed to declarative interactive surface.',
       };
     }
 

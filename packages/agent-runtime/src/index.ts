@@ -1627,15 +1627,25 @@ CAPABILITY & IDENTITY INVARIANTS:
       let researchDraft = '';
       let genuiEmittedCount = 0;
       let genuiSequence = 1;
-      const emitGenUISurface = async (surface: any) => {
+      let execSurfaceCreated = false;
+      const emitGenUISurface = async (surface: any, keepStreaming = false) => {
         genuiEmittedCount += 1;
         await this.emitRunEvent(runId, 'genui.surface.created', {
           surfaceId: surface.surfaceId,
           sequence: genuiSequence++,
           surface,
         });
-        await this.emitRunEvent(runId, 'genui.surface.completed', {
-          surfaceId: surface.surfaceId,
+        if (!keepStreaming) {
+          await this.emitRunEvent(runId, 'genui.surface.completed', {
+            surfaceId: surface.surfaceId,
+            sequence: genuiSequence++,
+          });
+        }
+      };
+
+      const emitGenUIDeleted = async (surfaceId: string) => {
+        await this.emitRunEvent(runId, 'genui.surface.deleted', {
+          surfaceId,
           sequence: genuiSequence++,
         });
       };
@@ -1672,7 +1682,8 @@ CAPABILITY & IDENTITY INVARIANTS:
               }
             : undefined,
         });
-        await emitGenUISurface(execSurface);
+        execSurfaceCreated = true;
+        await emitGenUISurface(execSurface, true);
       }
 
       const genuiExtractor = new GenUIStreamTagExtractor();
@@ -1765,6 +1776,9 @@ CAPABILITY & IDENTITY INVARIANTS:
                   pendingContent += extracted.visibleText;
                   pendingDeltas++;
                   broadcastDelta('content.delta', extracted.visibleText);
+                }
+                for (const delId of extracted.deletedSurfaceIds || []) {
+                  await emitGenUIDeleted(delId);
                 }
                 for (const s of extracted.surfaces) {
                   if (s.ok) {
@@ -1864,6 +1878,9 @@ CAPABILITY & IDENTITY INVARIANTS:
           await this.saveRun(run);
           broadcastDelta('content.delta', flushedGenUI.visibleText);
         }
+        for (const delId of flushedGenUI.deletedSurfaceIds || []) {
+          await emitGenUIDeleted(delId);
+        }
         for (const s of flushedGenUI.surfaces) {
           if (s.ok) {
             await emitGenUISurface({
@@ -1882,7 +1899,39 @@ CAPABILITY & IDENTITY INVARIANTS:
         }
       }
 
-      if (!guardedSearchSynthesis && !run.content.trim()) {
+      if (execSurfaceCreated) {
+        const execCompleted = buildRuntimeExecutionGenUISurface({
+          runId,
+          title: run.prompt.slice(0, 120) || 'Agent Execution',
+          status: 'COMPLETED',
+          intent: run.intent,
+          modelLabel: run.provenance?.executedModel || run.modelPolicy?.model,
+          summary: run.content ? run.content.slice(0, 400) : undefined,
+          toolCalls: run.toolCalls.map((tc, i) => ({
+            toolName: tc.name,
+            status: run.toolResults[i]?.isError ? 'FAILED' : run.toolResults[i] ? 'COMPLETED' : 'COMPLETED',
+            durationMs: run.toolResults[i]?.durationMs,
+          })),
+          artifacts: (run.artifacts || []).slice(0, 5).map((a) => ({
+            id: a.id,
+            title: a.title,
+            type: a.type,
+            version: a.version,
+          })),
+        });
+        await this.emitRunEvent(runId, 'genui.surface.patched', {
+          surfaceId: execCompleted.surfaceId,
+          sequence: genuiSequence++,
+          upsertComponents: execCompleted.components,
+          textFallback: execCompleted.textFallback,
+        });
+        await this.emitRunEvent(runId, 'genui.surface.completed', {
+          surfaceId: execCompleted.surfaceId,
+          sequence: genuiSequence++,
+        });
+      }
+
+      if (!guardedSearchSynthesis && !run.content.trim() && genuiEmittedCount === 0) {
         const finalText = typeof completionResult?.text === 'string' ? completionResult.text : '';
         if (finalText.trim().length > 0) {
           const singlePass = new GenUIStreamTagExtractor();

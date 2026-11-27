@@ -479,10 +479,11 @@ Respond with valid JSON only:
     // classify task intent as ANSWER (never arbitrary TOOL_ACTION web_search) when external freshness is not required.
     const isGenerativePresentationTask = !freshnessEval.requiresFreshness && (
       /\b(bar|line|pie|donut|scatter|area|radar|heatmap|histogram)\s+chart\b/i.test(promptLower) ||
-      /\b(interactive\s+[a-z\s]{0,30}(?:calculator|converter|simulation|visualizer|widget|dashboard|picker|slider))\b/i.test(promptLower) ||
+      /\b(interactive\s+[a-z0-9\s-]{0,36}(?:calculator|converter|simulation|visualizer|widget|dashboard|picker|slider|allocator|planner|matrix|estimator|tracker|form|wizard|checklist))\b/i.test(promptLower) ||
+      (/\b(weighted\s+decision\s+matrix|study\s+planner|budget\s+allocator|multi-?step\s+(?:onboarding\s+)?form|filterable\s+[a-z\s]{0,20}dashboard)\b/i.test(promptLower) && /\b(create|build|generate|make|design|show)\b/i.test(promptLower)) ||
       (/\b(html|svg|canvas|three\.?js|mermaid)\b/i.test(promptLower) && /\b(create|build|generate|make|draw|render|design)\b/i.test(promptLower)) ||
       (/\b(chart|plot|diagram|graph)\b/i.test(promptLower) && /\b(create|plot|generate|draw|render|visualize)\b/i.test(promptLower))
-    ) && !/\b(search\s+(?:the\s+)?web|open\s+https?:\/\/|browse\s+|git\s+status|git\s+log|read\s+file|system\s+shell|run\s+command)\b/i.test(promptLower);
+    ) && !/\b(search\s+(?:the\s+)?web|open\s+https?:\/\/|browse\s+|git\s+status|git\s+log|read\s+file|system\s+shell|run\s+command|cron|automation|schedule\s+(?:a\s+)?(?:daily|weekly|hourly|monthly))\b/i.test(promptLower);
     if (isGenerativePresentationTask) {
       return {
         primaryIntent: 'ANSWER',

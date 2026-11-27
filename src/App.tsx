@@ -1965,6 +1965,7 @@ useEffect(() => {
                     onGenUIStateChange={(messageId, surfaceId, nextState) => {
                       updateConversation(activeConversation.id, c => ({
                         ...c,
+                        updatedAt: Date.now(),
                         messages: c.messages.map(m =>
                           m.id === messageId
                             ? {
@@ -1979,22 +1980,53 @@ useEffect(() => {
                       }));
                     }}
                     onGenUIAction={async (event, surface) => {
+                      const actionDef = surface.actions.find((a) => a.id === event.actionId);
+                      const allowedSet = actionDef?.allowedKeys?.length ? new Set(actionDef.allowedKeys) : null;
+                      const filteredSnapshot = allowedSet
+                        ? Object.fromEntries(
+                            Object.entries(event.stateSnapshot || {}).filter(([k]) => allowedSet.has(k))
+                          )
+                        : event.stateSnapshot || {};
+
+                      if (event.kind === 'open_artifact') {
+                        const targetUrl = actionDef?.promptTemplate;
+                        if (targetUrl && /^https?:\/\//i.test(targetUrl)) {
+                          window.open(targetUrl, '_blank', 'noopener,noreferrer');
+                          return;
+                        }
+                        const found = conversationArtifacts.find((a) => a.id === event.actionId);
+                        if (found) {
+                          setActiveArtifact(found);
+                          setIsStudioOpen(true);
+                          userDismissedStudioRef.current = false;
+                        }
+                        return;
+                      }
+
                       if (event.kind === 'attach_followup') {
+                        const enrichedEvent = {
+                          ...event,
+                          stateSnapshot: filteredSnapshot,
+                          conversationId: activeConversation.id,
+                          idempotencyKey: event.idempotencyKey || event.eventId,
+                        };
                         if (currentUserId && !currentUserId.startsWith('guest:')) {
                           const resp = await authenticatedApiFetch('/api/genui/actions', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(event),
+                            body: JSON.stringify(enrichedEvent),
                           });
                           if (!resp.ok) {
                             const errBody = await resp.json().catch(() => ({}));
                             throw new Error(errBody.error || 'GenUI action rejected by server.');
                           }
                         }
-                        const inputEntries = Object.entries(event.stateSnapshot || {})
+                        const inputEntries = Object.entries(filteredSnapshot)
                           .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
                           .join(', ');
-                        const followupPrompt = `Using updated parameters (${inputEntries}) for "${surface.title || surface.surfaceId}", analyze the scenario and explain key takeaways.`;
+                        const followupPrompt = actionDef?.promptTemplate
+                          ? actionDef.promptTemplate.replace(/\{\{state\}\}/g, inputEntries)
+                          : `Using updated parameters (${inputEntries}) for "${surface.title || surface.surfaceId}", analyze the scenario and explain key takeaways.`;
                         await handleSendMessage(followupPrompt, []);
                       }
                     }}

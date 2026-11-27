@@ -53,6 +53,13 @@ import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowle
 import { McpHost, McpSecurityError } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
 import { adaptAiraEventToAGUI, authorizeGenUIActionServerSide } from '../../../packages/agent-runtime/src/genui-streaming.js';
+import {
+  AIRA_GENUI_LIMITS,
+  containsForbiddenObjectKey,
+  GenUIStateRecordSchema,
+  validateGenUISurface,
+  type GenUISurface,
+} from '../../../packages/contracts/src/genui.js';
 import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/durable/tool-authorization.js';
 import { validateApiStartupConfiguration } from './startup-config.js';
 import { evaluateRuntimeReadiness, createDatabaseReadinessProbe } from './runtime-readiness.js';
@@ -1472,6 +1479,81 @@ app.get('/api/capabilities', (_req: Request, res: Response) => {
 // -----------------------------------------------------------------------
 // Durable Conversations + Hybrid Search Foundation
 // -----------------------------------------------------------------------
+function sanitizeClientSyncedSurface(surface: GenUISurface): GenUISurface {
+  return {
+    ...surface,
+    origin: surface.origin === 'deterministic_calculator' ? 'deterministic_calculator' : 'model',
+    evidence: surface.evidence.map((ev) => ({ ...ev, verified: false })),
+  };
+}
+
+function sanitizeMessageMetadataForPersistence(
+  rawMeta: unknown,
+  existingMessageMeta?: unknown
+): Record<string, unknown> {
+  const existingGenui =
+    existingMessageMeta &&
+    typeof existingMessageMeta === 'object' &&
+    !Array.isArray(existingMessageMeta) &&
+    (existingMessageMeta as Record<string, unknown>).genui &&
+    typeof (existingMessageMeta as Record<string, unknown>).genui === 'object'
+      ? ((existingMessageMeta as Record<string, unknown>).genui as Record<string, unknown>)
+      : undefined;
+
+  if (!rawMeta || typeof rawMeta !== 'object' || Array.isArray(rawMeta)) {
+    return existingGenui ? { genui: existingGenui } : {};
+  }
+  if (containsForbiddenObjectKey(rawMeta)) {
+    return existingGenui ? { genui: existingGenui } : {};
+  }
+  const genui = (rawMeta as Record<string, unknown>).genui;
+  if (!genui || typeof genui !== 'object' || Array.isArray(genui)) {
+    return existingGenui ? { genui: existingGenui } : {};
+  }
+
+  // Server-authoritative preservation: once surfaces exist in DB for a message,
+  // client sync cannot overwrite/downgrade surface definitions or action policies.
+  let validSurfaces: GenUISurface[] = [];
+  if (existingGenui && Array.isArray(existingGenui.surfaces) && existingGenui.surfaces.length > 0) {
+    for (const s of existingGenui.surfaces) {
+      const res = validateGenUISurface(s);
+      if (res.ok) validSurfaces.push(res.surface);
+    }
+  } else {
+    const rawSurfaces = Array.isArray((genui as Record<string, unknown>).surfaces)
+      ? ((genui as Record<string, unknown>).surfaces as unknown[]).slice(0, 6)
+      : [];
+    for (const s of rawSurfaces) {
+      const res = validateGenUISurface(s);
+      if (res.ok) validSurfaces.push(sanitizeClientSyncedSurface(res.surface));
+    }
+  }
+
+  const rawStateMap = (genui as Record<string, unknown>).surfaceState;
+  const safeStateMap: Record<string, Record<string, unknown>> = {};
+  if (rawStateMap && typeof rawStateMap === 'object' && !Array.isArray(rawStateMap)) {
+    for (const [sid, rec] of Object.entries(rawStateMap as Record<string, unknown>).slice(0, 8)) {
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,95}$/.test(sid)) continue;
+      const parsedState = GenUIStateRecordSchema.safeParse(rec);
+      if (parsedState.success) {
+        const bytes = Buffer.byteLength(JSON.stringify(parsedState.data), 'utf8');
+        if (bytes <= AIRA_GENUI_LIMITS.maxStateBytes) {
+          safeStateMap[sid] = parsedState.data;
+        }
+      }
+    }
+  }
+
+  if (validSurfaces.length === 0 && Object.keys(safeStateMap).length === 0) return {};
+  return {
+    genui: {
+      surfaces: validSurfaces,
+      surfaceState: safeStateMap,
+      updatedAt: Number.isFinite(Number((genui as any).updatedAt)) ? Number((genui as any).updatedAt) : Date.now(),
+    },
+  };
+}
+
 app.post('/api/conversations/sync', async (req: Request, res: Response) => {
   try {
     console.log(`[API_CONV_SYNC] principalId: ${req.principal?.userId} hasAuth: ${!!req.headers.authorization}`);
@@ -1491,6 +1573,14 @@ app.post('/api/conversations/sync', async (req: Request, res: Response) => {
       return res.status(413).json({ error: 'Conversation sync exceeds the 1000-message safety limit.' });
     }
 
+    const existingConv = await conversationSearchRepo.getConversation(req.principal!.userId, String(body.id)).catch(() => null);
+    const existingMetaByClientId = new Map<string, unknown>();
+    if (existingConv) {
+      for (const m of existingConv.messages) {
+        existingMetaByClientId.set(m.id, m.metadata);
+      }
+    }
+
     await conversationSearchRepo.syncConversation(req.principal!.userId, {
       id: String(body.id),
       title: String(body.title),
@@ -1498,13 +1588,17 @@ app.post('/api/conversations/sync', async (req: Request, res: Response) => {
       isPinned: Boolean(body.isPinned),
       createdAt: Number(body.createdAt),
       updatedAt: Number(body.updatedAt),
-      messages: rawMessages.map((message: any) => ({
-        id: String(message.id || ''),
-        role: message.role === 'assistant' ? 'assistant' : 'user',
-        content: String(message.content || ''),
-        createdAt: Number(message.createdAt || message.timestamp || body.updatedAt),
-        runId: message.runId ? String(message.runId) : undefined
-      }))
+      messages: rawMessages.map((message: any) => {
+        const msgId = String(message.id || '');
+        return {
+          id: msgId,
+          role: message.role === 'assistant' ? 'assistant' : 'user',
+          content: String(message.content || ''),
+          createdAt: Number(message.createdAt || message.timestamp || body.updatedAt),
+          runId: message.runId ? String(message.runId) : undefined,
+          metadata: sanitizeMessageMetadataForPersistence(message.metadata, existingMetaByClientId.get(msgId)),
+        };
+      }),
     });
 
     const indexing = await conversationEmbeddingIndexer.indexConversation(
@@ -1759,6 +1853,10 @@ app.post('/api/genui/actions', async (req: Request, res: Response) => {
       });
     }
     const evt = parsed.data;
+    if (!evt.conversationId && !evt.runId) {
+      return res.status(400).json({ error: 'conversationId or runId is required for GenUI actions.' });
+    }
+
     let runOwnerUserId: string | undefined;
     if (evt.runId) {
       const run = await agentRuntime.getRun(evt.runId);
@@ -1768,25 +1866,87 @@ app.post('/api/genui/actions', async (req: Request, res: Response) => {
       runOwnerUserId = run.principalId;
     }
 
+    let conversationOwnerUserId: string | undefined;
+    let persistedSurface: GenUISurface | undefined;
+    if (evt.conversationId) {
+      const conv = await conversationSearchRepo.getConversation(principal.userId, evt.conversationId);
+      if (!conv) {
+        return res.status(403).json({ error: 'Forbidden: conversation ownership check failed.' });
+      }
+      conversationOwnerUserId = principal.userId;
+      for (const m of conv.messages) {
+        const surfaces = (m.metadata as any)?.genui?.surfaces;
+        if (Array.isArray(surfaces)) {
+          const found = surfaces.find((s: any) => s?.surfaceId === evt.surfaceId);
+          if (found) {
+            const checkSurf = validateGenUISurface(found);
+            if (checkSurf.ok) persistedSurface = checkSurf.surface;
+            break;
+          }
+        }
+      }
+    }
+
     const authz = authorizeGenUIActionServerSide({
       principalUserId: principal.userId,
       runOwnerUserId,
+      conversationOwnerUserId,
+      surface: persistedSurface,
+      requirePersistedSurface: true,
       event: evt,
     });
     if (!authz.allowed) {
       return res.status(authz.status).json({ error: authz.reason || 'Forbidden GenUI action.' });
     }
 
-    return res.json({
+    const opId = evt.idempotencyKey || evt.eventId;
+    const safeSnapshot = authz.sanitizedStateSnapshot ?? evt.stateSnapshot;
+    const canonicalOpPayload = {
+      surfaceId: evt.surfaceId,
+      componentId: evt.componentId,
+      actionId: evt.actionId,
+      kind: evt.kind,
+      conversationId: evt.conversationId ?? null,
+      runId: evt.runId ?? null,
+      stateSnapshot: safeSnapshot,
+    };
+
+    const idempCheck = await durableIdempotencyManager.beginOrGet(
+      principal.userId,
+      opId,
+      'genui_action',
+      canonicalOpPayload
+    );
+    if (idempCheck.isReplay) {
+      return res.status(idempCheck.statusCode || 200).json({
+        ...(idempCheck.responseBody || {}),
+        idempotentReplay: true,
+      });
+    }
+
+    const responseBody = {
       accepted: true,
       eventId: evt.eventId,
+      idempotencyKey: opId,
       surfaceId: evt.surfaceId,
       actionId: evt.actionId,
       kind: evt.kind,
-      stateSnapshot: evt.stateSnapshot,
+      stateSnapshot: safeSnapshot,
       recordedAt: Date.now(),
-    });
+    };
+    await durableIdempotencyManager.complete(principal.userId, opId, 200, responseBody);
+    return res.json(responseBody);
   } catch (err: any) {
+    if (
+      err instanceof IdempotencyConflictError ||
+      err instanceof IdempotencyInProgressError ||
+      err instanceof IdempotencyUncertainOutcomeError
+    ) {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
+    if (err instanceof IdempotencyDatabaseError) {
+      return res.status(503).json({ error: err.message, code: err.code });
+    }
     return res.status(400).json({ error: err?.message || 'GenUI action error' });
   }
 });
@@ -2552,6 +2712,7 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         evt.type === 'genui.surface.created' ||
         evt.type === 'genui.surface.patched' ||
         evt.type === 'genui.surface.completed' ||
+        evt.type === 'genui.surface.deleted' ||
         evt.type === 'genui.surface.error'
       ) {
         if (evt.type === 'genui.surface.created') {

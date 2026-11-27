@@ -7,16 +7,20 @@ import type {
   GenUIStateRecord,
   GenUIStateValue,
 } from '../../../packages/contracts/src/genui';
+import { resolveStateKeyOrPointer } from '../../../packages/contracts/src/genui-reactive';
 
 export interface GenUIRenderContext {
   surface: GenUISurface;
   state: GenUIStateRecord;
   setStateValue: (key: string, value: GenUIStateValue) => void;
+  setStateBatch: (patch: Record<string, GenUIStateValue>) => void;
   resetState: () => void;
   onTriggerAction: (componentId: string, actionId: string) => void;
   onOpenArtifact?: (artifactId: string) => void;
   onResolveApproval?: (approvalId: string, runId: string, decision: 'ALLOW_ONCE' | 'ALLOW_SESSION' | 'REJECT') => void;
   renderComponentById: (componentId: string) => React.ReactNode;
+  fieldErrors: Record<string, string[]>;
+  isValid: boolean;
   pendingActionId?: string | null;
   disabled?: boolean;
 }
@@ -38,8 +42,6 @@ export function resolveDataRefValue(
   state: GenUIStateRecord,
   dataRef: string | undefined
 ): GenUIStateValue | undefined {
-  if (!dataRef || !dataRef.startsWith('/')) return undefined;
-  const key = dataRef.slice(1).split('/')[0];
-  if (!key || !Object.hasOwn(state, key)) return undefined;
-  return state[key];
+  if (!dataRef) return undefined;
+  return resolveStateKeyOrPointer(state, dataRef) as GenUIStateValue | undefined;
 }

@@ -1,6 +1,7 @@
 import { EventType, type BaseEvent } from '@ag-ui/core';
 import {
   AIRA_GENUI_CONTRACT_VERSION,
+  A2UISurfaceReducer,
   validateGenUISurface,
   applyGenUILifecycleEventToMap,
   buildCalculatorSurface,
@@ -118,6 +119,7 @@ export function adaptAiraEventToAGUI(event: StreamingEvent): BaseEvent[] {
     }
     case 'genui.surface.patched':
     case 'genui.surface.completed':
+    case 'genui.surface.deleted':
     case 'genui.surface.error':
       return [
         {
@@ -168,38 +170,113 @@ export function adaptAiraEventToAGUI(event: StreamingEvent): BaseEvent[] {
   }
 }
 
-function tryParseGenUIJson(rawInner: string): GenUIValidationResult {
+function tryParseGenUIBlock(
+  rawInner: string,
+  a2uiReducer: A2UISurfaceReducer
+): { surfaces: GenUIValidationResult[]; deletedSurfaceIds: string[] } {
   const cleaned = rawInner
     .trim()
-    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/^```(?:json|jsonl)?\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
+  const surfaces: GenUIValidationResult[] = [];
+  const deletedSurfaceIds: string[] = [];
+
+  const handleParsed = (obj: unknown) => {
+    if (obj && typeof obj === 'object' && (obj as any).version === '1.0') {
+      const res = a2uiReducer.applyMessage(obj);
+      if (!res.ok && res.error) {
+        surfaces.push({
+          ok: false,
+          code: res.error.code,
+          error: res.error.message,
+        });
+      } else if (res.deleted && res.surfaceId) {
+        const idx = surfaces.findIndex((s) => s.ok && s.surface.surfaceId === res.surfaceId);
+        if (idx >= 0) surfaces.splice(idx, 1);
+        deletedSurfaceIds.push(res.surfaceId);
+      } else if (res.ok && res.surface) {
+        // Keep latest reduced snapshot for same surfaceId inside the same block
+        const idx = surfaces.findIndex((s) => s.ok && s.surface.surfaceId === res.surface!.surfaceId);
+        if (idx >= 0) surfaces[idx] = { ok: true, surface: res.surface };
+        else surfaces.push({ ok: true, surface: res.surface });
+      }
+      return;
+    }
+    surfaces.push(validateGenUISurface(obj));
+  };
+
   try {
     const parsed = JSON.parse(cleaned);
-    return validateGenUISurface(parsed);
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) handleParsed(item);
+    } else {
+      handleParsed(parsed);
+    }
+    return { surfaces, deletedSurfaceIds };
   } catch (err: any) {
+    // Support JSONL streams of A2UI v1.0 messages (one JSON object per line)
+    const lines = cleaned
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
+    if (lines.length > 1) {
+      let parsedAny = false;
+      for (const line of lines) {
+        try {
+          const item = JSON.parse(line);
+          parsedAny = true;
+          handleParsed(item);
+        } catch (lineErr: any) {
+          return {
+            surfaces: [
+              {
+                ok: false,
+                code: 'GENUI_INVALID_JSON',
+                error: lineErr?.message || 'Malformed JSONL line inside <airaGenUI> block.',
+              },
+            ],
+            deletedSurfaceIds,
+          };
+        }
+      }
+      if (parsedAny) return { surfaces, deletedSurfaceIds };
+    }
+
     return {
-      ok: false,
-      code: 'GENUI_INVALID_JSON',
-      error: err?.message || 'Malformed JSON inside <airaGenUI> block.',
+      surfaces: [
+        {
+          ok: false,
+          code: 'GENUI_INVALID_JSON',
+          error: err?.message || 'Malformed JSON inside <airaGenUI> block.',
+        },
+      ],
+      deletedSurfaceIds,
     };
   }
 }
 
 /**
  * Streaming detector that extracts validated <airaGenUI>{...}</airaGenUI> blocks
- * while stripping partial/complete tag markup from user-visible prose.
+ * (native aira-genui/v1 or profiled A2UI v1.0 JSON/JSONL messages) while stripping
+ * partial/complete tag markup from user-visible prose.
  */
 export class GenUIStreamTagExtractor {
   private buffer = '';
   private insideTag = false;
   private tagBuffer = '';
   private readonly maxTagBytes = 256 * 1024;
+  private readonly a2uiReducer = new A2UISurfaceReducer();
 
-  public pushChunk(chunk: string): { visibleText: string; surfaces: GenUIValidationResult[] } {
+  public pushChunk(chunk: string): {
+    visibleText: string;
+    surfaces: GenUIValidationResult[];
+    deletedSurfaceIds: string[];
+  } {
     this.buffer += chunk;
     let visibleText = '';
     const surfaces: GenUIValidationResult[] = [];
+    const deletedSurfaceIds: string[] = [];
 
     while (this.buffer.length > 0) {
       if (!this.insideTag) {
@@ -231,10 +308,23 @@ export class GenUIStreamTagExtractor {
       } else {
         const closeIdx = this.buffer.indexOf(GENUI_CLOSE_TAG);
         if (closeIdx >= 0) {
+          if (this.tagBuffer.length + closeIdx > this.maxTagBytes) {
+            this.buffer = this.buffer.slice(closeIdx + GENUI_CLOSE_TAG.length);
+            this.insideTag = false;
+            this.tagBuffer = '';
+            surfaces.push({
+              ok: false,
+              code: 'GENUI_PAYLOAD_TOO_LARGE',
+              error: 'Streaming GenUI block exceeded size limit.',
+            });
+            continue;
+          }
           this.tagBuffer += this.buffer.slice(0, closeIdx);
           this.buffer = this.buffer.slice(closeIdx + GENUI_CLOSE_TAG.length);
           this.insideTag = false;
-          surfaces.push(tryParseGenUIJson(this.tagBuffer));
+          const blockResult = tryParseGenUIBlock(this.tagBuffer, this.a2uiReducer);
+          surfaces.push(...blockResult.surfaces);
+          deletedSurfaceIds.push(...blockResult.deletedSurfaceIds);
           this.tagBuffer = '';
           continue;
         }
@@ -247,30 +337,28 @@ export class GenUIStreamTagExtractor {
             break;
           }
         }
-        if (partialClose >= 0) {
-          this.tagBuffer += this.buffer.slice(0, partialClose);
-          this.buffer = this.buffer.slice(partialClose);
-          break;
-        }
-        this.tagBuffer += this.buffer;
-        this.buffer = '';
-        if (this.tagBuffer.length > this.maxTagBytes) {
+        const appendSlice = partialClose >= 0 ? this.buffer.slice(0, partialClose) : this.buffer;
+        if (this.tagBuffer.length + appendSlice.length > this.maxTagBytes) {
           this.insideTag = false;
           this.tagBuffer = '';
+          this.buffer = '';
           surfaces.push({
             ok: false,
             code: 'GENUI_PAYLOAD_TOO_LARGE',
             error: 'Streaming GenUI block exceeded size limit.',
           });
+          break;
         }
+        this.tagBuffer += appendSlice;
+        this.buffer = partialClose >= 0 ? this.buffer.slice(partialClose) : '';
         break;
       }
     }
 
-    return { visibleText, surfaces };
+    return { visibleText, surfaces, deletedSurfaceIds };
   }
 
-  public flush(): { visibleText: string; surfaces: GenUIValidationResult[] } {
+  public flush(): { visibleText: string; surfaces: GenUIValidationResult[]; deletedSurfaceIds: string[] } {
     if (this.insideTag) {
       const result: GenUIValidationResult = {
         ok: false,
@@ -280,11 +368,11 @@ export class GenUIStreamTagExtractor {
       this.insideTag = false;
       this.tagBuffer = '';
       this.buffer = '';
-      return { visibleText: '', surfaces: [result] };
+      return { visibleText: '', surfaces: [result], deletedSurfaceIds: [] };
     }
     const visibleText = this.buffer;
     this.buffer = '';
-    return { visibleText, surfaces: [] };
+    return { visibleText, surfaces: [], deletedSurfaceIds: [] };
   }
 }
 
@@ -529,6 +617,17 @@ export function buildRuntimeExecutionGenUISurface(params: {
 }
 
 export function buildGenUISystemInstruction(presentationMode: string): string {
+  if (presentationMode === 'declarative_interactive') {
+    const example =
+      '{"schemaVersion":"aira-genui/v1","surfaceId":"surf_app","rootId":"root","textFallback":"Interactive workspace summary","state":{"weightCost":50,"rows":[]},"computed":[{"target":"/derived/top","kind":"math","expression":"weightCost * 2"}],"components":[{"id":"root","type":"vertical_group","props":{"gap":"md","children":["s1","m1"]}},{"id":"s1","type":"slider","props":{"label":"Weight","stateKey":"weightCost","min":0,"max":100,"step":5,"defaultValue":50}},{"id":"m1","type":"metric_display","props":{"label":"Score","value":100,"dataRef":"/derived/top"}}]}';
+    return [
+      'Presentation guidance (declarative_interactive):',
+      'After a 1-2 sentence intro, emit one <airaGenUI>{...}</airaGenUI> JSON matching schemaVersion "aira-genui/v1" using only safe catalog types (vertical_group, horizontal_group, responsive_grid, card, section, heading, text, metric_display, progress_indicator, data_table, bar_chart, line_chart, pie_chart, doughnut_chart, numeric_input, text_input, slider, select_control, checkbox, radio_group, segmented_control, reset_control, action_button).',
+      'For multi-component live updates without extra LLM calls, declare state + reactive computed rules (kinds: math, compound_growth, amortization, function_series, weighted_decision, table_filter_aggregate, progress_ratio, format_value) and bind dataRef/rowsRef/labelsRef/datasetsRef. Never emit HTML/JS/eval:',
+      `<airaGenUI>${example}</airaGenUI>`,
+    ].join('\n');
+  }
+
   const example =
     presentationMode === 'table'
       ? '{"schemaVersion":"aira-genui/v1","surfaceId":"surf_tbl","rootId":"c1","textFallback":"Summary table","components":[{"id":"c1","type":"data_table","props":{"title":"Comparison","columns":[{"key":"item","label":"Item","align":"left","format":"text"},{"key":"val","label":"Value","align":"right","format":"number"}],"rows":[{"item":"A","val":10}],"sortable":true,"compact":false}}]}'
@@ -544,16 +643,39 @@ export function buildGenUISystemInstruction(presentationMode: string): string {
 export function authorizeGenUIActionServerSide(params: {
   principalUserId?: string;
   runOwnerUserId?: string;
+  conversationOwnerUserId?: string;
+  surface?: GenUISurface;
+  requirePersistedSurface?: boolean;
   event: GenUIInteractionEvent;
-}): { allowed: boolean; status: number; reason?: string } {
-  const { principalUserId, runOwnerUserId, event } = params;
+}): {
+  allowed: boolean;
+  status: number;
+  reason?: string;
+  sanitizedStateSnapshot?: Record<string, unknown>;
+} {
+  const {
+    principalUserId,
+    runOwnerUserId,
+    conversationOwnerUserId,
+    surface,
+    requirePersistedSurface = false,
+    event,
+  } = params;
 
   if (!principalUserId) {
     return { allowed: false, status: 401, reason: 'Authentication required for GenUI action.' };
   }
 
+  if (!runOwnerUserId && !conversationOwnerUserId && !surface) {
+    return { allowed: false, status: 403, reason: 'Ownership or persisted surface context required for GenUI action.' };
+  }
+
   if (runOwnerUserId && principalUserId !== runOwnerUserId) {
     return { allowed: false, status: 403, reason: 'Cross-principal GenUI action denied.' };
+  }
+
+  if (conversationOwnerUserId && principalUserId !== conversationOwnerUserId) {
+    return { allowed: false, status: 403, reason: 'Cross-conversation GenUI action denied.' };
   }
 
   if (event.kind === 'run_approval' || event.kind === 'workflow_trigger') {
@@ -564,8 +686,51 @@ export function authorizeGenUIActionServerSide(params: {
     };
   }
 
+  if (requirePersistedSurface && !surface) {
+    return { allowed: false, status: 403, reason: 'Persisted GenUI surface not found for this conversation or run.' };
+  }
+
+  let sanitizedStateSnapshot: Record<string, unknown> = event.stateSnapshot || {};
+  if (surface) {
+    if (surface.surfaceId !== event.surfaceId) {
+      return { allowed: false, status: 403, reason: 'Surface identity mismatch.' };
+    }
+    const def = surface.actions.find((a) => a.id === event.actionId);
+    if (!def) {
+      return { allowed: false, status: 403, reason: `Undeclared GenUI action "${event.actionId}".` };
+    }
+    if (def.kind !== event.kind) {
+      return { allowed: false, status: 403, reason: `Action kind mismatch for "${event.actionId}".` };
+    }
+    const sourceComp = surface.components.find((c) => c.id === event.componentId);
+    if (
+      !sourceComp ||
+      (sourceComp.type !== 'action_button' && sourceComp.type !== 'reset_control') ||
+      sourceComp.props.actionId !== event.actionId
+    ) {
+      return {
+        allowed: false,
+        status: 403,
+        reason: `Component "${event.componentId}" is not authorized to dispatch action "${event.actionId}".`,
+      };
+    }
+    if (def.requiresApproval || def.permissionLevel === 'WRITE' || def.permissionLevel === 'DESTRUCTIVE') {
+      return {
+        allowed: false,
+        status: 403,
+        reason: `Consequential action "${event.actionId}" requires explicit ApprovalKernel verification.`,
+      };
+    }
+    if (def.allowedKeys && def.allowedKeys.length > 0) {
+      const allowedSet = new Set(def.allowedKeys);
+      sanitizedStateSnapshot = Object.fromEntries(
+        Object.entries(event.stateSnapshot || {}).filter(([k]) => allowedSet.has(k))
+      );
+    }
+  }
+
   if (event.kind === 'local_recompute' || event.kind === 'reset_state' || event.kind === 'open_artifact' || event.kind === 'attach_followup') {
-    return { allowed: true, status: 200 };
+    return { allowed: true, status: 200, sanitizedStateSnapshot };
   }
 
   return { allowed: false, status: 400, reason: 'Unsupported GenUI action kind.' };

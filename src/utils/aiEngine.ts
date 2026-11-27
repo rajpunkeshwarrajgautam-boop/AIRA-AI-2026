@@ -440,7 +440,7 @@ export async function streamAIResponse(
                   wrappedCallbacks.onRoutingDecision?.(data);
                 } else if (currentEvent === 'genui_event') {
                   wrappedCallbacks.onGenUIEvent?.(data as GenUILifecycleEvent);
-                  if (data?.type === 'genui.surface.created' || data?.type === 'genui.surface.completed') {
+                  if (data?.type === 'genui.surface.created' || data?.type === 'genui.surface.completed' || data?.type === 'genui.surface.deleted') {
                     emittedArtifact = true;
                   }
                 } else if (currentEvent === 'artifact_open') {
