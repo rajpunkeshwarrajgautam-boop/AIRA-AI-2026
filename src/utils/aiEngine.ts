@@ -1,4 +1,5 @@
 import type { AppSettings, Artifact, Attachment, ModelId, ArtifactType, AgentTimelineEvent } from '../types';
+import type { GenUILifecycleEvent } from '../../packages/contracts/src/genui';
 import { normalizeAgentTimelineEvent } from './agentTimeline';
 import { agentMemory } from './agentMemoryEngine';
 import { neonAuth } from '../lib/neonAuth';
@@ -37,6 +38,8 @@ export interface StreamCallbacks {
   onThinkingChunk?: (chunk: string) => void;
   onContentChunk: (chunk: string) => void;
   onProvenance?: (provenance: any) => void;
+  onRoutingDecision?: (decision: any) => void;
+  onGenUIEvent?: (event: GenUILifecycleEvent) => void;
   onArtifactFound?: (artifact: Artifact) => void;
   onApprovalRequired?: (approval: { id: string; runId: string; toolCall?: { name: string; arguments: any }; reason?: string }) => void;
   onStatusUpdate?: (status: string) => void;
@@ -433,6 +436,13 @@ export async function streamAIResponse(
                   wrappedCallbacks.onContentChunk(data.text);
                 } else if (currentEvent === 'latency_metrics') {
                   wrappedCallbacks.onLatencyMetrics?.(data);
+                } else if (currentEvent === 'routing_decision') {
+                  wrappedCallbacks.onRoutingDecision?.(data);
+                } else if (currentEvent === 'genui_event') {
+                  wrappedCallbacks.onGenUIEvent?.(data as GenUILifecycleEvent);
+                  if (data?.type === 'genui.surface.created' || data?.type === 'genui.surface.completed') {
+                    emittedArtifact = true;
+                  }
                 } else if (currentEvent === 'artifact_open') {
                   artifactCode = '';
                   activeArtifact = normalizeArtifactOpenPayload(data);

@@ -89,10 +89,10 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
       delete process.env.OPENAI_API_KEY;
 
       const router = new ModelRouter();
-      const execution = router.resolveExecution('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER');
+      const execution = router.resolveExecution('nvidia/nemotron-3.5-lightning-30b-a3b', 'ANSWER');
 
       assert.equal(execution.provider, 'nvidia');
-      assert.equal(execution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(execution.executedModel, 'nvidia/nemotron-3.5-lightning-30b-a3b');
       assert.equal(execution.fallbackOccurred, false);
       assert.equal(execution.verified, true);
     });
@@ -138,7 +138,7 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
       const execution = router.resolveExecution('aira-auto', 'ANSWER');
 
       assert.equal(execution.provider, 'nvidia');
-      assert.equal(execution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(execution.executedModel, 'nvidia/nemotron-3.5-bolt-e4b');
       assert.equal(execution.fallbackOccurred, true, 'Fallback should be true because default preferred provider was unavailable');
       assert.ok(execution.fallbackReason?.includes('NVIDIA'));
     });
@@ -211,7 +211,14 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
           const execution = router.resolveExecution(alias, 'ANSWER');
           assert.ok(execution.adapter);
           assert.equal(execution.provider, 'nvidia');
-          assert.equal(execution.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+          assert.equal(
+            execution.executedModel,
+            alias === 'claude-3-5-haiku' || alias === 'claude-3-7-sonnet'
+              ? 'nvidia/nemotron-3.5-bolt-e4b'
+              : alias === 'claude-3-opus'
+                ? 'nvidia/nemotron-3.5-super-vl-120b-a12b'
+                : 'nvidia/nemotron-3.5-lightning-30b-a3b'
+          );
           // Legacy alias requested is preserved in requestedModel
           assert.equal(execution.policy.model.startsWith('aira-'), true);
         }
@@ -228,7 +235,7 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
         process.env.NVIDIA_API_KEY = 'nvapi-SECRET-KEY-12345';
 
         const router = new ModelRouter();
-        const execution = router.resolveExecution('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER');
+        const execution = router.resolveExecution('nvidia/nemotron-3.5-lightning-30b-a3b', 'ANSWER');
         const serialized = JSON.stringify(execution);
 
         assert.equal(serialized.includes('SECRET'), false, 'Serialized execution must never contain secret keys');
@@ -786,16 +793,16 @@ describe('MISSION: Model Provenance, Runtime Identity & Capability Accuracy', ()
         const router = new ModelRouter();
 
         // 1. Explicit Nemotron
-        const explicitNemotron = router.resolveExecution('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER');
+        const explicitNemotron = router.resolveExecution('nvidia/nemotron-3.5-lightning-30b-a3b', 'ANSWER');
         assert.equal(explicitNemotron.provider, 'nvidia');
-        assert.equal(explicitNemotron.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+        assert.equal(explicitNemotron.executedModel, 'nvidia/nemotron-3.5-lightning-30b-a3b');
         assert.equal(explicitNemotron.fallbackOccurred, false, 'Explicit Nemotron must NOT be labeled as fallback');
         assert.equal(explicitNemotron.fallbackReason, undefined, 'Explicit Nemotron has no fallback reason');
 
         // 2. Aira Auto
         const airaAuto = router.resolveExecution('aira-auto', 'ANSWER');
         assert.equal(airaAuto.provider, 'nvidia');
-        assert.equal(airaAuto.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+        assert.equal(airaAuto.executedModel, 'nvidia/nemotron-3.5-bolt-e4b');
         assert.equal(airaAuto.fallbackOccurred, true, 'Aira Auto routing to NVIDIA due to missing OpenAI/Anthropic must be labeled as fallback');
         assert.ok(airaAuto.fallbackReason, 'Aira Auto must provide documented fallback reason');
       } finally {

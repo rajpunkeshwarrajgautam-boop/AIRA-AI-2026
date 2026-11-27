@@ -13,13 +13,15 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import type { Message, Artifact } from '../types';
+import type { Message, Artifact, GenUISurface, GenUIStateRecord } from '../types';
+import type { GenUIInteractionEvent } from '../../packages/contracts/src/genui';
 import { AVAILABLE_MODELS } from '../utils/constants';
 import { AiraMark } from './AiraMark';
 import { renderMarkdownToHtml } from '../utils/markdown';
 import { copyMessageAsRichText } from '../utils/richClipboard';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ArtifactCard } from './ArtifactCard';
+import { GenUISurfaceRenderer } from './genui/GenUISurfaceRenderer';
 import { extractArtifactsFromText } from '../utils/artifactParser';
 
 interface ChatMessageProps {
@@ -27,6 +29,10 @@ interface ChatMessageProps {
   userName: string;
   showAgentTimeline?: boolean;
   onOpenArtifact: (artifact: Artifact) => void;
+  onOpenArtifactById?: (artifactId: string) => void;
+  onGenUIStateChange?: (messageId: string, surfaceId: string, nextState: GenUIStateRecord) => void;
+  onGenUIAction?: (event: GenUIInteractionEvent, surface: GenUISurface) => void | Promise<void>;
+  onResolveGenUIApproval?: (approvalId: string, runId: string, decision: 'ALLOW_ONCE' | 'ALLOW_SESSION' | 'REJECT') => void;
   onRetry?: () => void;
   onSwitchToAgentAndReview?: (prompt: string) => void;
   onConfirmAutomation?: (proposal: any) => void;
@@ -106,6 +112,10 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
   userName,
   showAgentTimeline = false,
   onOpenArtifact,
+  onOpenArtifactById,
+  onGenUIStateChange,
+  onGenUIAction,
+  onResolveGenUIApproval,
   onRetry,
   onSwitchToAgentAndReview,
   onConfirmAutomation,
@@ -320,6 +330,28 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
                   />
                 ))}
               </motion.div>
+            )}
+
+            {message.genuiSurfaces && message.genuiSurfaces.length > 0 && (
+              <div className="space-y-2 pt-2" data-testid="message-genui-surfaces">
+                {message.genuiSurfaces.map(surface => (
+                  <GenUISurfaceRenderer
+                    key={surface.surfaceId}
+                    surface={surface}
+                    initialStateOverride={message.genuiSurfaceState?.[surface.surfaceId]}
+                    onStateChange={(surfaceId, nextState) =>
+                      onGenUIStateChange?.(message.id, surfaceId, nextState)
+                    }
+                    onAction={onGenUIAction}
+                    onOpenArtifact={artifactId => {
+                      const local = renderedArtifacts.find(a => a.id === artifactId);
+                      if (local) onOpenArtifact(local);
+                      else onOpenArtifactById?.(artifactId);
+                    }}
+                    onResolveApproval={onResolveGenUIApproval}
+                  />
+                ))}
+              </div>
             )}
 
             {message.builderHandoff && (

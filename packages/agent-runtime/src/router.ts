@@ -8,6 +8,7 @@ import { ModelRouter } from '../../model-router/src/index.js';
 import { CapabilityRegistry } from './registry.js';
 import { SemanticReasoner, evaluateFreshness } from './behavioral/semantic-reasoner.js';
 import { PresentationRouter } from './presentation-router.js';
+import { detectDeterministicCalculatorIntent } from './genui-streaming.js';
 
 export interface RoutingInput {
   prompt: string;
@@ -47,15 +48,26 @@ export class ServerIntentRouter {
       (input.context?.conversationHistory as any) ||
       [];
 
+    const finalize = (decision: Partial<RoutingDecision>) =>
+      this.finalizeDecisionWithPresentation(decision, policyApprovalMandatory, rawPrompt, history);
+
+    if (!policyApprovalMandatory && detectDeterministicCalculatorIntent(rawPrompt) !== null) {
+      return finalize({
+        intent: 'ANSWER',
+        confidence: 0.96,
+        reason: 'Deterministic interactive calculator intent routed locally without web search',
+        executionTarget: 'CHAT_STREAM',
+        sideEffectLevel: 'NONE',
+        approvalRequired: false,
+      });
+    }
+
     const semanticAnalysis = await this.reasoner.analyze({
       prompt: rawPrompt,
       conversationHistory: history,
       advisoryIntent: input.advisoryIntent,
       sideEffectLevel
     });
-
-    const finalize = (decision: Partial<RoutingDecision>) =>
-      this.finalizeDecisionWithPresentation(decision, policyApprovalMandatory, rawPrompt, history);
 
     if (semanticAnalysis.confidence >= 0.85) {
       const intentSideEffect: SideEffectLevel =

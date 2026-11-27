@@ -70,16 +70,16 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     description: 'Deep architectural synthesis and multi-step reasoning powered by Groq reasoning_effort (openai/gpt-oss-120b) with Gemini 3.5 Flash-Lite 1M context failover.',
     badge: 'Deep'
   },
-  'nvidia/llama-3.1-nemotron-70b-instruct': {
-    id: 'nvidia/llama-3.1-nemotron-70b-instruct',
-    displayName: 'Nemotron 70B',
+  'nvidia/nemotron-3.5-lightning-30b-a3b': {
+    id: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    displayName: 'Nemotron 3.5 Lightning',
     provider: 'nvidia',
-    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    upstreamModelId: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     minTier: 'plus',
     contextWindow: '128K tokens',
     supportsThinking: false,
     reasoningControl: 'output_cap_only',
-    description: 'Experimental NVIDIA NIM integration (subject to account-level function provisioning; automatic Groq/Gemini failover).',
+    description: 'Experimental NVIDIA NIM 30B MoE model (subject to account-level provisioning; automatic Groq/Gemini failover).',
     badge: 'NVIDIA (Exp)'
   },
   // Backward compatibility migration aliases for historical conversation sessions
@@ -98,11 +98,11 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     id: 'claude-3-5-sonnet',
     displayName: 'Aira Pro (Historical Alias)',
     provider: 'nvidia',
-    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    upstreamModelId: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     minTier: 'plus',
     contextWindow: '128K tokens',
     supportsThinking: false,
-    description: 'Historical migration alias mapping to AIRA Pro Nemotron 70B.',
+    description: 'Historical migration alias mapping to AIRA Pro Nemotron 3.5 Lightning.',
     badge: 'Quality'
   },
   'claude-3-5-haiku': {
@@ -120,7 +120,7 @@ export const VERIFIED_MODEL_REGISTRY: Record<string, ModelCapabilityDescriptor> 
     id: 'claude-3-opus',
     displayName: 'Aira Deep (Historical Alias)',
     provider: 'nvidia',
-    upstreamModelId: 'nvidia/llama-3.1-nemotron-70b-instruct',
+    upstreamModelId: 'nvidia/nemotron-3.5-super-vl-120b-a12b',
     minTier: 'pro',
     contextWindow: '128K tokens',
     supportsThinking: true,
@@ -143,7 +143,7 @@ export const VERIFIED_PLAN_MODEL_ALLOWLIST: Record<PlanTier, readonly string[]> 
     'claude-3-7-sonnet',
     'aira-pro',
     'claude-3-5-sonnet',
-    'nvidia/llama-3.1-nemotron-70b-instruct'
+    'nvidia/nemotron-3.5-lightning-30b-a3b'
   ],
   pro: [
     'aira-fast',
@@ -154,7 +154,7 @@ export const VERIFIED_PLAN_MODEL_ALLOWLIST: Record<PlanTier, readonly string[]> 
     'claude-3-5-sonnet',
     'aira-deep',
     'claude-3-opus',
-    'nvidia/llama-3.1-nemotron-70b-instruct'
+    'nvidia/nemotron-3.5-lightning-30b-a3b'
   ]
 };
 

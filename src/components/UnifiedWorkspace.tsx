@@ -756,11 +756,12 @@ export const UnifiedWorkspace: React.FC<UnifiedWorkspaceProps> = ({
                       key={`${artifact.id}-${selectedVersion}-${refreshKey}`}
                       title={artifact.title}
                       sandbox={sandboxAttributesForType(artifact.type)}
-                      srcDoc={
-                        isMultiFile && activeBundle
-                          ? generateMultiFileArtifactSandboxHtml(activeBundle, false, activeNonce)
-                          : generateArtifactSandboxHtml(artifact, currentContent, false, activeNonce)
-                      }
+                      srcDoc={(() => {
+                        const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+                        return isMultiFile && activeBundle
+                          ? generateMultiFileArtifactSandboxHtml(activeBundle, isDark, activeNonce)
+                          : generateArtifactSandboxHtml(artifact, currentContent, isDark, activeNonce);
+                      })()}
                       className="w-full h-full border-0"
                     />
                     )}

@@ -70,7 +70,7 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
     assert.ok(registryKeys.includes('aira-fast'));
     assert.ok(registryKeys.includes('aira-pro'));
     assert.ok(registryKeys.includes('aira-deep'));
-    assert.ok(registryKeys.includes('nvidia/llama-3.1-nemotron-70b-instruct'));
+    assert.ok(registryKeys.includes('nvidia/nemotron-3.5-lightning-30b-a3b'));
 
     assert.equal(VERIFIED_MODEL_REGISTRY['aira-auto'].provider, 'groq');
     assert.equal(VERIFIED_MODEL_REGISTRY['aira-auto'].upstreamModelId, 'openai/gpt-oss-120b');
@@ -113,14 +113,16 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
     assert.equal(normalizeModelIdentifier('claude-3-5-sonnet'), 'aira-pro');
     assert.equal(normalizeModelIdentifier('claude-3-5-haiku'), 'aira-fast');
     assert.equal(normalizeModelIdentifier('claude-3-opus'), 'aira-deep');
-    assert.equal(normalizeModelIdentifier('meta/llama-3.1-405b-instruct'), 'nvidia/llama-3.1-nemotron-70b-instruct');
-    assert.equal(normalizeModelIdentifier('nvidia/nemotron-3-super-120b-a12b'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+    assert.equal(normalizeModelIdentifier('meta/llama-3.1-405b-instruct'), 'nvidia/nemotron-3.5-lightning-30b-a3b');
+    assert.equal(normalizeModelIdentifier('nvidia/nemotron-3-super-120b-a12b'), 'nvidia/nemotron-3.5-lightning-30b-a3b');
+    assert.equal(normalizeModelIdentifier('nvidia/llama-3.1-nemotron-70b-instruct'), 'nvidia/nemotron-3.5-lightning-30b-a3b');
 
     assert.equal(normalizeStoredModelId('claude-3-7-sonnet'), 'aira-auto');
     assert.equal(normalizeStoredModelId('claude-3-5-sonnet'), 'aira-pro');
     assert.equal(normalizeStoredModelId('claude-3-5-haiku'), 'aira-fast');
     assert.equal(normalizeStoredModelId('claude-3-opus'), 'aira-deep');
-    assert.equal(normalizeStoredModelId('meta-llama/llama-3.1-405b-instruct'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+    assert.equal(normalizeStoredModelId('meta-llama/llama-3.1-405b-instruct'), 'nvidia/nemotron-3.5-lightning-30b-a3b');
+    assert.equal(normalizeStoredModelId('nvidia/llama-3.1-nemotron-70b-instruct'), 'nvidia/nemotron-3.5-lightning-30b-a3b');
     assert.equal(normalizeStoredModelId('unknown-model-xyz'), 'aira-auto');
     assert.equal(normalizeStoredModelId(null), 'aira-auto');
   });
@@ -311,9 +313,9 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
       assert.equal(deepExec.reasoningControl, 'effort_mapped');
 
       // Explicit NVIDIA model request routes to NVIDIA without fallback if NVIDIA is configured
-      const explicitNv = router.resolveExecution('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER', { callerTier: 'plus' });
+      const explicitNv = router.resolveExecution('nvidia/nemotron-3.5-lightning-30b-a3b', 'ANSWER', { callerTier: 'plus' });
       assert.equal(explicitNv.executedProvider, 'nvidia');
-      assert.equal(explicitNv.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(explicitNv.executedModel, 'nvidia/nemotron-3.5-lightning-30b-a3b');
       assert.equal(explicitNv.fallbackOccurred, false);
 
       // When Groq circuit breaker is OPEN, router skips straight to healthy fallback
@@ -324,7 +326,7 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
       assert.equal(healthRouter.healthTracker.getCircuitState('groq', 'openai/gpt-oss-120b'), 'OPEN');
       const deepDegraded = healthRouter.resolveExecution('aira-deep', 'RESEARCH', { callerTier: 'pro' });
       assert.equal(deepDegraded.executedProvider, 'nvidia');
-      assert.equal(deepDegraded.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(deepDegraded.executedModel, 'nvidia/nemotron-3.5-super-vl-120b-a12b');
       assert.equal(deepDegraded.fallbackOccurred, true);
 
       // Verify exact HTTP outbound payload for NVIDIA OpenAIAdapter:
@@ -337,17 +339,17 @@ test('Truthful Capabilities & Model Architecture Suite', async (t) => {
           body: JSON.parse(String(init?.body || '{}'))
         });
         return new Response(
-          'data: {"model":"nvidia/llama-3.1-nemotron-70b-instruct","choices":[{"delta":{"content":"Verified answer"}}]}\n\ndata: [DONE]\n\n',
+          'data: {"model":"nvidia/nemotron-3.5-lightning-30b-a3b","choices":[{"delta":{"content":"Verified answer"}}]}\n\ndata: [DONE]\n\n',
           { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
         );
       }) as typeof fetch;
 
-      const nvAdapter = new OpenAIAdapter('nv-key', 'https://integrate.api.nvidia.com/v1', 'nvidia/llama-3.1-nemotron-70b-instruct', 'nvidia');
+      const nvAdapter = new OpenAIAdapter('nv-key', 'https://integrate.api.nvidia.com/v1', 'nvidia/nemotron-3.5-lightning-30b-a3b', 'nvidia');
       await withInferencePrincipal('probe-nv', () =>
         nvAdapter.stream([{ role: 'user', content: 'Explain Raft consensus' }], deepExec.policy, () => {})
       );
       assert.equal(capturedBodies.length, 1);
-      assert.equal(capturedBodies[0].body.model, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(capturedBodies[0].body.model, 'nvidia/nemotron-3.5-super-vl-120b-a12b');
       assert.equal(capturedBodies[0].body.max_tokens, 3072, 'NVIDIA output cap honors calibrated reasoningBudget');
       assert.equal(Object.hasOwn(capturedBodies[0].body, 'thinkingBudget'), false, 'Must not send unsupported thinkingBudget to NIM');
       assert.equal(Object.hasOwn(capturedBodies[0].body, 'reasoning_budget'), false, 'Must not send unsupported reasoning_budget to NIM');

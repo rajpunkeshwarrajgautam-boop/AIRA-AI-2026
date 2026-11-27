@@ -42,6 +42,22 @@ import { buildDurableHistorySystemMessage } from './memory-policy.js';
 import { isRepositoryIntent, extractCalculatorExpression } from './intent-heuristics.js';
 export { isRepositoryIntent, extractCalculatorExpression } from './intent-heuristics.js';
 export { PresentationRouter, type PresentationMode, type PresentationDecision } from './presentation-router.js';
+export {
+  adaptAiraEventToAGUI,
+  GenUIStreamTagExtractor,
+  detectDeterministicCalculatorIntent,
+  extractCalculatorInitialState,
+  buildDeterministicCalculatorPromptSurface,
+  buildRuntimeExecutionGenUISurface,
+  buildGenUISystemInstruction,
+  authorizeGenUIActionServerSide,
+} from './genui-streaming.js';
+import {
+  GenUIStreamTagExtractor,
+  buildDeterministicCalculatorPromptSurface,
+  buildRuntimeExecutionGenUISurface,
+  buildGenUISystemInstruction,
+} from './genui-streaming.js';
 import { InstructionResolver } from './behavioral/instruction-resolver.js';
 import { AdaptiveSynthesizer } from './behavioral/adaptive-synthesizer.js';
 import { ToolRecoveryEngine } from './behavioral/tool-recovery-engine.js';
@@ -1595,10 +1611,71 @@ CAPABILITY & IDENTITY INVARIANTS:
         const topic = run.routingDecision?.metadata?.topic;
         messages.push({ role: 'system', content: buildResearchEvidenceContext(liveEvidence, topic) });
       }
+      const presentationMode = String(run.routingDecision?.metadata?.presentationMode || 'plain_text');
+      const calcSurface = buildDeterministicCalculatorPromptSurface(run.prompt || '', runId);
+      const isMockModel = run.modelPolicy?.model === 'mock-deterministic';
+      if (!calcSurface && !guardedSearchSynthesis && !isMockModel && ['table', 'native_visualization', 'declarative_interactive'].includes(presentationMode)) {
+        messages.push({
+          role: 'system',
+          content: buildGenUISystemInstruction(presentationMode),
+        });
+      }
+
       const adapter = this.modelRouter.getAdapter(run.modelPolicy);
       // Research text must be screened before it is exposed to the UI.
       // A model emitting repeated JSON search arguments is NOT executing tools.
       let researchDraft = '';
+      let genuiEmittedCount = 0;
+      let genuiSequence = 1;
+      const emitGenUISurface = async (surface: any) => {
+        genuiEmittedCount += 1;
+        await this.emitRunEvent(runId, 'genui.surface.created', {
+          surfaceId: surface.surfaceId,
+          sequence: genuiSequence++,
+          surface,
+        });
+        await this.emitRunEvent(runId, 'genui.surface.completed', {
+          surfaceId: surface.surfaceId,
+          sequence: genuiSequence++,
+        });
+      };
+
+      if (calcSurface) {
+        await emitGenUISurface(calcSurface);
+      }
+
+      if (
+        run.intent === 'AGENT_MISSION' ||
+        run.intent === 'WORKFLOW' ||
+        run.toolCalls.length > 0 ||
+        Boolean(run.pendingApproval)
+      ) {
+        const execSurface = buildRuntimeExecutionGenUISurface({
+          runId,
+          title: run.prompt.slice(0, 120) || 'Agent Execution',
+          status: run.state === 'WAITING_FOR_APPROVAL' ? 'WAITING_FOR_APPROVAL' : 'RUNNING',
+          intent: run.intent,
+          modelLabel: run.provenance?.executedModel || run.modelPolicy?.model,
+          toolCalls: run.toolCalls.map((tc, i) => ({
+            toolName: tc.name,
+            status: run.toolResults[i]?.isError ? 'FAILED' : run.toolResults[i] ? 'COMPLETED' : 'RUNNING',
+            durationMs: run.toolResults[i]?.durationMs,
+          })),
+          pendingApproval: run.pendingApproval
+            ? {
+                approvalId: run.pendingApproval.id,
+                runId,
+                toolName: run.pendingApproval.toolCall?.name || 'tool',
+                risk: run.pendingApproval.risk,
+                reason: run.pendingApproval.reason,
+                decision: run.pendingApproval.decision || 'PENDING',
+              }
+            : undefined,
+        });
+        await emitGenUISurface(execSurface);
+      }
+
+      const genuiExtractor = new GenUIStreamTagExtractor();
 
       // Stream individual deltas immediately, but persist a bounded batch instead of
       // performing two database round-trips for every model token.
@@ -1682,10 +1759,29 @@ CAPABILITY & IDENTITY INVARIANTS:
               if (guardedSearchSynthesis) {
                 researchDraft += delta.text;
               } else {
-                run.content += delta.text;
-                pendingContent += delta.text;
-                pendingDeltas++;
-                broadcastDelta('content.delta', delta.text);
+                const extracted = genuiExtractor.pushChunk(delta.text);
+                if (extracted.visibleText) {
+                  run.content += extracted.visibleText;
+                  pendingContent += extracted.visibleText;
+                  pendingDeltas++;
+                  broadcastDelta('content.delta', extracted.visibleText);
+                }
+                for (const s of extracted.surfaces) {
+                  if (s.ok) {
+                    await emitGenUISurface({
+                      ...s.surface,
+                      modelId: run.provenance?.executedModel || run.modelPolicy?.model,
+                      presentationMode,
+                      generatedAt: Date.now(),
+                    });
+                  } else {
+                    await this.emitRunEvent(runId, 'genui.surface.error', {
+                      surfaceId: `surf_err_${runId}_${genuiSequence}`,
+                      sequence: genuiSequence++,
+                      error: s.error,
+                    });
+                  }
+                }
               }
             }
             if (!isFlushing && pendingDeltas >= 100 && (Date.now() - lastPersistedAt >= 3000)) {
@@ -1761,13 +1857,47 @@ CAPABILITY & IDENTITY INVARIANTS:
         return;
       }
 
+      if (!guardedSearchSynthesis) {
+        const flushedGenUI = genuiExtractor.flush();
+        if (flushedGenUI.visibleText) {
+          run.content += flushedGenUI.visibleText;
+          await this.saveRun(run);
+          broadcastDelta('content.delta', flushedGenUI.visibleText);
+        }
+        for (const s of flushedGenUI.surfaces) {
+          if (s.ok) {
+            await emitGenUISurface({
+              ...s.surface,
+              modelId: run.provenance?.executedModel || run.modelPolicy?.model,
+              presentationMode,
+              generatedAt: Date.now(),
+            });
+          } else {
+            await this.emitRunEvent(runId, 'genui.surface.error', {
+              surfaceId: `surf_err_${runId}_${genuiSequence}`,
+              sequence: genuiSequence++,
+              error: s.error,
+            });
+          }
+        }
+      }
+
       if (!guardedSearchSynthesis && !run.content.trim()) {
         const finalText = typeof completionResult?.text === 'string' ? completionResult.text : '';
         if (finalText.trim().length > 0) {
-          run.content = finalText;
-          await this.saveRun(run);
-          await this.emitRunEvent(runId, 'content.delta', { delta: finalText });
-        } else if ((run.artifacts?.length ?? 0) === 0) {
+          const singlePass = new GenUIStreamTagExtractor();
+          const c1 = singlePass.pushChunk(finalText);
+          const c2 = singlePass.flush();
+          const visible = (c1.visibleText + c2.visibleText).trim();
+          for (const s of [...c1.surfaces, ...c2.surfaces]) {
+            if (s.ok) await emitGenUISurface(s.surface);
+          }
+          if (visible) {
+            run.content = visible;
+            await this.saveRun(run);
+            await this.emitRunEvent(runId, 'content.delta', { delta: visible });
+          }
+        } else if ((run.artifacts?.length ?? 0) === 0 && genuiEmittedCount === 0) {
           await this.transitionRunState(
             runId,
             'FAILED',

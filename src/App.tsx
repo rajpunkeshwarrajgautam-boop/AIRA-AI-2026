@@ -1,6 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { PanelLeft, Layers, Bookmark, Share2, Check, FolderGit2, Bot, MessageSquareText } from 'lucide-react';
-import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode } from './types';
+import type { Conversation, Message, Artifact, Attachment, Project, AppSettings, WorkspaceMode, GenUISurface, GenUIStateRecord } from './types';
+import {
+  applyGenUILifecycleEventToMap,
+  type GenUIInteractionEvent,
+  type GenUISurfaceEntry,
+} from '../packages/contracts/src/genui';
 import {
   loadConversations, saveConversations, saveActiveChatId,
   getSessionActiveChatId, setSessionActiveChatId,
@@ -1437,6 +1442,8 @@ useEffect(() => {
     }
     const requestEpoch = authEpochRef.current;
     const requestOwnerId = currentUserId;
+    let streamRunId: string | undefined;
+    let genuiSurfaceMap = new Map<string, GenUISurfaceEntry>();
     const isSameRequestIdentity = () => (
       authEpochRef.current === requestEpoch &&
       activeUserIdRef.current === requestOwnerId
@@ -1558,7 +1565,31 @@ useEffect(() => {
           },
           onRunStarted: runId => {
             if (!isSameRequestIdentity()) return;
+            streamRunId = runId;
             activeRunIdRef.current = runId;
+          },
+          onRoutingDecision: decision => {
+            if (!isSameRequestIdentity()) return;
+            const mode = decision?.metadata?.presentationMode;
+            if (typeof mode === 'string') {
+              updateConversation(id, c => ({
+                ...c,
+                messages: c.messages.map(m =>
+                  m.id === assistantId ? { ...m, routingPresentationMode: mode } : m
+                ),
+              }));
+            }
+          },
+          onGenUIEvent: genuiEvt => {
+            if (!isSameRequestIdentity()) return;
+            genuiSurfaceMap = applyGenUILifecycleEventToMap(genuiSurfaceMap, genuiEvt, streamRunId);
+            const surfaces = Array.from(genuiSurfaceMap.values()).map(entry => entry.surface);
+            updateConversation(id, c => ({
+              ...c,
+              messages: c.messages.map(m =>
+                m.id === assistantId ? { ...m, genuiSurfaces: surfaces } : m
+              ),
+            }));
           },
           onSourceAdded: source => {
             if (!isSameRequestIdentity()) return;
@@ -1922,6 +1953,64 @@ useEffect(() => {
                       setActiveArtifact(artifact);
                       setIsStudioOpen(true);
                       userDismissedStudioRef.current = false;
+                    }}
+                    onOpenArtifactById={artifactId => {
+                      const found = conversationArtifacts.find(a => a.id === artifactId);
+                      if (found) {
+                        setActiveArtifact(found);
+                        setIsStudioOpen(true);
+                        userDismissedStudioRef.current = false;
+                      }
+                    }}
+                    onGenUIStateChange={(messageId, surfaceId, nextState) => {
+                      updateConversation(activeConversation.id, c => ({
+                        ...c,
+                        messages: c.messages.map(m =>
+                          m.id === messageId
+                            ? {
+                                ...m,
+                                genuiSurfaceState: {
+                                  ...(m.genuiSurfaceState || {}),
+                                  [surfaceId]: nextState,
+                                },
+                              }
+                            : m
+                        ),
+                      }));
+                    }}
+                    onGenUIAction={async (event, surface) => {
+                      if (event.kind === 'attach_followup') {
+                        if (currentUserId && !currentUserId.startsWith('guest:')) {
+                          const resp = await authenticatedApiFetch('/api/genui/actions', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(event),
+                          });
+                          if (!resp.ok) {
+                            const errBody = await resp.json().catch(() => ({}));
+                            throw new Error(errBody.error || 'GenUI action rejected by server.');
+                          }
+                        }
+                        const inputEntries = Object.entries(event.stateSnapshot || {})
+                          .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+                          .join(', ');
+                        const followupPrompt = `Using updated parameters (${inputEntries}) for "${surface.title || surface.surfaceId}", analyze the scenario and explain key takeaways.`;
+                        await handleSendMessage(followupPrompt, []);
+                      }
+                    }}
+                    onResolveGenUIApproval={async (approvalId, runId, decision) => {
+                      if (approvalSubmissionRef.current) return;
+                      approvalSubmissionRef.current = true;
+                      setIsSubmittingApproval(true);
+                      try {
+                        await dispatchRunApproval(runId, approvalId, decision === 'REJECT' ? 'REJECT' : 'APPROVE');
+                        showToast(decision === 'REJECT' ? 'Action rejected.' : 'Action approved. Resuming execution...');
+                      } catch (err: any) {
+                        showToast(`Approval error: ${err?.message || 'failed'}`);
+                      } finally {
+                        approvalSubmissionRef.current = false;
+                        setIsSubmittingApproval(false);
+                      }
                     }}
                     onSwitchToAgentAndReview={handleSwitchToAgentAndReview}
                     onConfirmAutomation={handleConfirmAutomation}

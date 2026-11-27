@@ -18,7 +18,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
     const primaryNvidia = new OpenAIAdapter(
       'nvapi-test-key',
       'https://integrate.api.nvidia.com/v1',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
       'nvidia'
     );
     const fallbackGroq = new OpenAIAdapter(
@@ -67,7 +67,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       });
 
       const policy: ModelPolicy = ModelPolicySchema.parse({
-        model: 'nvidia/llama-3.1-nemotron-70b-instruct',
+        model: 'nvidia/nemotron-3.5-lightning-30b-a3b',
         temperature: 0.7,
         maxTokens: 512
       });
@@ -86,14 +86,14 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       
       const nvidiaReq = interceptedRequests.find(r => r.url.includes('integrate.api.nvidia.com'));
       assert.ok(nvidiaReq, 'NVIDIA endpoint must have been called');
-      assert.equal(nvidiaReq.body.model, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(nvidiaReq.body.model, 'nvidia/nemotron-3.5-lightning-30b-a3b');
 
       const groqReq = interceptedRequests.find(r => r.url.includes('api.groq.com'));
       assert.ok(groqReq, 'Groq endpoint must have been called');
       assert.equal(groqReq.body.model, 'openai/gpt-oss-120b', 'Groq must receive its own model identifier');
       assert.notEqual(
         groqReq.body.model,
-        'nvidia/llama-3.1-nemotron-70b-instruct',
+        'nvidia/nemotron-3.5-lightning-30b-a3b',
         'CRITICAL DEFECT PREVENTION: Groq must NEVER receive the raw NVIDIA model identifier'
       );
 
@@ -113,7 +113,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
     const primaryNvidia = new OpenAIAdapter(
       'nvapi-test-key',
       'https://integrate.api.nvidia.com/v1',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
       'nvidia'
     );
     const fallbackGroq = new OpenAIAdapter(
@@ -161,7 +161,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       });
 
       const policy: ModelPolicy = ModelPolicySchema.parse({
-        model: 'nvidia/llama-3.1-nemotron-70b-instruct',
+        model: 'nvidia/nemotron-3.5-lightning-30b-a3b',
         temperature: 0.5,
         maxTokens: 256
       });
@@ -191,7 +191,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
     const primaryNvidia = new OpenAIAdapter(
       'nvapi-test-key',
       'https://integrate.api.nvidia.com/v1',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
       'nvidia'
     );
     const fallbackGroq = new OpenAIAdapter(
@@ -253,7 +253,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       });
 
       const policy: ModelPolicy = ModelPolicySchema.parse({
-        model: 'nvidia/llama-3.1-nemotron-70b-instruct',
+        model: 'nvidia/nemotron-3.5-lightning-30b-a3b',
         temperature: 0.7,
         maxTokens: 512
       });
@@ -286,7 +286,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
     const nvidiaAdapter = new OpenAIAdapter(
       'nvapi-test-key',
       'https://integrate.api.nvidia.com/v1',
-      'nvidia/llama-3.1-nemotron-70b-instruct',
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
       'nvidia'
     );
 
@@ -323,7 +323,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       assert.equal(interceptedRequests.length, 1);
       assert.equal(
         interceptedRequests[0].body.model,
-        'nvidia/llama-3.1-nemotron-70b-instruct',
+        'nvidia/nemotron-3.5-lightning-30b-a3b',
         'NVIDIA adapter must sanitize foreign model and use its own canonical model'
       );
     } finally {
@@ -344,17 +344,17 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       const router = new ModelRouter();
 
       // Explicit NVIDIA model
-      const exec = router.resolveExecution('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER');
+      const exec = router.resolveExecution('nvidia/nemotron-3.5-lightning-30b-a3b', 'ANSWER');
       assert.equal(exec.provider, 'nvidia');
-      assert.equal(exec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(exec.executedModel, 'nvidia/nemotron-3.5-lightning-30b-a3b');
       assert.ok(exec.adapter instanceof ResilientModelAdapter, 'Should wire ResilientModelAdapter when fallback providers exist');
 
       // Legacy retired model mapping
       const legacyExec = router.resolveExecution('nvidia/nemotron-3-super-120b-a12b', 'ANSWER');
       assert.equal(legacyExec.provider, 'nvidia');
-      assert.equal(legacyExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct', 'Legacy 120B must route to active 70B');
+      assert.equal(legacyExec.executedModel, 'nvidia/nemotron-3.5-lightning-30b-a3b', 'Legacy 120B must route to active Nemotron 3.5 Lightning');
       assert.equal(legacyExec.fallbackOccurred, true);
-      assert.ok(legacyExec.fallbackReason?.includes('migrated to NVIDIA Nemotron 70B'));
+      assert.ok(legacyExec.fallbackReason?.includes('migrated to'));
     } finally {
       process.env = savedEnv;
     }
@@ -366,10 +366,10 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       // 1. Explicit model selection MUST be preserved even when NVIDIA_DEFAULT_MODEL is configured
       process.env.NVIDIA_DEFAULT_MODEL = 'nv-mistralai/mistral-nemo-12b-instruct';
       
-      const explicitNemotron = resolveNvidiaModel('nvidia/llama-3.1-nemotron-70b-instruct');
+      const explicitNemotron = resolveNvidiaModel('nvidia/nemotron-3.5-lightning-30b-a3b');
       assert.equal(
         explicitNemotron,
-        'nvidia/llama-3.1-nemotron-70b-instruct',
+        'nvidia/nemotron-3.5-lightning-30b-a3b',
         'Explicitly selected supported model MUST NOT be overridden by NVIDIA_DEFAULT_MODEL'
       );
 
@@ -393,17 +393,22 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
         'Deprecated Nemotron 120B migrates to NVIDIA_DEFAULT_MODEL when configured'
       );
 
-      // When NVIDIA_DEFAULT_MODEL is absent, legacy retired models migrate to canonical active 70B
+      // When NVIDIA_DEFAULT_MODEL is absent, legacy retired models migrate to canonical active Nemotron 3.5 Lightning
       delete process.env.NVIDIA_DEFAULT_MODEL;
       assert.equal(
         resolveNvidiaModel('meta/llama-3.1-405b-instruct'),
-        'nvidia/llama-3.1-nemotron-70b-instruct',
-        'Legacy Llama 405B migrates to active 70B default when NVIDIA_DEFAULT_MODEL is absent'
+        'nvidia/nemotron-3.5-lightning-30b-a3b',
+        'Legacy Llama 405B migrates to active Lightning default when NVIDIA_DEFAULT_MODEL is absent'
       );
       assert.equal(
         resolveNvidiaModel('nvidia/nemotron-3-super-120b-a12b'),
-        'nvidia/llama-3.1-nemotron-70b-instruct',
-        'Deprecated Nemotron 120B migrates to active 70B default when NVIDIA_DEFAULT_MODEL is absent'
+        'nvidia/nemotron-3.5-lightning-30b-a3b',
+        'Deprecated Nemotron 120B migrates to active Lightning default when NVIDIA_DEFAULT_MODEL is absent'
+      );
+      assert.equal(
+        resolveNvidiaModel('nvidia/llama-3.1-nemotron-70b-instruct'),
+        'nvidia/nemotron-3.5-lightning-30b-a3b',
+        'Retired Nemotron 70B migrates to active Lightning default'
       );
 
       // 3. Environment-default resolution for internal modes
@@ -411,10 +416,10 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
       delete process.env.NVIDIA_DEEP_MODEL;
       delete process.env.NVIDIA_DEFAULT_MODEL;
 
-      assert.equal(resolveNvidiaModel('aira-auto'), 'nvidia/llama-3.1-nemotron-70b-instruct');
-      assert.equal(resolveNvidiaModel('aira-pro'), 'nvidia/llama-3.1-nemotron-70b-instruct');
-      assert.equal(resolveNvidiaModel('aira-fast'), 'nvidia/llama-3.1-nemotron-70b-instruct');
-      assert.equal(resolveNvidiaModel('aira-deep'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(resolveNvidiaModel('aira-auto'), 'nvidia/nemotron-3.5-lightning-30b-a3b');
+      assert.equal(resolveNvidiaModel('aira-pro'), 'nvidia/nemotron-3.5-lightning-30b-a3b');
+      assert.equal(resolveNvidiaModel('aira-fast'), 'nvidia/nemotron-3.5-bolt-e4b');
+      assert.equal(resolveNvidiaModel('aira-deep'), 'nvidia/nemotron-3.5-super-vl-120b-a12b');
 
       // Environment overrides for dedicated fast / deep modes
       process.env.NVIDIA_FAST_MODEL = 'nvidia/llama-3.1-nemotron-51b-instruct';
@@ -424,7 +429,7 @@ describe('NVIDIA -> Groq -> Gemini Cross-Provider Fallback & Model Isolation Sui
 
       // Unmapped / unrecognized string falls back to default
       delete process.env.NVIDIA_DEFAULT_MODEL;
-      assert.equal(resolveNvidiaModel('unknown-model-xyz'), 'nvidia/llama-3.1-nemotron-70b-instruct');
+      assert.equal(resolveNvidiaModel('unknown-model-xyz'), 'nvidia/nemotron-3.5-lightning-30b-a3b');
       process.env.NVIDIA_DEFAULT_MODEL = 'nvidia/custom-fleet-model';
       assert.equal(resolveNvidiaModel('unknown-model-xyz'), 'nvidia/custom-fleet-model');
     } finally {

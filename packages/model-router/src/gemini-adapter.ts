@@ -53,6 +53,7 @@ export interface GeminiRequestPayload {
     temperature?: number;
     maxOutputTokens?: number;
     topP?: number;
+    responseMimeType?: string;
     thinkingConfig?: {
       thinkingBudget: number;
       includeThoughts?: boolean;
@@ -118,6 +119,7 @@ export class GeminiAdapter implements ModelAdapter {
       reasoningBudget?: number;
       tools?: ModelPolicy['tools'];
       toolChoice?: ModelPolicy['toolChoice'];
+      responseFormat?: ModelPolicy['responseFormat'];
     }
   ): GeminiRequestPayload {
     const rawContents: GeminiContent[] = [];
@@ -203,7 +205,8 @@ export class GeminiAdapter implements ModelAdapter {
       contents: mergedContents,
       generationConfig: {
         temperature: policy.temperature ?? 0.7,
-        maxOutputTokens: policy.maxTokens ?? 2048
+        maxOutputTokens: policy.maxTokens ?? 2048,
+        ...(policy.responseFormat ? { responseMimeType: 'application/json' } : {})
       },
       safetySettings: [
         { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },

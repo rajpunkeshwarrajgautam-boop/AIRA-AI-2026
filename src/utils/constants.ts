@@ -24,10 +24,10 @@ export const AVAILABLE_MODELS: ModelInfo[] = [
     contextWindow: '128K tokens',
   },
   {
-    id: 'nvidia/llama-3.1-nemotron-70b-instruct',
-    name: 'Nemotron 70B',
+    id: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+    name: 'Nemotron 3.5 Lightning',
     badge: 'NVIDIA (Exp)',
-    description: 'Experimental NVIDIA NIM 70B model with RLHF alignment (subject to account-level provisioning; automatic failover to Groq/Gemini).',
+    description: 'Experimental NVIDIA NIM 30B MoE model (subject to account-level provisioning; automatic failover to Groq/Gemini).',
     supportsThinking: false,
     contextWindow: '128K tokens',
   },
@@ -85,9 +85,10 @@ export function normalizeCanonicalModelId(model: unknown): AppSettings['activeMo
   if (
     model === 'meta/llama-3.1-405b-instruct' ||
     model === 'meta-llama/llama-3.1-405b-instruct' ||
-    model === 'nvidia/nemotron-3-super-120b-a12b'
+    model === 'nvidia/nemotron-3-super-120b-a12b' ||
+    model === 'nvidia/llama-3.1-nemotron-70b-instruct'
   ) {
-    migrated = 'nvidia/llama-3.1-nemotron-70b-instruct';
+    migrated = 'nvidia/nemotron-3.5-lightning-30b-a3b';
   } else if (model === 'claude-3-7-sonnet') {
     migrated = 'aira-auto';
   } else if (model === 'claude-3-5-sonnet') {

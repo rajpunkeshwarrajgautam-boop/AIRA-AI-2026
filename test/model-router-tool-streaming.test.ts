@@ -391,11 +391,11 @@ describe('ModelRouter Normalized Tool-Call Streaming (Phase 0 TDD)', () => {
   });
 
   it('12. degrades gracefully when provider ignores tools (unsupported tool calling) or emits mixed text + tool_calls', async () => {
-    const adapter = new OpenAIAdapter('sk-test', 'https://integrate.api.nvidia.com/v1', 'nvidia/llama-3.1-nemotron-70b-instruct', 'nvidia');
+    const adapter = new OpenAIAdapter('sk-test', 'https://integrate.api.nvidia.com/v1', 'nvidia/nemotron-3.5-lightning-30b-a3b', 'nvidia');
     const deltas: ModelStreamDelta[] = [];
 
     const plainFallback = await withMockedFetch(async () => createSseResponse([
-      'data: {"model":"nvidia/llama-3.1-nemotron-70b-instruct","choices":[{"delta":{"content":"Unable to call tools directly; answer in text."},"finish_reason":"stop"}]}\n\n',
+      'data: {"model":"nvidia/nemotron-3.5-lightning-30b-a3b","choices":[{"delta":{"content":"Unable to call tools directly; answer in text."},"finish_reason":"stop"}]}\n\n',
       'data: [DONE]\n\n',
     ]), () => adapter.stream([{ role: 'user', content: 'Weather?' }], basePolicy, d => deltas.push(d)));
 

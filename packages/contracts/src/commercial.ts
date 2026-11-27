@@ -335,8 +335,9 @@ const CANONICAL_MODEL_ALIASES: Record<string, string> = {
   'claude-3-5-sonnet': 'aira-pro',
   'claude-3-5-haiku': 'aira-fast',
   'claude-3-opus': 'aira-deep',
-  'meta/llama-3.1-405b-instruct': 'nvidia/llama-3.1-nemotron-70b-instruct',
-  'nvidia/nemotron-3-super-120b-a12b': 'nvidia/llama-3.1-nemotron-70b-instruct'
+  'meta/llama-3.1-405b-instruct': 'nvidia/nemotron-3.5-lightning-30b-a3b',
+  'nvidia/nemotron-3-super-120b-a12b': 'nvidia/nemotron-3.5-lightning-30b-a3b',
+  'nvidia/llama-3.1-nemotron-70b-instruct': 'nvidia/nemotron-3.5-lightning-30b-a3b'
 };
 
 export function isModelAllowedForTier(model: string, tier: PlanTier): boolean {

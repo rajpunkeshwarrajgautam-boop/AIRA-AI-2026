@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { IntentTaxonomy, ModelPolicy } from '../../contracts/src/index.js';
 import type { ModelAdapter } from '../../model-router/src/index.js';
+import { detectDeterministicCalculatorIntent } from './genui-streaming.js';
 
 export const PRESENTATION_MODES = [
   'plain_text',
@@ -119,6 +120,24 @@ export function approachForMode(mode: PresentationMode): PresentationApproach {
   }
 }
 
+const PRESENTATION_JSON_SCHEMA = {
+  type: 'json_schema' as const,
+  json_schema: {
+    name: 'presentation_choice',
+    strict: true,
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['mode', 'confidence', 'reason'],
+      properties: {
+        mode: { type: 'string', enum: [...PRESENTATION_MODES] },
+        confidence: { type: 'number' },
+        reason: { type: 'string' },
+      },
+    },
+  },
+};
+
 const PRESENTATION_SYSTEM_PROMPT =
   'You are AIRA PresentationRouter. Choose the best single UI presentation mode for a user prompt. ' +
   'Return strictly valid JSON: {"mode": one of ["plain_text","structured_explanation","table","native_visualization","declarative_interactive","sandboxed_app","editable_artifact","agent_workspace_view"], "confidence": 0.0-1.0, "reason": "<under 180 chars>"}.';
@@ -139,7 +158,7 @@ export class PresentationRouter {
     private readonly modelRouter?: PresentationRouterModelProvider,
     options: PresentationRouterOptions = {}
   ) {
-    this.modelTimeoutMs = options.modelTimeoutMs ?? 1200;
+    this.modelTimeoutMs = options.modelTimeoutMs ?? 2500;
     // Reference Groq/Flash-Lite tier cost baseline ($0.15/1M in, $0.60/1M out)
     this.inputCostPerMillionUsd = options.inputCostPerMillionUsd ?? 0.15;
     this.outputCostPerMillionUsd = options.outputCostPerMillionUsd ?? 0.60;
@@ -157,6 +176,22 @@ export class PresentationRouter {
         source: 'deterministic',
         confidence: 1,
         reason: 'Caller explicitly requested presentation mode.',
+        degradedToFallback: false,
+        invalidStructuredOutput: false,
+        latencyMs: Math.round((performance.now() - startNs) * 100) / 100,
+        usage: zeroUsage,
+        estimatedCostUsd: 0,
+      };
+    }
+
+    const calcKind = detectDeterministicCalculatorIntent(rawPrompt);
+    if (calcKind) {
+      return {
+        mode: 'declarative_interactive',
+        approach: approachForMode('declarative_interactive'),
+        source: 'deterministic',
+        confidence: 0.96,
+        reason: `Deterministic interactive calculator (${calcKind}) matched.`,
         degradedToFallback: false,
         invalidStructuredOutput: false,
         latencyMs: Math.round((performance.now() - startNs) * 100) / 100,
@@ -347,9 +382,11 @@ export class PresentationRouter {
       const policy: ModelPolicy = {
         ...basePolicy,
         temperature: 0,
-        maxTokens: Math.min(basePolicy.maxTokens || 220, 220),
+        maxTokens: Math.min(basePolicy.maxTokens || 160, 160),
         extendedThinking: false,
+        disableThinking: true,
         timeoutMs: this.modelTimeoutMs,
+        responseFormat: PRESENTATION_JSON_SCHEMA,
       };
       const adapter = this.modelRouter!.getAdapter(policy);
       const controller = new AbortController();

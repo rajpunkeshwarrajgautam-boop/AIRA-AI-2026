@@ -293,19 +293,51 @@ export function resolveOpenAIModel(model: ModelId | string): string {
   }
 }
 
+export const ACTIVE_NVIDIA_DEFAULT_MODEL = 'nvidia/nemotron-3.5-lightning-30b-a3b';
+export const ACTIVE_NVIDIA_FAST_MODEL = 'nvidia/nemotron-3.5-bolt-e4b';
+export const ACTIVE_NVIDIA_DEEP_MODEL = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
+
+export const RETIRED_NVIDIA_MODELS: ReadonlySet<string> = new Set([
+  'nvidia/llama-3.1-nemotron-70b-instruct',
+  'meta/llama-3.1-405b-instruct',
+  'meta-llama/llama-3.1-405b-instruct',
+  'nvidia/nemotron-3-super-120b-a12b',
+]);
+
+export function isRetiredNvidiaModel(model: unknown): boolean {
+  return typeof model === 'string' && RETIRED_NVIDIA_MODELS.has(model.trim().toLowerCase());
+}
+
+function nonRetiredNvidiaEnv(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || isRetiredNvidiaModel(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 export function resolveNvidiaModel(model: ModelId | string): string {
-  // Legacy / retired models migrate to the default active NVIDIA model
-  if (model === 'meta/llama-3.1-405b-instruct' || model === 'nvidia/nemotron-3-super-120b-a12b') {
-    return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
+  const safeDefault = nonRetiredNvidiaEnv(process.env.NVIDIA_DEFAULT_MODEL) || ACTIVE_NVIDIA_DEFAULT_MODEL;
+  // Legacy / retired models migrate to the default active non-retired NVIDIA model
+  if (isRetiredNvidiaModel(model)) {
+    return safeDefault;
   }
-  if (process.env.NVIDIA_FAST_MODEL && model === 'aira-fast') {
-    return process.env.NVIDIA_FAST_MODEL;
+  const fastOverride = nonRetiredNvidiaEnv(process.env.NVIDIA_FAST_MODEL);
+  if (fastOverride && model === 'aira-fast') {
+    return fastOverride;
   }
-  if (process.env.NVIDIA_DEEP_MODEL && model === 'aira-deep') {
-    return process.env.NVIDIA_DEEP_MODEL;
+  const deepOverride = nonRetiredNvidiaEnv(process.env.NVIDIA_DEEP_MODEL);
+  if (deepOverride && model === 'aira-deep') {
+    return deepOverride;
   }
-  if (model === 'aira-fast' || model === 'aira-deep' || model === 'aira-auto' || model === 'aira-pro') {
-    return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
+  if (model === 'aira-fast') {
+    return nonRetiredNvidiaEnv(process.env.NVIDIA_DEFAULT_MODEL) || ACTIVE_NVIDIA_FAST_MODEL;
+  }
+  if (model === 'aira-deep') {
+    return nonRetiredNvidiaEnv(process.env.NVIDIA_DEFAULT_MODEL) || ACTIVE_NVIDIA_DEEP_MODEL;
+  }
+  if (model === 'aira-auto' || model === 'aira-pro') {
+    return safeDefault;
   }
   // Explicitly selected supported NVIDIA models must be preserved and not overridden by NVIDIA_DEFAULT_MODEL
   if (typeof model === 'string' && (model.startsWith('nvidia/') || model.startsWith('meta/') || model.startsWith('nv-'))) {
@@ -314,7 +346,7 @@ export function resolveNvidiaModel(model: ModelId | string): string {
   if (typeof model === 'string' && model.startsWith('aira-')) {
     return model;
   }
-  return process.env.NVIDIA_DEFAULT_MODEL || 'nvidia/llama-3.1-nemotron-70b-instruct';
+  return safeDefault;
 }
 
 export class AnthropicAdapter implements ModelAdapter {
@@ -851,6 +883,17 @@ export class OpenAIAdapter implements ModelAdapter {
         : 'high';
     }
 
+    if (
+      this.provider === 'nvidia' &&
+      (policy.disableThinking || (policy.extendedThinking === false && outboundModel.includes('nemotron-3.5-')))
+    ) {
+      body.chat_template_kwargs = { enable_thinking: false };
+    }
+
+    if (policy.responseFormat) {
+      body.response_format = policy.responseFormat;
+    }
+
     if (stream) {
       body.stream = true;
       body.stream_options = { include_usage: true };
@@ -887,6 +930,16 @@ export class OpenAIAdapter implements ModelAdapter {
             await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
             continue;
           }
+          if (response.status === 410) {
+            const provider = this.provider === 'nvidia' ? 'NVIDIA NIM' : this.provider.toUpperCase();
+            const err410: any = new Error(
+              `${provider} returned 410 Gone for retired/deprecated model "${outboundModel}". Select an active supported model.`
+            );
+            err410.status = 410;
+            err410.statusCode = 410;
+            err410.nonRetryable = true;
+            throw err410;
+          }
           if (response.status === 404 && this.baseUrl.includes('integrate.api.nvidia.com')) {
             const err404: any = new Error(
               `NVIDIA NIM returned 404 for model "${policy.model}". ` +
@@ -895,12 +948,16 @@ export class OpenAIAdapter implements ModelAdapter {
             );
             err404.status = 404;
             err404.statusCode = 404;
+            err404.nonRetryable = true;
             throw err404;
           }
           const provider = this.provider === 'nvidia' ? 'NVIDIA NIM' : this.provider.toUpperCase();
           const apiErr: any = new Error(`${provider} API error (${response.status}): ${errText}`);
           apiErr.status = response.status;
           apiErr.statusCode = response.status;
+          if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+            apiErr.nonRetryable = true;
+          }
           throw apiErr;
         }
 
@@ -938,7 +995,11 @@ export class OpenAIAdapter implements ModelAdapter {
       } catch (err: any) {
         signal?.throwIfAborted();
         lastError = err;
-        if (attempt < maxRetries && (err.message.includes('500') || err.message.includes('429') || err.message.includes('fetch failed'))) {
+        const isPermanentHttp = Boolean(
+          err?.nonRetryable ||
+          (typeof err?.status === 'number' && err.status >= 400 && err.status < 500 && err.status !== 429)
+        );
+        if (!isPermanentHttp && attempt < maxRetries && (err.message.includes('500') || err.message.includes('429') || err.message.includes('fetch failed'))) {
           await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
           continue;
         }
@@ -1009,6 +1070,9 @@ export class OpenAIAdapter implements ModelAdapter {
         const streamErr: any = new Error(`${this.provider} streaming request failed (HTTP ${response.status})${detail}`);
         streamErr.status = response.status;
         streamErr.statusCode = response.status;
+        if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+          streamErr.nonRetryable = true;
+        }
         throw streamErr;
       }
       if (!response.body) throw new Error('Provider returned an empty streaming response body.');
@@ -1291,7 +1355,7 @@ export class ModelRouter {
         new OpenAIAdapter(
           process.env.NVIDIA_API_KEY,
           'https://integrate.api.nvidia.com/v1',
-          'nvidia/llama-3.1-nemotron-70b-instruct',
+          resolveNvidiaModel('aira-pro'),
           'nvidia'
         )
       );
@@ -1593,17 +1657,18 @@ export class ModelRouter {
         const hasFastProvider = configuredProviders.some(p => p !== 'nvidia' && p !== 'mock');
         if (!hasFastProvider && this.adapters.has('nvidia')) {
           const executedModel = resolveNvidiaModel(model);
-          const hasDedicated = Boolean(process.env.NVIDIA_FAST_MODEL?.trim());
+          const hasDedicated = Boolean(nonRetiredNvidiaEnv(process.env.NVIDIA_FAST_MODEL));
+          const adapter = this.createModelSpecificAdapter('nvidia', executedModel);
           return {
             policy,
-            adapter: this.adapters.get('nvidia')!,
+            adapter,
             provider: 'nvidia',
             requestedProvider: hasDedicated ? 'nvidia' : 'groq',
             executedProvider: 'nvidia',
             executedModel,
             plannedModel: executedModel,
             fallbackOccurred: !hasDedicated,
-            fallbackReason: !hasDedicated ? 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 70B reasoning model' : undefined,
+            fallbackReason: !hasDedicated ? `No dedicated fast provider configured; fell back to NVIDIA (${executedModel})` : undefined,
             verified: true,
             callerTier: options?.callerTier,
             entitlementClamped,
@@ -1772,9 +1837,9 @@ export class ModelRouter {
 
       if (selectedProvider === 'nvidia') {
         executedModel = resolveNvidiaModel(model);
-        if ((model as string) === 'aira-fast' && !process.env.NVIDIA_FAST_MODEL && executedModel === 'nvidia/llama-3.1-nemotron-70b-instruct') {
+        if ((model as string) === 'aira-fast' && !nonRetiredNvidiaEnv(process.env.NVIDIA_FAST_MODEL)) {
           modelFallback = true;
-          modelFallbackReason = 'No dedicated fast provider configured; fell back to NVIDIA Nemotron 70B reasoning model';
+          modelFallbackReason = `No dedicated fast provider configured; fell back to NVIDIA (${executedModel})`;
         }
       } else if (selectedProvider !== 'mock' && (executedModel.startsWith('aira-') || executedModel === model)) {
         // Ensure explicit non-mock fallback adapter receives a real upstream model name
@@ -1961,8 +2026,8 @@ export class ModelRouter {
 
     if (model.startsWith('meta/') || model.startsWith('nvidia/') || model.startsWith('nv-')) {
       if (this.adapters.has('nvidia')) {
-        const isLegacyModel = requestedModelId === 'meta/llama-3.1-405b-instruct' || requestedModelId === 'nvidia/nemotron-3-super-120b-a12b';
-        const targetModel = isLegacyModel ? 'nvidia/llama-3.1-nemotron-70b-instruct' : model;
+        const isLegacyModel = isRetiredNvidiaModel(requestedModelId) || isRetiredNvidiaModel(model);
+        const targetModel = isLegacyModel ? resolveNvidiaModel(model) : model;
         const primaryAdapter = this.createModelSpecificAdapter('nvidia', targetModel);
         const { fallbackAdapter, tertiaryAdapter, defaultFallbackModel, fallbackFirstTokenTimeoutMs } =
           this.buildNvidiaFallbackChain(model, requestedModelId, policy.extendedThinking);
@@ -1999,7 +2064,7 @@ export class ModelRouter {
           executedModel: targetModel,
           plannedModel: targetModel,
           fallbackOccurred: isLegacyModel,
-          fallbackReason: isLegacyModel ? 'Deprecated/retired model migrated to NVIDIA Nemotron 70B' : undefined,
+          fallbackReason: isLegacyModel ? `Deprecated/retired model migrated to ${targetModel}` : undefined,
           verified: true
         };
       }

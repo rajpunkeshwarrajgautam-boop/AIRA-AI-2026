@@ -68,10 +68,10 @@ async function run() {
     const fastExec = nvidiaOnlyRouter.resolveExecution('aira-fast', 'ANSWER');
 
     assert.equal(fastExec.provider, 'nvidia');
-    assert.equal(fastExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+    assert.equal(fastExec.executedModel, 'nvidia/nemotron-3.5-bolt-e4b');
     assert.equal(fastExec.fallbackOccurred, true, 'Fallback must be reported truthfully');
-    assert.ok(fastExec.fallbackReason?.includes('NVIDIA Nemotron 70B reasoning model'), 'Fallback reason must identify 70B model');
-    console.log('PASS: aira-fast truthfully reports fallback to Nemotron 70B when no fast provider is configured.');
+    assert.ok(fastExec.fallbackReason?.includes('NVIDIA'), 'Fallback reason must identify NVIDIA fallback model');
+    console.log('PASS: aira-fast truthfully reports fallback to Nemotron 3.5 Bolt when no fast provider is configured.');
 
     // -------------------------------------------------------------
     // TEST 3: AIRA Deep & Explicit Vendor Route Preservation
@@ -88,9 +88,9 @@ async function run() {
     assert.equal(deepExec.executedModel, 'openai/gpt-oss-120b');
     assert.equal(deepExec.fallbackOccurred, false, 'Registry-aligned primary executes directly without fallback');
 
-    const explicitNvExec = multiRouter.resolveExecution('nvidia/llama-3.1-nemotron-70b-instruct', 'ANSWER');
+    const explicitNvExec = multiRouter.resolveExecution('nvidia/nemotron-3.5-lightning-30b-a3b', 'ANSWER');
     assert.equal(explicitNvExec.provider, 'nvidia', 'Explicit Nemotron model must use NVIDIA');
-    assert.equal(explicitNvExec.executedModel, 'nvidia/llama-3.1-nemotron-70b-instruct');
+    assert.equal(explicitNvExec.executedModel, 'nvidia/nemotron-3.5-lightning-30b-a3b');
     assert.equal(explicitNvExec.fallbackOccurred, false);
     console.log('PASS: aira-deep and explicit NVIDIA routes preserved truthfully.');
 

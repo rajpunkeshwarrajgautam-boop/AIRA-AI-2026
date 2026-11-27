@@ -52,6 +52,7 @@ import { PostgresApprovalRepository, PostgresSessionGrantRepository } from '../.
 import { BrainV2KnowledgeEngine, PrincipalScope } from '../../../packages/knowledge/src/index.js';
 import { McpHost, McpSecurityError } from '../../../packages/mcp/src/index.js';
 import { AgentRuntime } from '../../../packages/agent-runtime/src/index.js';
+import { adaptAiraEventToAGUI, authorizeGenUIActionServerSide } from '../../../packages/agent-runtime/src/genui-streaming.js';
 import { validateDurableToolScopes } from '../../../packages/agent-runtime/src/durable/tool-authorization.js';
 import { validateApiStartupConfiguration } from './startup-config.js';
 import { evaluateRuntimeReadiness, createDatabaseReadinessProbe } from './runtime-readiness.js';
@@ -75,7 +76,8 @@ import {
   validateWorkflowDag,
   TaskDAG,
   TaskDAGSchema,
-  validateTaskDAG
+  validateTaskDAG,
+  GenUIInteractionEventSchema
 } from '../../../packages/contracts/src/index.js';
 
 // -----------------------------------------------------------------------
@@ -1743,6 +1745,52 @@ app.post('/api/runs/:id/approve', async (req: Request, res: Response) => {
   }
 });
 
+app.post('/api/genui/actions', async (req: Request, res: Response) => {
+  try {
+    const principal = req.principal;
+    if (!principal?.userId) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+    const parsed = GenUIInteractionEventSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: 'Invalid GenUI interaction payload.',
+        details: parsed.error.issues.map((i) => i.message),
+      });
+    }
+    const evt = parsed.data;
+    let runOwnerUserId: string | undefined;
+    if (evt.runId) {
+      const run = await agentRuntime.getRun(evt.runId);
+      if (!run || !isRunOwnedByPrincipal(run, principal)) {
+        return res.status(403).json({ error: 'Forbidden: run ownership check failed.' });
+      }
+      runOwnerUserId = run.principalId;
+    }
+
+    const authz = authorizeGenUIActionServerSide({
+      principalUserId: principal.userId,
+      runOwnerUserId,
+      event: evt,
+    });
+    if (!authz.allowed) {
+      return res.status(authz.status).json({ error: authz.reason || 'Forbidden GenUI action.' });
+    }
+
+    return res.json({
+      accepted: true,
+      eventId: evt.eventId,
+      surfaceId: evt.surfaceId,
+      actionId: evt.actionId,
+      kind: evt.kind,
+      stateSnapshot: evt.stateSnapshot,
+      recordedAt: Date.now(),
+    });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || 'GenUI action error' });
+  }
+});
+
 // -----------------------------------------------------------------------
 // Durable Specialist Missions Management (Milestone 2A.1)
 // -----------------------------------------------------------------------
@@ -2015,6 +2063,11 @@ app.get('/api/runs/:id/events', async (req: Request, res: Response) => {
     }
     res.write(`event: ${event.type}\n`);
     res.write(`data: ${JSON.stringify(event.data)}\n\n`);
+    if (req.query?.protocol === 'agui') {
+      for (const aguiEvt of adaptAiraEventToAGUI(event)) {
+        res.write(`event: agui_event\ndata: ${JSON.stringify(aguiEvt)}\n\n`);
+      }
+    }
   };
 
   const stream = agentRuntime.getEventStream(runId);
@@ -2495,6 +2548,30 @@ app.post('/api/chat/stream', async (req: Request, res: Response) => {
         res.write(`event: artifact_open\ndata: ${JSON.stringify(evt.data)}\n\n`);
         res.write(`event: artifact_delta\ndata: ${JSON.stringify({ chunk: evt.data.content })}\n\n`);
         res.write(`event: artifact_close\ndata: ${JSON.stringify({ id: evt.data.id })}\n\n`);
+      } else if (
+        evt.type === 'genui.surface.created' ||
+        evt.type === 'genui.surface.patched' ||
+        evt.type === 'genui.surface.completed' ||
+        evt.type === 'genui.surface.error'
+      ) {
+        if (evt.type === 'genui.surface.created') {
+          artifactEmitted = true;
+        }
+        res.write(
+          `event: genui_event\ndata: ${JSON.stringify({
+            eventId: evt.eventId,
+            type: evt.type,
+            runId: evt.runId,
+            sequence: evt.sequence ?? evt.data?.sequence ?? 0,
+            timestamp: evt.timestamp,
+            ...(evt.data || {}),
+          })}\n\n`
+        );
+        if (req.query?.protocol === 'agui' || req.body?.agui === true) {
+          for (const aguiEvt of adaptAiraEventToAGUI(evt)) {
+            res.write(`event: agui_event\ndata: ${JSON.stringify(aguiEvt)}\n\n`);
+          }
+        }
       } else if (evt.type === 'approval.required') {
         await releasePermitIfHeld();
         if (res.writableEnded) return;

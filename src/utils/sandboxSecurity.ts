@@ -168,7 +168,22 @@ export function renderSafeMarkdownHtml(rawMarkdown: string): string {
   const lines = (rawMarkdown || '').replace(/\r\n/g, '\n').split('\n');
   const out: string[] = [];
   let inCodeFence = false;
-  let inList = false;
+  let listType: 'ul' | 'ol' | null = null;
+  let inBlockquote = false;
+
+  const closeList = () => {
+    if (listType) {
+      out.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+
+  const closeBlockquote = () => {
+    if (inBlockquote) {
+      out.push('</blockquote>');
+      inBlockquote = false;
+    }
+  };
 
   const formatInline = (text: string): string => {
     let escaped = escapeHtmlText(text);
@@ -183,12 +198,25 @@ export function renderSafeMarkdownHtml(rawMarkdown: string): string {
     return escaped;
   };
 
-  for (const line of lines) {
+  const parseTableCells = (line: string): string[] | null => {
+    const trimmed = line.trim();
+    if (!trimmed.includes('|')) return null;
+    const stripped = trimmed.replace(/^\|/, '').replace(/\|$/, '');
+    const cells = stripped.split('|').map(c => c.trim());
+    return cells.length > 0 ? cells : null;
+  };
+
+  const isTableSeparator = (line: string): boolean => {
+    const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    const parts = trimmed.split('|').map(c => c.trim());
+    return parts.length > 0 && parts.every(p => /^:?-{3,}:?$/.test(p));
+  };
+
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const line = lines[idx];
     if (/^```/.test(line.trim())) {
-      if (inList) {
-        out.push('</ul>');
-        inList = false;
-      }
+      closeList();
+      closeBlockquote();
       if (!inCodeFence) {
         out.push('<pre><code>');
         inCodeFence = true;
@@ -204,31 +232,84 @@ export function renderSafeMarkdownHtml(rawMarkdown: string): string {
       continue;
     }
 
+    // GFM Markdown tables (header + separator + rows)
+    const headerCells = parseTableCells(line);
+    if (headerCells && idx + 1 < lines.length && isTableSeparator(lines[idx + 1])) {
+      closeList();
+      closeBlockquote();
+      out.push('<table><thead><tr>');
+      for (const cell of headerCells) {
+        out.push(`<th>${formatInline(cell)}</th>`);
+      }
+      out.push('</tr></thead><tbody>');
+      idx += 2;
+      while (idx < lines.length) {
+        const rowCells = parseTableCells(lines[idx]);
+        if (!rowCells || !lines[idx].trim()) {
+          idx -= 1;
+          break;
+        }
+        out.push('<tr>');
+        for (let c = 0; c < headerCells.length; c += 1) {
+          out.push(`<td>${formatInline(rowCells[c] ?? '')}</td>`);
+        }
+        out.push('</tr>');
+        idx += 1;
+      }
+      out.push('</tbody></table>');
+      continue;
+    }
+
+    if (/^(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line.trim())) {
+      closeList();
+      closeBlockquote();
+      out.push('<hr>');
+      continue;
+    }
+
+    const bq = /^>\s?(.*)$/.exec(line.trim());
+    if (bq) {
+      closeList();
+      if (!inBlockquote) {
+        out.push('<blockquote>');
+        inBlockquote = true;
+      }
+      out.push(`<p>${formatInline(bq[1])}</p>`);
+      continue;
+    }
+    closeBlockquote();
+
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
     if (heading) {
-      if (inList) {
-        out.push('</ul>');
-        inList = false;
-      }
+      closeList();
       const level = heading[1].length;
       out.push(`<h${level}>${formatInline(heading[2])}</h${level}>`);
       continue;
     }
 
-    const listItem = /^[-*]\s+(.*)$/.exec(line.trim());
-    if (listItem) {
-      if (!inList) {
+    const ulItem = /^[-*]\s+(.*)$/.exec(line.trim());
+    if (ulItem) {
+      if (listType !== 'ul') {
+        closeList();
         out.push('<ul>');
-        inList = true;
+        listType = 'ul';
       }
-      out.push(`<li>${formatInline(listItem[1])}</li>`);
+      out.push(`<li>${formatInline(ulItem[1])}</li>`);
       continue;
     }
 
-    if (inList) {
-      out.push('</ul>');
-      inList = false;
+    const olItem = /^\d+\.\s+(.*)$/.exec(line.trim());
+    if (olItem) {
+      if (listType !== 'ol') {
+        closeList();
+        out.push('<ol>');
+        listType = 'ol';
+      }
+      out.push(`<li>${formatInline(olItem[1])}</li>`);
+      continue;
     }
+
+    closeList();
 
     if (!line.trim()) {
       out.push('');
@@ -237,7 +318,8 @@ export function renderSafeMarkdownHtml(rawMarkdown: string): string {
     }
   }
 
-  if (inList) out.push('</ul>');
+  closeList();
+  closeBlockquote();
   if (inCodeFence) out.push('</code></pre>');
   return out.filter(Boolean).join('\n');
 }

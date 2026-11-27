@@ -25,9 +25,9 @@ describe('Product Quality & UNSLOP Remediation Suite', () => {
     assert.ok(scene3.metrics?.some(m => m.label === 'reasoning effort' && m.value === 'effort-mapped'), 'Scene 3 metrics must cite effort-mapped');
 
     // Model Selector: Experimental Nemotron qualification
-    const nemotron = AVAILABLE_MODELS.find(m => m.id === 'nvidia/llama-3.1-nemotron-70b-instruct');
+    const nemotron = AVAILABLE_MODELS.find(m => m.id === 'nvidia/nemotron-3.5-lightning-30b-a3b');
     assert.ok(nemotron, 'Nemotron model must exist in catalog');
-    assert.equal(nemotron.name, 'Nemotron 70B', 'Must have clean non-truncated display name');
+    assert.equal(nemotron.name, 'Nemotron 3.5 Lightning', 'Must have clean non-truncated display name');
     assert.equal(nemotron.badge, 'NVIDIA (Exp)', 'Badge must explicitly identify experimental status');
     assert.ok(nemotron.description.toLowerCase().includes('experimental'), 'Description must qualify experimental status');
   });

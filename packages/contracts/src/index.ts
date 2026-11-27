@@ -165,6 +165,9 @@ export const ModelIdSchema = z.enum([
   'meta/llama-3.1-405b-instruct',
   'nvidia/nemotron-3-super-120b-a12b',
   'nvidia/llama-3.1-nemotron-70b-instruct',
+  'nvidia/nemotron-3.5-lightning-30b-a3b',
+  'nvidia/nemotron-3.5-bolt-e4b',
+  'nvidia/nemotron-3.5-super-vl-120b-a12b',
   'nv-mistralai/mistral-nemo-12b-instruct',
   'nvidia/mistral-nemo-minitron-8b-8k-instruct',
   'nvidia/llama-3.1-nemotron-51b-instruct',
@@ -199,10 +202,24 @@ export function normalizeModelIdentifier(value: unknown = 'aira-auto'): ModelId 
     case 'claude-3-opus': return 'aira-deep';
     case 'meta/llama-3.1-405b-instruct':
     case 'nvidia/nemotron-3-super-120b-a12b':
-      return 'nvidia/llama-3.1-nemotron-70b-instruct';
+    case 'nvidia/llama-3.1-nemotron-70b-instruct':
+      return 'nvidia/nemotron-3.5-lightning-30b-a3b';
     default: return parsed.data;
   }
 }
+
+export const ModelResponseFormatSchema = z.union([
+  z.object({ type: z.literal('json_object') }),
+  z.object({
+    type: z.literal('json_schema'),
+    json_schema: z.object({
+      name: z.string().min(1),
+      strict: z.boolean().optional(),
+      schema: z.record(z.string(), z.unknown())
+    })
+  })
+]);
+export type ModelResponseFormat = z.infer<typeof ModelResponseFormatSchema>;
 
 
 export const ModelToolDefinitionSchema = z.object({
@@ -226,10 +243,12 @@ export const ModelPolicySchema = z.object({
   maxTokens: z.number().int().positive().default(4096),
   temperature: z.number().min(0).max(2).default(0.7),
   extendedThinking: z.boolean().default(false),
+  disableThinking: z.boolean().optional(),
   reasoningBudget: z.number().int().nonnegative().optional(),
   timeoutMs: z.number().int().positive().default(60000),
   tools: z.array(ModelToolDefinitionSchema).optional(),
-  toolChoice: ModelToolChoiceSchema.optional()
+  toolChoice: ModelToolChoiceSchema.optional(),
+  responseFormat: ModelResponseFormatSchema.optional()
 });
 export type ModelPolicy = z.infer<typeof ModelPolicySchema>;
 
@@ -633,7 +652,12 @@ export const StreamingEventTypeSchema = z.enum([
   'workflow.step.failed',
   'workflow.completed',
   'workflow.failed',
-  'workflow.cancelled'
+  'workflow.cancelled',
+  'genui.surface.created',
+  'genui.surface.patched',
+  'genui.surface.completed',
+  'genui.surface.error',
+  'genui.interaction'
 ]);
 export type StreamingEventType = z.infer<typeof StreamingEventTypeSchema>;
 
@@ -1007,4 +1031,6 @@ export * from './agent-specialists.js';
 export * from './deployment-environment.js';
 export * from './autonomous-agent.js';
 export * from './model-registry.js';
+export * from './genui.js';
+export * from './genui-calculators.js';
 

@@ -1,5 +1,7 @@
 
 import type { MultiFileArtifactBundle } from './multiFileArtifact';
+import type { GenUISurface, GenUIStateRecord } from '../../packages/contracts/src/genui';
+export type { GenUISurface, GenUIStateRecord };
 
 export type WorkspaceMode = 'chat' | 'agent';
 
@@ -16,7 +18,10 @@ export type ModelId =
   | 'claude-3-opus'
   | 'meta/llama-3.1-405b-instruct'
   | 'nvidia/nemotron-3-super-120b-a12b'
-  | 'nvidia/llama-3.1-nemotron-70b-instruct';
+  | 'nvidia/llama-3.1-nemotron-70b-instruct'
+  | 'nvidia/nemotron-3.5-lightning-30b-a3b'
+  | 'nvidia/nemotron-3.5-bolt-e4b'
+  | 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 
 export interface ModelInfo {
   id: ModelId;
@@ -91,6 +96,9 @@ export interface Message {
   content: string;
   thinking?: ThinkingBlock;
   agentEvents?: AgentTimelineEvent[];
+  genuiSurfaces?: GenUISurface[];
+  genuiSurfaceState?: Record<string, GenUIStateRecord>;
+  routingPresentationMode?: string;
   artifacts?: Artifact[];
   attachments?: Attachment[];
   timestamp: number;

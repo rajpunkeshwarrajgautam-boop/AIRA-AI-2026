@@ -211,6 +211,14 @@ export function renderMarkdownToHtml(markdown: string, validSourceCount?: number
   }
 }
 
+export function renderSafeMathHtml(expression: string, displayMode = true): string {
+  try {
+    return sanitizeHtml(renderMath(expression, displayMode));
+  } catch {
+    return escapeHtml(expression);
+  }
+}
+
 export function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')

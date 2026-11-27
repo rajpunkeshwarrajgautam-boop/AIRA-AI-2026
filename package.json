@@ -138,10 +138,12 @@
     "test:storage-regression": "npx tsx --test test/projects-storage-regression.test.ts"
   },
   "dependencies": {
+    "@ag-ui/core": "1.0.5",
     "@gsap/react": "^2.1.2",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "@phosphor-icons/react": "^2.1.10",
     "canvas-confetti": "^1.9.4",
+    "chart.js": "4.6.2",
     "clsx": "^2.1.1",
     "cors": "^2.8.6",
     "cron-parser": "^5.10.1",

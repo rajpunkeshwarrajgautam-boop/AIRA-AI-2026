@@ -179,8 +179,13 @@ export class ProviderHealthTracker {
 
     const isNotFoundOrUnavailable =
       errStatus === 404 ||
+      errStatus === 410 ||
       errMsg.includes('404') ||
+      errMsg.includes('410') ||
       errMsg.toLowerCase().includes('not found') ||
+      errMsg.toLowerCase().includes('gone') ||
+      errMsg.toLowerCase().includes('retired') ||
+      errMsg.toLowerCase().includes('eol') ||
       errMsg.includes('does not exist') ||
       errMsg.includes('inaccessible');
 

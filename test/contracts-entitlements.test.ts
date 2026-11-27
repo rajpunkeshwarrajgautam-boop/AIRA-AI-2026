@@ -185,7 +185,7 @@ test('PLAN_MODEL_ALLOWLIST: contains exact authoritative model lists per tier', 
       'claude-3-7-sonnet',
       'aira-pro',
       'claude-3-5-sonnet',
-      'nvidia/llama-3.1-nemotron-70b-instruct'
+      'nvidia/nemotron-3.5-lightning-30b-a3b'
     ]
   );
 
@@ -200,7 +200,7 @@ test('PLAN_MODEL_ALLOWLIST: contains exact authoritative model lists per tier', 
       'claude-3-5-sonnet',
       'aira-deep',
       'claude-3-opus',
-      'nvidia/llama-3.1-nemotron-70b-instruct'
+      'nvidia/nemotron-3.5-lightning-30b-a3b'
     ]
   );
 });
