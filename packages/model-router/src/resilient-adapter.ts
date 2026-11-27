@@ -7,6 +7,7 @@ import {
   resolveOpenAIModel,
   resolveAnthropicModel
 } from './index.js';
+import { isSubstantiveStreamDelta, type ModelStreamDelta } from './tool-call-stream.js';
 import { ModelPolicy } from '../../contracts/src/index.js';
 import { ProviderHealthTracker } from './health-tracker.js';
 
@@ -109,7 +110,6 @@ export class ResilientModelAdapter implements ModelAdapter {
       this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, elapsed);
       return res;
     } catch (primaryErr: any) {
-      const elapsed = Math.round(performance.now() - t0);
       this.healthTracker.recordFailure(this.primaryAdapter.provider, primaryModel, primaryErr);
 
       if (this.fallbackAdapter && !signal?.aborted) {
@@ -126,13 +126,14 @@ export class ResilientModelAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    onChunk: (delta: ModelStreamDelta) => void,
     options?: {
       firstTokenTimeoutMs?: number;
       signal?: AbortSignal;
       onProvenance?: (provenance: any) => void;
     }
   ): Promise<ModelCompletionResult> {
+    options?.signal?.throwIfAborted();
     this.stickinessLocked = false;
     const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? this.config.firstTokenTimeoutMs ?? 2500;
     const enableHedging = this.config.enableHedging ?? false;
@@ -140,7 +141,6 @@ export class ResilientModelAdapter implements ModelAdapter {
     const emitProvenance = options?.onProvenance || this.config.onProvenance;
 
     const primaryModel = this.getModelName(this.primaryAdapter, policy);
-    const fallbackModel = this.fallbackAdapter ? this.getModelName(this.fallbackAdapter, policy) : null;
 
     // Report initial planned provenance
     emitProvenance?.({
@@ -178,20 +178,26 @@ export class ResilientModelAdapter implements ModelAdapter {
   private async streamWithDeadlineAndFallback(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    onChunk: (delta: ModelStreamDelta) => void,
     firstTokenTimeoutMs: number,
     outerSignal?: AbortSignal,
     emitProvenance?: (p: any) => void
   ): Promise<ModelCompletionResult> {
     const primaryModel = this.getModelName(this.primaryAdapter, policy);
     const primaryAbort = new AbortController();
+    const onPrimaryOuterAbort = () => primaryAbort.abort(outerSignal?.reason);
+    let fallbackAbort: AbortController | null = null;
+    const onFallbackOuterAbort = () => fallbackAbort?.abort(outerSignal?.reason);
+    let tertiaryAbort: AbortController | null = null;
+    const onTertiaryOuterAbort = () => tertiaryAbort?.abort(outerSignal?.reason);
 
     if (outerSignal) {
-      outerSignal.addEventListener('abort', () => primaryAbort.abort(outerSignal.reason), { once: true });
+      outerSignal.addEventListener('abort', onPrimaryOuterAbort, { once: true });
     }
 
     let firstTokenTimer: NodeJS.Timeout | null = null;
     let receivedFirstContentToken = false;
+    let callStickinessLocked = false;
     const t0 = performance.now();
 
     if (firstTokenTimeoutMs > 0) {
@@ -212,24 +218,20 @@ export class ResilientModelAdapter implements ModelAdapter {
         messages,
         policy,
         delta => {
-          if (delta.thinking) {
-            onChunk({ thinking: delta.thinking });
-          }
-          if (typeof delta.text === 'string' && delta.text.length > 0) {
+          if (isSubstantiveStreamDelta(delta)) {
             if (!receivedFirstContentToken) {
-              if (delta.text.trim().length > 0) {
-                receivedFirstContentToken = true;
-                this.stickinessLocked = true;
-                if (firstTokenTimer) {
-                  clearTimeout(firstTokenTimer);
-                  firstTokenTimer = null;
-                }
-                const ttft = Math.round(performance.now() - t0);
-                this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, ttft);
+              receivedFirstContentToken = true;
+              callStickinessLocked = true;
+              this.stickinessLocked = true;
+              if (firstTokenTimer) {
+                clearTimeout(firstTokenTimer);
+                firstTokenTimer = null;
               }
+              const ttft = Math.round(performance.now() - t0);
+              this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, ttft);
             }
-            onChunk({ text: delta.text });
           }
+          onChunk(delta);
         },
         { firstTokenTimeoutMs, signal: primaryAbort.signal }
       );
@@ -249,7 +251,7 @@ export class ResilientModelAdapter implements ModelAdapter {
       this.healthTracker.recordFailure(this.primaryAdapter.provider, primaryModel, primaryErr);
 
       // If content has already started streaming, request stickiness prevents mid-answer fallback!
-      if (this.stickinessLocked || receivedFirstContentToken) {
+      if (callStickinessLocked || receivedFirstContentToken) {
         throw primaryErr;
       }
 
@@ -275,9 +277,9 @@ export class ResilientModelAdapter implements ModelAdapter {
           modelIdentityVerified: true
         });
 
-        const fallbackAbort = new AbortController();
+        fallbackAbort = new AbortController();
         if (outerSignal) {
-          outerSignal.addEventListener('abort', () => fallbackAbort.abort(outerSignal.reason), { once: true });
+          outerSignal.addEventListener('abort', onFallbackOuterAbort, { once: true });
         }
 
         const tFbStart = performance.now();
@@ -311,23 +313,24 @@ export class ResilientModelAdapter implements ModelAdapter {
             messages,
             policy,
             delta => {
-              if (delta.thinking) onChunk({ thinking: delta.thinking });
-              if (typeof delta.text === 'string' && delta.text.length > 0) {
+              if (isSubstantiveStreamDelta(delta)) {
                 if (!fbReceivedFirst) {
-                  if (delta.text.trim().length > 0) {
-                    fbReceivedFirst = true;
-                    this.stickinessLocked = true;
-                    const fbTtft = Math.round(performance.now() - tFbStart);
-                    this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
-                  }
+                  fbReceivedFirst = true;
+                  this.stickinessLocked = true;
+                  const fbTtft = Math.round(performance.now() - tFbStart);
+                  this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
                 }
-                onChunk({ text: delta.text });
               }
+              onChunk(delta);
             },
             { signal: fallbackAbort.signal, firstTokenTimeoutMs: fbTimeoutMs }
           );
 
-          if (!fbReceivedFirst && !(fbRes.text && fbRes.text.trim().length > 0)) {
+          const hasToolOutcome = Boolean(
+            (fbRes.toolCalls && fbRes.toolCalls.length > 0) ||
+            (fbRes.invalidToolCalls && fbRes.invalidToolCalls.length > 0)
+          );
+          if (!fbReceivedFirst && !(fbRes.text && fbRes.text.trim().length > 0) && !hasToolOutcome) {
             const emptyErr = new Error(
               `EMPTY_PROVIDER_RESPONSE: Fallback provider ${this.fallbackAdapter.provider}:${fallbackModel} completed without returning content.`
             );
@@ -344,7 +347,7 @@ export class ResilientModelAdapter implements ModelAdapter {
 
           this.healthTracker.recordFailure(this.fallbackAdapter.provider, fallbackModel, fallbackErr);
 
-          if (this.stickinessLocked || fbReceivedFirst) {
+          if (this.stickinessLocked && callStickinessLocked || fbReceivedFirst) {
             throw fallbackErr;
           }
 
@@ -373,9 +376,9 @@ export class ResilientModelAdapter implements ModelAdapter {
               modelIdentityVerified: true
             });
 
-            const tertiaryAbort = new AbortController();
+            tertiaryAbort = new AbortController();
             if (outerSignal) {
-              outerSignal.addEventListener('abort', () => tertiaryAbort.abort(outerSignal.reason), { once: true });
+              outerSignal.addEventListener('abort', onTertiaryOuterAbort, { once: true });
             }
 
             const tTertiaryStart = performance.now();
@@ -385,18 +388,16 @@ export class ResilientModelAdapter implements ModelAdapter {
               messages,
               policy,
               delta => {
-                if (delta.thinking) onChunk({ thinking: delta.thinking });
-                if (typeof delta.text === 'string' && delta.text.length > 0) {
+                if (isSubstantiveStreamDelta(delta)) {
                   if (!tertiaryReceivedFirst) {
-                    if (delta.text.trim().length > 0) {
-                      tertiaryReceivedFirst = true;
-                      this.stickinessLocked = true;
-                      const ttft = Math.round(performance.now() - tTertiaryStart);
-                      this.healthTracker.recordSuccess(this.tertiaryAdapter!.provider, tertiaryModel, ttft);
-                    }
+                    tertiaryReceivedFirst = true;
+                    callStickinessLocked = true;
+                    this.stickinessLocked = true;
+                    const ttft = Math.round(performance.now() - tTertiaryStart);
+                    this.healthTracker.recordSuccess(this.tertiaryAdapter!.provider, tertiaryModel, ttft);
                   }
-                  onChunk({ text: delta.text });
                 }
+                onChunk(delta);
               },
               { signal: tertiaryAbort.signal, firstTokenTimeoutMs }
             );
@@ -412,6 +413,11 @@ export class ResilientModelAdapter implements ModelAdapter {
 
       throw primaryErr;
     } finally {
+      if (outerSignal) {
+        outerSignal.removeEventListener('abort', onPrimaryOuterAbort);
+        outerSignal.removeEventListener('abort', onFallbackOuterAbort);
+        outerSignal.removeEventListener('abort', onTertiaryOuterAbort);
+      }
       if (firstTokenTimer) {
         clearTimeout(firstTokenTimer);
         firstTokenTimer = null;
@@ -422,7 +428,7 @@ export class ResilientModelAdapter implements ModelAdapter {
   private async streamWithHedging(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    onChunk: (delta: ModelStreamDelta) => void,
     firstTokenTimeoutMs: number,
     hedgeDelayMs: number,
     outerSignal?: AbortSignal,
@@ -433,12 +439,13 @@ export class ResilientModelAdapter implements ModelAdapter {
 
     const primaryAbort = new AbortController();
     const secondaryAbort = new AbortController();
+    const onHedgeOuterAbort = () => {
+      primaryAbort.abort(outerSignal?.reason);
+      secondaryAbort.abort(outerSignal?.reason);
+    };
 
     if (outerSignal) {
-      outerSignal.addEventListener('abort', () => {
-        primaryAbort.abort(outerSignal.reason);
-        secondaryAbort.abort(outerSignal.reason);
-      }, { once: true });
+      outerSignal.addEventListener('abort', onHedgeOuterAbort, { once: true });
     }
 
     let winner: 'primary' | 'secondary' | null = null;
@@ -446,7 +453,6 @@ export class ResilientModelAdapter implements ModelAdapter {
     const t0 = performance.now();
 
     const raceDeferred = new Promise<ModelCompletionResult>((resolve, reject) => {
-      let primaryResolved = false;
       let secondaryResolved = false;
 
       // 1. Launch Primary Stream
@@ -457,43 +463,36 @@ export class ResilientModelAdapter implements ModelAdapter {
             policy,
             delta => {
               if (winner === 'secondary') return; // Primary lost race; drop chunks
-              if (delta.thinking && !winner) {
-                onChunk({ thinking: delta.thinking });
-              }
-              if (typeof delta.text === 'string' && delta.text.length > 0) {
+              if (isSubstantiveStreamDelta(delta)) {
                 if (!winner) {
-                  if (delta.text.trim().length > 0) {
-                    winner = 'primary';
-                    this.stickinessLocked = true;
-                    if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; }
-                    secondaryAbort.abort('Primary delivered first token; cancelling hedged request');
-                    const ttft = Math.round(performance.now() - t0);
-                    this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, ttft);
-                    emitProvenance?.({
-                      requestedProvider: this.primaryAdapter.provider,
-                      requestedModel: primaryModel,
-                      executedProvider: this.primaryAdapter.provider,
-                      executedModel: primaryModel,
-                      fallbackOccurred: false,
-                      hedgedRequestUsed: false,
-                      modelIdentityVerified: true
-                    });
-                  }
+                  winner = 'primary';
+                  this.stickinessLocked = true;
+                  if (hedgeTimer) { clearTimeout(hedgeTimer); hedgeTimer = null; }
+                  secondaryAbort.abort('Primary delivered first token; cancelling hedged request');
+                  const ttft = Math.round(performance.now() - t0);
+                  this.healthTracker.recordSuccess(this.primaryAdapter.provider, primaryModel, ttft);
+                  emitProvenance?.({
+                    requestedProvider: this.primaryAdapter.provider,
+                    requestedModel: primaryModel,
+                    executedProvider: this.primaryAdapter.provider,
+                    executedModel: primaryModel,
+                    fallbackOccurred: false,
+                    hedgedRequestUsed: false,
+                    modelIdentityVerified: true
+                  });
                 }
-                if (winner === 'primary') {
-                  onChunk({ text: delta.text });
-                }
+              }
+              if (winner === 'primary' || (!winner && delta.thinking)) {
+                onChunk(delta);
               }
             },
             { firstTokenTimeoutMs, signal: primaryAbort.signal }
           );
-          primaryResolved = true;
           if (winner === 'primary' || !winner) {
             winner = 'primary';
             resolve(res);
           }
         } catch (err: any) {
-          primaryResolved = true;
           if (winner === 'primary') {
             reject(err);
           } else if (!winner && secondaryResolved) {
@@ -512,32 +511,27 @@ export class ResilientModelAdapter implements ModelAdapter {
             policy,
             delta => {
               if (winner === 'primary') return; // Secondary lost race
-              if (delta.thinking && !winner) {
-                onChunk({ thinking: delta.thinking });
-              }
-              if (typeof delta.text === 'string' && delta.text.length > 0) {
+              if (isSubstantiveStreamDelta(delta)) {
                 if (!winner) {
-                  if (delta.text.trim().length > 0) {
-                    winner = 'secondary';
-                    this.stickinessLocked = true;
-                    primaryAbort.abort('Hedged secondary delivered first token; cancelling primary');
-                    const fbTtft = Math.round(performance.now() - tSecStart);
-                    this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
-                    emitProvenance?.({
-                      requestedProvider: this.primaryAdapter.provider,
-                      requestedModel: primaryModel,
-                      executedProvider: this.fallbackAdapter!.provider,
-                      executedModel: fallbackModel,
-                      fallbackOccurred: true,
-                      fallbackReason: `Primary exceeded hedge delay (${hedgeDelayMs}ms); hedged request delivered first token`,
-                      hedgedRequestUsed: true,
-                      modelIdentityVerified: true
-                    });
-                  }
+                  winner = 'secondary';
+                  this.stickinessLocked = true;
+                  primaryAbort.abort('Hedged secondary delivered first token; cancelling primary');
+                  const fbTtft = Math.round(performance.now() - tSecStart);
+                  this.healthTracker.recordSuccess(this.fallbackAdapter!.provider, fallbackModel, fbTtft);
+                  emitProvenance?.({
+                    requestedProvider: this.primaryAdapter.provider,
+                    requestedModel: primaryModel,
+                    executedProvider: this.fallbackAdapter!.provider,
+                    executedModel: fallbackModel,
+                    fallbackOccurred: true,
+                    fallbackReason: `Primary exceeded hedge delay (${hedgeDelayMs}ms); hedged request delivered first token`,
+                    hedgedRequestUsed: true,
+                    modelIdentityVerified: true
+                  });
                 }
-                if (winner === 'secondary') {
-                  onChunk({ text: delta.text });
-                }
+              }
+              if (winner === 'secondary' || (!winner && delta.thinking)) {
+                onChunk(delta);
               }
             },
             { signal: secondaryAbort.signal }
@@ -568,6 +562,9 @@ export class ResilientModelAdapter implements ModelAdapter {
     try {
       return await raceDeferred;
     } finally {
+      if (outerSignal) {
+        outerSignal.removeEventListener('abort', onHedgeOuterAbort);
+      }
       if (hedgeTimer) {
         clearTimeout(hedgeTimer);
         hedgeTimer = null;

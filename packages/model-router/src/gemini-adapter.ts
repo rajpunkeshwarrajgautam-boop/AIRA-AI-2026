@@ -4,11 +4,26 @@ import {
   ChatMessageInput,
   SupportedProvider
 } from './index.js';
+import {
+  ToolCallStreamAccumulator,
+  isSubstantiveStreamDelta,
+  type ModelStreamDelta,
+} from './tool-call-stream.js';
 import { ModelPolicy } from '../../contracts/src/index.js';
 
 export interface GeminiContentPart {
   text?: string;
   thought?: boolean;
+  functionCall?: {
+    id?: string;
+    name: string;
+    args?: Record<string, unknown>;
+  };
+  functionResponse?: {
+    id?: string;
+    name: string;
+    response: Record<string, unknown>;
+  };
 }
 
 export interface GeminiContent {
@@ -20,6 +35,19 @@ export interface GeminiRequestPayload {
   contents: GeminiContent[];
   systemInstruction?: {
     parts: { text: string }[];
+  };
+  tools?: Array<{
+    functionDeclarations: Array<{
+      name: string;
+      description: string;
+      parameters: Record<string, unknown>;
+    }>;
+  }>;
+  toolConfig?: {
+    functionCallingConfig: {
+      mode: 'AUTO' | 'ANY' | 'NONE';
+      allowedFunctionNames?: string[];
+    };
   };
   generationConfig: {
     temperature?: number;
@@ -39,6 +67,12 @@ export interface GeminiRequestPayload {
 export interface GeminiParsedChunk {
   text?: string;
   thinking?: string;
+  functionCalls?: Array<{
+    id?: string;
+    name?: string;
+    args?: Record<string, unknown>;
+    rawArgs?: unknown;
+  }>;
   usage?: {
     promptTokens: number;
     completionTokens: number;
@@ -76,7 +110,15 @@ export class GeminiAdapter implements ModelAdapter {
 
   public formatRequestPayload(
     messages: ChatMessageInput[],
-    policy: { model?: string; temperature?: number; maxTokens?: number; extendedThinking?: boolean; reasoningBudget?: number }
+    policy: {
+      model?: string;
+      temperature?: number;
+      maxTokens?: number;
+      extendedThinking?: boolean;
+      reasoningBudget?: number;
+      tools?: ModelPolicy['tools'];
+      toolChoice?: ModelPolicy['toolChoice'];
+    }
   ): GeminiRequestPayload {
     const rawContents: GeminiContent[] = [];
     const systemParts: { text: string }[] = [];
@@ -86,12 +128,48 @@ export class GeminiAdapter implements ModelAdapter {
       if (msg.role === 'system') {
         systemParts.push({ text: contentText });
       } else if (msg.role === 'assistant') {
+        const parts: GeminiContentPart[] = [];
+        if (msg.content && msg.content.trim().length > 0) {
+          parts.push({ text: msg.content });
+        }
+        if (Array.isArray(msg.toolCalls) && msg.toolCalls.length > 0) {
+          for (const tc of msg.toolCalls) {
+            parts.push({
+              functionCall: {
+                id: tc.id,
+                name: tc.name,
+                args: tc.arguments || {},
+              },
+            });
+          }
+        }
+        if (parts.length === 0) parts.push({ text: contentText });
         rawContents.push({
           role: 'model',
-          parts: [{ text: contentText }]
+          parts
+        });
+      } else if (msg.role === 'tool' && msg.name) {
+        let parsedResponse: Record<string, unknown>;
+        try {
+          const parsed = JSON.parse(msg.content || '{}');
+          parsedResponse = typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? parsed
+            : { result: parsed };
+        } catch {
+          parsedResponse = { output: msg.content };
+        }
+        rawContents.push({
+          role: 'user',
+          parts: [{
+            functionResponse: {
+              id: msg.toolCallId,
+              name: msg.name,
+              response: parsedResponse,
+            },
+          }],
         });
       } else {
-        // user, tool, or default
+        // user or default
         rawContents.push({
           role: 'user',
           parts: [{ text: contentText }]
@@ -159,6 +237,32 @@ export class GeminiAdapter implements ModelAdapter {
       };
     }
 
+    if (policy.tools && policy.tools.length > 0) {
+      payload.tools = [{
+        functionDeclarations: policy.tools.map(t => ({
+          name: t.name,
+          description: t.description,
+          parameters: t.parameters || { type: 'object', properties: {} },
+        })),
+      }];
+      if (policy.toolChoice) {
+        if (policy.toolChoice === 'auto') {
+          payload.toolConfig = { functionCallingConfig: { mode: 'AUTO' } };
+        } else if (policy.toolChoice === 'none') {
+          payload.toolConfig = { functionCallingConfig: { mode: 'NONE' } };
+        } else if (policy.toolChoice === 'required') {
+          payload.toolConfig = { functionCallingConfig: { mode: 'ANY' } };
+        } else {
+          payload.toolConfig = {
+            functionCallingConfig: {
+              mode: 'ANY',
+              allowedFunctionNames: [policy.toolChoice.name],
+            },
+          };
+        }
+      }
+    }
+
     return payload;
   }
 
@@ -178,11 +282,21 @@ export class GeminiAdapter implements ModelAdapter {
       const candidate = data.candidates?.[0];
       let textDelta = '';
       let thinkingDelta = '';
+      const functionCalls: NonNullable<GeminiParsedChunk['functionCalls']> = [];
 
       if (candidate?.content?.parts && Array.isArray(candidate.content.parts)) {
         for (const part of candidate.content.parts) {
           if (part.thought) {
             thinkingDelta += part.text || '';
+          } else if (part.functionCall && typeof part.functionCall === 'object') {
+            const rawArgs = part.functionCall.args;
+            const isPlainObject = typeof rawArgs === 'object' && rawArgs !== null && !Array.isArray(rawArgs);
+            functionCalls.push({
+              id: typeof part.functionCall.id === 'string' ? part.functionCall.id : undefined,
+              name: typeof part.functionCall.name === 'string' ? part.functionCall.name : undefined,
+              args: isPlainObject ? (rawArgs as Record<string, unknown>) : undefined,
+              rawArgs: !isPlainObject && rawArgs !== undefined ? rawArgs : undefined,
+            });
           } else if (part.text) {
             textDelta += part.text;
           }
@@ -206,6 +320,7 @@ export class GeminiAdapter implements ModelAdapter {
       return {
         text: textDelta || undefined,
         thinking: thinkingDelta || undefined,
+        functionCalls: functionCalls.length > 0 ? functionCalls : undefined,
         usage,
         finishReason: candidate?.finishReason,
         isSafetyBlock
@@ -239,7 +354,9 @@ export class GeminiAdapter implements ModelAdapter {
       temperature: policy.temperature,
       maxTokens: policy.maxTokens,
       extendedThinking: policy.extendedThinking,
-      reasoningBudget: policy.reasoningBudget
+      reasoningBudget: policy.reasoningBudget,
+      tools: policy.tools,
+      toolChoice: policy.toolChoice
     });
 
     signal?.throwIfAborted();
@@ -266,15 +383,28 @@ export class GeminiAdapter implements ModelAdapter {
     const candidate = data.candidates?.[0];
     let text = '';
     let thinking = '';
+    const accumulator = new ToolCallStreamAccumulator();
+    let fnIdx = 0;
     if (Array.isArray(candidate?.content?.parts)) {
       for (const part of candidate.content.parts) {
         if (part?.thought) {
           thinking += part.text || '';
+        } else if (part?.functionCall && typeof part.functionCall === 'object') {
+          const rawArgs = part.functionCall.args;
+          const isPlainObject = typeof rawArgs === 'object' && rawArgs !== null && !Array.isArray(rawArgs);
+          accumulator.pushChunk({
+            index: fnIdx++,
+            id: typeof part.functionCall.id === 'string' ? part.functionCall.id : undefined,
+            name: typeof part.functionCall.name === 'string' ? part.functionCall.name : undefined,
+            parsedArguments: isPlainObject ? (rawArgs as Record<string, unknown>) : undefined,
+            argumentsDelta: !isPlainObject && rawArgs !== undefined ? JSON.stringify(rawArgs) : undefined,
+          });
         } else if (typeof part?.text === 'string') {
           text += part.text;
         }
       }
     }
+    const { toolCalls, invalidToolCalls } = accumulator.finalizeAll(true);
 
     const promptTokens = data.usageMetadata?.promptTokenCount ?? 0;
     const completionTokens = data.usageMetadata?.candidatesTokenCount ?? 0;
@@ -282,6 +412,9 @@ export class GeminiAdapter implements ModelAdapter {
     return {
       text,
       thinking: thinking || undefined,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      invalidToolCalls: invalidToolCalls.length > 0 ? invalidToolCalls : undefined,
+      finishReason: candidate?.finishReason,
       usage: {
         promptTokens,
         completionTokens,
@@ -295,7 +428,7 @@ export class GeminiAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    onChunk: (delta: ModelStreamDelta) => void,
     options?: {
       firstTokenTimeoutMs?: number;
       signal?: AbortSignal;
@@ -330,7 +463,9 @@ export class GeminiAdapter implements ModelAdapter {
       temperature: policy.temperature,
       maxTokens: policy.maxTokens,
       extendedThinking: policy.extendedThinking,
-      reasoningBudget: policy.reasoningBudget
+      reasoningBudget: policy.reasoningBudget,
+      tools: policy.tools,
+      toolChoice: policy.toolChoice
     });
 
     options?.signal?.throwIfAborted();
@@ -398,10 +533,70 @@ export class GeminiAdapter implements ModelAdapter {
     let accumulatedText = '';
     let accumulatedThinking = '';
     let finalUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+    let finishReason: string | undefined;
     let buffer = '';
+    let truncatedTrailingFrame = false;
+    const accumulator = new ToolCallStreamAccumulator();
+    let fnIdx = 0;
+
+    const onStreamAbort = () => {
+      reader.cancel(combinedSignal.reason).catch(() => undefined);
+    };
+    if (combinedSignal.aborted) {
+      onStreamAbort();
+    } else {
+      combinedSignal.addEventListener('abort', onStreamAbort, { once: true });
+    }
+
+    const handleParsedChunk = (parsed: GeminiParsedChunk | null) => {
+      if (!parsed) return;
+      if (parsed.finishReason) finishReason = parsed.finishReason;
+
+      const markFirstToken = () => {
+        if (!firstTokenDelivered) {
+          firstTokenDelivered = true;
+          if (timeoutTimer) {
+            clearTimeout(timeoutTimer);
+            timeoutTimer = null;
+          }
+        }
+      };
+
+      if (parsed.thinking !== undefined && parsed.thinking.length > 0) {
+        accumulatedThinking += parsed.thinking;
+        onChunk({ type: 'thinking', thinking: parsed.thinking });
+      }
+
+      if (parsed.text !== undefined && parsed.text.length > 0) {
+        markFirstToken();
+        accumulatedText += parsed.text;
+        onChunk({ type: 'text', text: parsed.text });
+      }
+
+      if (parsed.functionCalls && parsed.functionCalls.length > 0) {
+        for (const fc of parsed.functionCalls) {
+          const events = accumulator.pushChunk({
+            index: fnIdx++,
+            id: fc.id,
+            name: fc.name,
+            parsedArguments: fc.args,
+            argumentsDelta: fc.rawArgs !== undefined ? JSON.stringify(fc.rawArgs) : undefined,
+          });
+          for (const evt of events) {
+            if (isSubstantiveStreamDelta(evt)) markFirstToken();
+            onChunk(evt);
+          }
+        }
+      }
+
+      if (parsed.usage) {
+        finalUsage = parsed.usage;
+      }
+    };
 
     try {
       while (true) {
+        combinedSignal.throwIfAborted();
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -410,63 +605,49 @@ export class GeminiAdapter implements ModelAdapter {
         buffer = lines.pop() ?? '';
 
         for (const line of lines) {
-          const parsed = this.parseSSELine(line);
-          if (!parsed) continue;
-
-          if (parsed.text !== undefined && parsed.text.length > 0) {
-            if (!firstTokenDelivered) {
-              firstTokenDelivered = true;
-              if (timeoutTimer) {
-                clearTimeout(timeoutTimer);
-                timeoutTimer = null;
-              }
-            }
-            accumulatedText += parsed.text;
-            onChunk({ text: parsed.text });
-          }
-
-          if (parsed.thinking !== undefined && parsed.thinking.length > 0) {
-            accumulatedThinking += parsed.thinking;
-            onChunk({ thinking: parsed.thinking });
-          }
-
-          if (parsed.usage) {
-            finalUsage = parsed.usage;
-          }
+          handleParsedChunk(this.parseSSELine(line));
         }
       }
 
-      if (buffer.length > 0) {
-        const parsed = this.parseSSELine(buffer);
-        if (parsed?.thinking) {
-          accumulatedThinking += parsed.thinking;
-          onChunk({ thinking: parsed.thinking });
-        }
-        if (parsed?.text) {
-          if (!firstTokenDelivered) {
-            firstTokenDelivered = true;
-            if (timeoutTimer) {
-              clearTimeout(timeoutTimer);
-              timeoutTimer = null;
-            }
-          }
-          accumulatedText += parsed.text;
-          onChunk({ text: parsed.text });
+      buffer += decoder.decode();
+      if (buffer.trim().length > 0) {
+        const trimmedTrailing = buffer.trim();
+        const parsedTrailing = this.parseSSELine(buffer);
+        if (!parsedTrailing && trimmedTrailing.startsWith('data:') && trimmedTrailing !== 'data: [DONE]' && trimmedTrailing !== 'data:[DONE]') {
+          truncatedTrailingFrame = true;
+        } else {
+          handleParsedChunk(parsedTrailing);
         }
       }
     } finally {
+      combinedSignal.removeEventListener('abort', onStreamAbort);
+      reader.releaseLock();
       if (timeoutTimer) clearTimeout(timeoutTimer);
     }
 
-    if (!accumulatedText.trim()) {
+    const { events: terminalToolEvents, toolCalls, invalidToolCalls } = accumulator.finalizeAll(!truncatedTrailingFrame);
+    for (const evt of terminalToolEvents) {
+      onChunk(evt);
+    }
+
+    if (truncatedTrailingFrame) {
+      throw new Error('Gemini upstream stream truncated before completing SSE frame.');
+    }
+
+    if (!accumulatedText.trim() && toolCalls.length === 0 && invalidToolCalls.length === 0) {
       const emptyErr = new Error('EMPTY_PROVIDER_RESPONSE: Gemini upstream stream completed without returning content.');
       (emptyErr as any).code = 'EMPTY_PROVIDER_RESPONSE';
       throw emptyErr;
     }
 
+    onChunk({ type: 'done', finishReason: finishReason || (toolCalls.length > 0 ? 'tool_calls' : 'stop'), usage: finalUsage });
+
     return {
       text: accumulatedText,
       thinking: accumulatedThinking || undefined,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      invalidToolCalls: invalidToolCalls.length > 0 ? invalidToolCalls : undefined,
+      finishReason,
       usage: finalUsage,
       model: cleanModel,
       outboundModel: cleanModel
@@ -475,13 +656,5 @@ export class GeminiAdapter implements ModelAdapter {
 }
 
 function anySignal(signals: AbortSignal[]): AbortSignal {
-  const controller = new AbortController();
-  for (const sig of signals) {
-    if (sig.aborted) {
-      controller.abort(sig.reason);
-      return controller.signal;
-    }
-    sig.addEventListener('abort', () => controller.abort(sig.reason), { once: true });
-  }
-  return controller.signal;
+  return AbortSignal.any(signals);
 }

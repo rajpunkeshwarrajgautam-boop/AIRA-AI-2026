@@ -205,13 +205,31 @@ export function normalizeModelIdentifier(value: unknown = 'aira-auto'): ModelId 
 }
 
 
+export const ModelToolDefinitionSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().default(''),
+  parameters: z.record(z.string(), z.unknown()).default({ type: 'object', properties: {} })
+});
+export type ModelToolDefinition = z.infer<typeof ModelToolDefinitionSchema>;
+
+export const ModelToolChoiceSchema = z.union([
+  z.enum(['auto', 'none', 'required']),
+  z.object({
+    type: z.literal('function'),
+    name: z.string().min(1)
+  })
+]);
+export type ModelToolChoice = z.infer<typeof ModelToolChoiceSchema>;
+
 export const ModelPolicySchema = z.object({
   model: ModelIdSchema,
   maxTokens: z.number().int().positive().default(4096),
   temperature: z.number().min(0).max(2).default(0.7),
   extendedThinking: z.boolean().default(false),
   reasoningBudget: z.number().int().nonnegative().optional(),
-  timeoutMs: z.number().int().positive().default(60000)
+  timeoutMs: z.number().int().positive().default(60000),
+  tools: z.array(ModelToolDefinitionSchema).optional(),
+  toolChoice: ModelToolChoiceSchema.optional()
 });
 export type ModelPolicy = z.infer<typeof ModelPolicySchema>;
 

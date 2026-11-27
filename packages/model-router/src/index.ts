@@ -17,25 +17,37 @@ import { ResilientModelAdapter } from './resilient-adapter.js';
 import { GeminiAdapter } from './gemini-adapter.js';
 import { PrivateBetaCapacityGuard } from './capacity/index.js';
 import { protectInferenceAdapter } from './inference-capacity.js';
+import {
+  ToolCallStreamAccumulator,
+  formatOpenAITools,
+  formatOpenAIToolChoice,
+  formatAnthropicTools,
+  formatAnthropicToolChoice,
+  type ModelToolCall,
+  type ModelToolCallValidationError,
+  type ModelStreamDelta,
+} from './tool-call-stream.js';
 export * from './inference-capacity.js';
+export * from './tool-call-stream.js';
 
 export * from './capacity/index.js';
+
+export type { ModelToolDefinition, ModelToolChoice } from '../../contracts/src/index.js';
 
 export interface ChatMessageInput {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   name?: string;
   toolCallId?: string;
+  toolCalls?: ModelToolCall[];
 }
 
 export interface ModelCompletionResult {
   text: string;
   thinking?: string;
-  toolCalls?: Array<{
-    id: string;
-    name: string;
-    arguments: Record<string, unknown>;
-  }>;
+  toolCalls?: ModelToolCall[];
+  invalidToolCalls?: ModelToolCallValidationError[];
+  finishReason?: string;
   usage: {
     promptTokens: number;
     completionTokens: number;
@@ -87,7 +99,7 @@ export interface ModelAdapter {
   stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    onChunk: (delta: ModelStreamDelta) => void,
     options?: {
       firstTokenTimeoutMs?: number;
       signal?: AbortSignal;
@@ -109,6 +121,7 @@ export class DeterministicMockAdapter implements ModelAdapter {
   readonly provider = 'mock' as const;
 
   async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
+    signal?.throwIfAborted();
     const lastUserMessage = [...messages].reverse().find(m => m.role === 'user')?.content || '';
     const thinking = policy.extendedThinking
       ? `Analyzing intent for request: "${lastUserMessage.slice(0, 80)}...". Resolving execution strategy via deterministic model policy ${policy.model}.`
@@ -166,9 +179,25 @@ export class DeterministicMockAdapter implements ModelAdapter {
       text = `Execution complete. Objective: "${lastUserMessage.slice(0, 100)}". Policy: ${policy.model} (maxTokens: ${policy.maxTokens}).`;
     }
 
+    const availableTools = new Set((policy.tools || []).map(t => t.name));
+    let toolCalls: ModelToolCall[] | undefined;
+
+    if (lastUserMessage.toLowerCase().includes('run command') && availableTools.has('system_shell')) {
+      toolCalls = [{ id: 'call_mock_shell_1', name: 'system_shell', arguments: { command: 'echo hello' } }];
+      text = '';
+    } else if (lastUserMessage.toLowerCase().includes('hang safe') && availableTools.has('hang_safe')) {
+      toolCalls = [{ id: 'call_mock_hang_safe_1', name: 'hang_safe', arguments: {} }];
+      text = '';
+    } else if (lastUserMessage.toLowerCase().includes('hang unsafe') && availableTools.has('hang_unsafe')) {
+      toolCalls = [{ id: 'call_mock_hang_unsafe_1', name: 'hang_unsafe', arguments: {} }];
+      text = '';
+    }
+
     return {
       text,
       thinking,
+      toolCalls,
+      finishReason: toolCalls ? 'tool_calls' : 'stop',
       usage: {
         promptTokens: Math.max(12, Math.floor(lastUserMessage.length / 4)),
         completionTokens: Math.max(20, Math.floor(text.length / 4)),
@@ -182,16 +211,32 @@ export class DeterministicMockAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    onChunk: (delta: ModelStreamDelta) => void,
     options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
+    options?.signal?.throwIfAborted();
     const result = await this.complete(messages, policy, options?.signal);
     if (result.thinking) {
-      onChunk({ thinking: result.thinking });
+      onChunk({ type: 'thinking', thinking: result.thinking });
     }
     if (result.text) {
-      onChunk({ text: result.text });
+      onChunk({ type: 'text', text: result.text });
     }
+    if (result.toolCalls && result.toolCalls.length > 0) {
+      const accumulator = new ToolCallStreamAccumulator();
+      result.toolCalls.forEach((tc, idx) => {
+        for (const evt of accumulator.pushChunk({
+          index: idx,
+          id: tc.id,
+          name: tc.name,
+          parsedArguments: tc.arguments,
+        })) {
+          onChunk(evt);
+        }
+      });
+      accumulator.finalizeAll(true).events.forEach(evt => onChunk(evt));
+    }
+    onChunk({ type: 'done', finishReason: result.finishReason, usage: result.usage });
     return result;
   }
 }
@@ -286,17 +331,49 @@ export class AnthropicAdapter implements ModelAdapter {
     return { provider: this.provider };
   }
 
-  async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
-    if (!this.apiKey) {
-      throw new Error('Anthropic API key is not configured.');
+  private buildRequestPayload(
+    messages: ChatMessageInput[],
+    policy: ModelPolicy,
+    stream: boolean
+  ): { outboundModel: string; bodyPayload: Record<string, any> } {
+    const systemParts = messages.filter(m => m.role === 'system' && m.content).map(m => m.content);
+    const systemMessage = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
+    const rawConversation: Array<{ role: 'user' | 'assistant'; content: any }> = [];
+
+    for (const m of messages) {
+      if (m.role === 'system') continue;
+      if (m.role === 'tool') {
+        rawConversation.push({
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: m.toolCallId || 'call_default', content: m.content }]
+        });
+      } else if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+        const blocks: any[] = [];
+        if (m.content) blocks.push({ type: 'text', text: m.content });
+        for (const tc of m.toolCalls) {
+          blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.arguments || {} });
+        }
+        rawConversation.push({ role: 'assistant', content: blocks });
+      } else {
+        rawConversation.push({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: m.content
+        });
+      }
     }
-    const systemMessage = messages.find(m => m.role === 'system')?.content;
-    const conversationMessages = messages
-      .filter(m => m.role !== 'system')
-      .map(m => ({
-        role: m.role === 'assistant' ? 'assistant' : 'user',
-        content: m.content
-      }));
+
+    // Merge consecutive same-role turns (required by Anthropic when parallel tool_result blocks arrive)
+    const conversationMessages: Array<{ role: 'user' | 'assistant'; content: any }> = [];
+    for (const msg of rawConversation) {
+      const prev = conversationMessages[conversationMessages.length - 1];
+      if (prev && prev.role === msg.role) {
+        const prevBlocks = Array.isArray(prev.content) ? prev.content : [{ type: 'text', text: String(prev.content || '') }];
+        const nextBlocks = Array.isArray(msg.content) ? msg.content : [{ type: 'text', text: String(msg.content || '') }];
+        prev.content = [...prevBlocks, ...nextBlocks];
+      } else {
+        conversationMessages.push(msg);
+      }
+    }
 
     const outboundModel = resolveAnthropicModel(policy.model);
     if (outboundModel.startsWith('aira-')) {
@@ -309,6 +386,15 @@ export class AnthropicAdapter implements ModelAdapter {
       system: systemMessage,
       messages: conversationMessages
     };
+    if (stream) {
+      bodyPayload.stream = true;
+    }
+    const anthropicTools = formatAnthropicTools(policy.tools);
+    if (anthropicTools) {
+      bodyPayload.tools = anthropicTools;
+      const anthropicChoice = formatAnthropicToolChoice(policy.toolChoice);
+      if (anthropicChoice) bodyPayload.tool_choice = anthropicChoice;
+    }
     if (
       policy.extendedThinking &&
       typeof policy.reasoningBudget === 'number' &&
@@ -319,6 +405,16 @@ export class AnthropicAdapter implements ModelAdapter {
       bodyPayload.thinking = { type: 'enabled', budget_tokens: clampedBudget };
       bodyPayload.temperature = 1;
     }
+
+    return { outboundModel, bodyPayload };
+  }
+
+  async complete(messages: ChatMessageInput[], policy: ModelPolicy, signal?: AbortSignal): Promise<ModelCompletionResult> {
+    signal?.throwIfAborted();
+    if (!this.apiKey) {
+      throw new Error('Anthropic API key is not configured.');
+    }
+    const { outboundModel, bodyPayload } = this.buildRequestPayload(messages, policy, false);
 
     const response = await fetch(`${this.baseUrl}/messages`, {
       signal,
@@ -333,16 +429,37 @@ export class AnthropicAdapter implements ModelAdapter {
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`Anthropic API error (${response.status}): ${errText}`);
+      const err: any = new Error(`Anthropic API error (${response.status}): ${errText}`);
+      err.status = response.status;
+      err.statusCode = response.status;
+      throw err;
     }
 
     const data = await response.json();
     const text = data.content?.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n') || '';
     const thinking = data.content?.find((c: any) => c.type === 'thinking')?.thinking;
+    const accumulator = new ToolCallStreamAccumulator();
+    let idx = 0;
+    if (Array.isArray(data.content)) {
+      for (const block of data.content) {
+        if (block?.type === 'tool_use') {
+          accumulator.pushChunk({
+            index: idx++,
+            id: block.id,
+            name: block.name,
+            parsedArguments: block.input && typeof block.input === 'object' ? block.input : {},
+          });
+        }
+      }
+    }
+    const { toolCalls, invalidToolCalls } = accumulator.finalizeAll(true);
 
     return {
       text,
       thinking,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      invalidToolCalls: invalidToolCalls.length > 0 ? invalidToolCalls : undefined,
+      finishReason: typeof data.stop_reason === 'string' ? data.stop_reason : undefined,
       usage: {
         promptTokens: data.usage?.input_tokens || 0,
         completionTokens: data.usage?.output_tokens || 0,
@@ -356,14 +473,191 @@ export class AnthropicAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    onChunk: (delta: ModelStreamDelta) => void,
     options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
-    // Falls back to complete then emits chunks if SSE stream not directly hooked
-    const res = await this.complete(messages, policy, options?.signal);
-    if (res.thinking) onChunk({ thinking: res.thinking });
-    if (res.text) onChunk({ text: res.text });
-    return res;
+    options?.signal?.throwIfAborted();
+    if (!this.apiKey) {
+      throw new Error('Anthropic API key is not configured.');
+    }
+    const { outboundModel, bodyPayload } = this.buildRequestPayload(messages, policy, true);
+    const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? 0;
+    const abortController = new AbortController();
+    const onOuterAbort = () => abortController.abort(options?.signal?.reason);
+    if (options?.signal) {
+      options.signal.addEventListener('abort', onOuterAbort, { once: true });
+    }
+
+    let firstTokenTimer: NodeJS.Timeout | null = null;
+    let receivedFirstToken = false;
+    const markFirstToken = () => {
+      if (!receivedFirstToken) {
+        receivedFirstToken = true;
+        if (firstTokenTimer) {
+          clearTimeout(firstTokenTimer);
+          firstTokenTimer = null;
+        }
+      }
+    };
+
+    if (firstTokenTimeoutMs > 0) {
+      firstTokenTimer = setTimeout(() => {
+        if (!receivedFirstToken) {
+          abortController.abort(
+            new Error(`FIRST_TOKEN_TIMEOUT: Anthropic first-token deadline (${firstTokenTimeoutMs}ms) exceeded`)
+          );
+        }
+      }, firstTokenTimeoutMs);
+    }
+
+    try {
+      const response = await fetch(`${this.baseUrl}/messages`, {
+        signal: abortController.signal,
+        method: 'POST',
+        headers: {
+          'x-api-key': this.apiKey,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json',
+          Accept: 'text/event-stream'
+        },
+        body: JSON.stringify(bodyPayload)
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        const err: any = new Error(`Anthropic API error (${response.status}): ${errText}`);
+        err.status = response.status;
+        err.statusCode = response.status;
+        throw err;
+      }
+      if (!response.body) throw new Error('Anthropic returned an empty streaming response body.');
+
+      const reader = response.body.getReader();
+      const onReaderAbort = () => {
+        reader.cancel(abortController.signal.reason).catch(() => undefined);
+      };
+      if (abortController.signal.aborted) {
+        onReaderAbort();
+      } else {
+        abortController.signal.addEventListener('abort', onReaderAbort, { once: true });
+      }
+
+      const decoder = new TextDecoder();
+      const accumulator = new ToolCallStreamAccumulator();
+      let buffer = '';
+      let text = '';
+      let thinking = '';
+      let upstreamModel: string | undefined;
+      let promptTokens = 0;
+      let completionTokens = 0;
+      let finishReason: string | undefined;
+      let finished = false;
+      const toolIndices = new Set<number>();
+
+      const handleFrame = (frame: string) => {
+        const dataString = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5).trimStart()).join('\n');
+        if (!dataString) return;
+        const event = JSON.parse(dataString);
+        if (event.type === 'error') {
+          throw new Error(event.error?.message || 'Anthropic streaming inference error.');
+        }
+        if (event.type === 'message_start') {
+          if (typeof event.message?.model === 'string') upstreamModel = event.message.model;
+          if (typeof event.message?.usage?.input_tokens === 'number') promptTokens = event.message.usage.input_tokens;
+        } else if (event.type === 'content_block_start') {
+          const block = event.content_block;
+          const idx = typeof event.index === 'number' ? event.index : 0;
+          if (block?.type === 'tool_use') {
+            toolIndices.add(idx);
+            markFirstToken();
+            for (const evt of accumulator.pushChunk({ index: idx, id: block.id, name: block.name })) {
+              onChunk(evt);
+            }
+          }
+        } else if (event.type === 'content_block_delta') {
+          const idx = typeof event.index === 'number' ? event.index : 0;
+          const delta = event.delta;
+          if (delta?.type === 'text_delta' && typeof delta.text === 'string' && delta.text.length > 0) {
+            markFirstToken();
+            text += delta.text;
+            onChunk({ type: 'text', text: delta.text });
+          } else if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string' && delta.thinking.length > 0) {
+            thinking += delta.thinking;
+            onChunk({ type: 'thinking', thinking: delta.thinking });
+          } else if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+            markFirstToken();
+            for (const evt of accumulator.pushChunk({ index: idx, argumentsDelta: delta.partial_json })) {
+              onChunk(evt);
+            }
+          }
+        } else if (event.type === 'content_block_stop') {
+          const idx = typeof event.index === 'number' ? event.index : 0;
+          if (toolIndices.has(idx)) {
+            const closedEvt = accumulator.closeSlot(idx);
+            if (closedEvt) onChunk(closedEvt);
+          }
+        } else if (event.type === 'message_delta') {
+          if (typeof event.delta?.stop_reason === 'string') finishReason = event.delta.stop_reason;
+          if (typeof event.usage?.output_tokens === 'number') completionTokens = event.usage.output_tokens;
+        } else if (event.type === 'message_stop') {
+          finished = true;
+        }
+      };
+
+      try {
+        while (!finished) {
+          abortController.signal.throwIfAborted();
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+          let sep: number;
+          while ((sep = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, sep);
+            buffer = buffer.slice(sep + 2);
+            handleFrame(frame);
+            if (finished) break;
+          }
+        }
+        abortController.signal.throwIfAborted();
+        buffer += decoder.decode();
+        if (!finished && buffer.trim()) {
+          try {
+            handleFrame(buffer);
+          } catch {
+            // Trailing partial frame at EOF terminates below via INCOMPLETE_TOOL_CALL
+          }
+        }
+      } finally {
+        abortController.signal.removeEventListener('abort', onReaderAbort);
+        reader.releaseLock();
+      }
+
+      const finalized = accumulator.finalizeAll(finished);
+      for (const evt of finalized.events) onChunk(evt);
+      if (!finished) throw new Error('Anthropic stream closed before message_stop.');
+
+      const usage = { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
+      onChunk({ type: 'done', finishReason, usage });
+      return {
+        text,
+        thinking: thinking || undefined,
+        toolCalls: finalized.toolCalls.length > 0 ? finalized.toolCalls : undefined,
+        invalidToolCalls: finalized.invalidToolCalls.length > 0 ? finalized.invalidToolCalls : undefined,
+        finishReason,
+        usage,
+        outboundModel,
+        model: upstreamModel,
+      };
+    } finally {
+      if (options?.signal) {
+        options.signal.removeEventListener('abort', onOuterAbort);
+      }
+      if (firstTokenTimer) {
+        clearTimeout(firstTokenTimer);
+        firstTokenTimer = null;
+      }
+    }
   }
 }
 
@@ -509,12 +803,38 @@ export class OpenAIAdapter implements ModelAdapter {
 
     const body: Record<string, any> = {
       model: outboundModel,
-      messages: messages.map(m => m.role === 'tool'
-        ? { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' }
-        : { role: m.role, content: m.content }),
+      messages: messages.map(m => {
+        if (m.role === 'tool') {
+          return { role: 'tool', content: m.content, tool_call_id: m.toolCallId || 'call_default' };
+        }
+        if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+          return {
+            role: 'assistant',
+            content: m.content || null,
+            tool_calls: m.toolCalls.map(tc => ({
+              id: tc.id,
+              type: 'function',
+              function: {
+                name: tc.name,
+                arguments: JSON.stringify(tc.arguments || {})
+              }
+            }))
+          };
+        }
+        return { role: m.role, content: m.content };
+      }),
       max_tokens: effectiveMaxTokens,
       temperature: policy.temperature
     };
+
+    const openAITools = formatOpenAITools(policy.tools);
+    if (openAITools) {
+      body.tools = openAITools;
+      const openAIChoice = formatOpenAIToolChoice(policy.toolChoice);
+      if (openAIChoice !== undefined) {
+        body.tool_choice = openAIChoice;
+      }
+    }
 
     // Groq openai/gpt-oss-120b supports coarse reasoning_effort ('low'|'medium'|'high')
     // when extended thinking is explicitly enabled on an entitled tier.
@@ -585,10 +905,28 @@ export class OpenAIAdapter implements ModelAdapter {
         }
 
         const data = await response.json();
-        const text = data.choices?.[0]?.message?.content || '';
+        const message = data.choices?.[0]?.message;
+        const text = message?.content || '';
+        const rawToolCalls = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+        const accumulator = new ToolCallStreamAccumulator();
+        rawToolCalls.forEach((tc: any, idx: number) => {
+          accumulator.pushChunk({
+            index: idx,
+            id: tc?.id,
+            name: tc?.function?.name,
+            argumentsDelta: typeof tc?.function?.arguments === 'string' ? tc.function.arguments : undefined,
+            parsedArguments: tc?.function?.arguments && typeof tc.function.arguments === 'object'
+              ? tc.function.arguments
+              : undefined
+          });
+        });
+        const { toolCalls, invalidToolCalls } = accumulator.finalizeAll(true);
 
         return {
           text,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+          invalidToolCalls: invalidToolCalls.length > 0 ? invalidToolCalls : undefined,
+          finishReason: typeof data.choices?.[0]?.finish_reason === 'string' ? data.choices[0].finish_reason : undefined,
           usage: {
             promptTokens: data.usage?.prompt_tokens || 0,
             completionTokens: data.usage?.completion_tokens || 0,
@@ -614,16 +952,18 @@ export class OpenAIAdapter implements ModelAdapter {
   async stream(
     messages: ChatMessageInput[],
     policy: ModelPolicy,
-    onChunk: (delta: { text?: string; thinking?: string }) => void,
+    onChunk: (delta: ModelStreamDelta) => void,
     options?: { firstTokenTimeoutMs?: number; signal?: AbortSignal }
   ): Promise<ModelCompletionResult> {
+    options?.signal?.throwIfAborted();
     const outboundModel = this.resolveOutboundModel(policy.model);
 
     // First-token deadline timer (commercially reasonable deadline: e.g. 3000ms for fast normal chat)
     const firstTokenTimeoutMs = options?.firstTokenTimeoutMs ?? (policy.model === 'aira-fast' ? 3000 : 0);
     const abortController = new AbortController();
+    const onOuterAbort = () => abortController.abort(options?.signal?.reason);
     if (options?.signal) {
-      options.signal.addEventListener('abort', () => abortController.abort(options.signal?.reason), { once: true });
+      options.signal.addEventListener('abort', onOuterAbort, { once: true });
     }
 
     let firstTokenTimer: NodeJS.Timeout | null = null;
@@ -686,9 +1026,22 @@ export class OpenAIAdapter implements ModelAdapter {
       const decoder = new TextDecoder();
       let buffer = '';
       let output = '';
+      let thinkingOutput = '';
       let upstreamModel: string | undefined;
+      let finishReason: string | undefined;
       let usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
       let finished = false;
+      const accumulator = new ToolCallStreamAccumulator();
+
+      const markFirstToken = () => {
+        if (!receivedFirstToken) {
+          receivedFirstToken = true;
+          if (firstTokenTimer) {
+            clearTimeout(firstTokenTimer);
+            firstTokenTimer = null;
+          }
+        }
+      };
 
       const handleFrame = (frame: string) => {
         const dataString = frame.split(/\r?\n/).filter(line => line.startsWith('data:'))
@@ -698,24 +1051,37 @@ export class OpenAIAdapter implements ModelAdapter {
         const event = JSON.parse(dataString);
         if (event.error) throw new Error('Provider reported a streaming inference error.');
         if (typeof event.model === 'string' && event.model.trim()) upstreamModel = event.model.trim();
-        const delta = event.choices?.[0]?.delta;
+        const choice = event.choices?.[0];
+        if (typeof choice?.finish_reason === 'string' && choice.finish_reason.length > 0) {
+          finishReason = choice.finish_reason;
+        }
+        const delta = choice?.delta;
         if (typeof delta?.content === 'string' && delta.content.length) {
-          if (!receivedFirstToken) {
-            receivedFirstToken = true;
-            if (firstTokenTimer) {
-              clearTimeout(firstTokenTimer);
-              firstTokenTimer = null;
-            }
-          }
+          markFirstToken();
           output += delta.content;
-          onChunk({ text: delta.content });
+          onChunk({ type: 'text', text: delta.content });
         }
         const reasoningChunk =
           typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length
             ? delta.reasoning_content
             : (typeof delta?.reasoning === 'string' && delta.reasoning.length ? delta.reasoning : '');
         if (reasoningChunk && policy.extendedThinking) {
-          onChunk({ thinking: reasoningChunk });
+          thinkingOutput += reasoningChunk;
+          onChunk({ type: 'thinking', thinking: reasoningChunk });
+        }
+        if (Array.isArray(delta?.tool_calls)) {
+          for (const tc of delta.tool_calls) {
+            const events = accumulator.pushChunk({
+              index: typeof tc?.index === 'number' ? tc.index : 0,
+              id: typeof tc?.id === 'string' ? tc.id : undefined,
+              name: typeof tc?.function?.name === 'string' ? tc.function.name : undefined,
+              argumentsDelta: typeof tc?.function?.arguments === 'string' ? tc.function.arguments : undefined,
+            });
+            for (const evt of events) {
+              markFirstToken();
+              onChunk(evt);
+            }
+          }
         }
         if (event.usage) usage = {
           promptTokens: event.usage.prompt_tokens || 0,
@@ -743,15 +1109,44 @@ export class OpenAIAdapter implements ModelAdapter {
         }
         abortController.signal.throwIfAborted();
         buffer += decoder.decode();
-        if (!finished && buffer.trim()) handleFrame(buffer);
+        if (!finished && buffer.trim()) {
+          try {
+            handleFrame(buffer);
+          } catch {
+            // Trailing partial JSON at EOF means the stream terminated prematurely
+          }
+        }
       } finally {
         abortController.signal.removeEventListener('abort', onAbort);
         reader.releaseLock();
       }
-      if (!finished) throw new Error('Provider stream closed before its terminal event.');
-      if (!output.trim()) throw new Error('Provider completed without generating visible answer text.');
-      return { text: output, usage, outboundModel, model: upstreamModel };
+      if (!finished) {
+        const incomplete = accumulator.finalizeAll(false);
+        for (const evt of incomplete.events) onChunk(evt);
+        throw new Error('Provider stream closed before its terminal event.');
+      }
+      const { events: terminalToolEvents, toolCalls, invalidToolCalls } = accumulator.finalizeAll(true);
+      for (const evt of terminalToolEvents) {
+        onChunk(evt);
+      }
+      if (!output.trim() && toolCalls.length === 0 && invalidToolCalls.length === 0) {
+        throw new Error('Provider completed without generating visible answer text.');
+      }
+      onChunk({ type: 'done', finishReason: finishReason || (toolCalls.length > 0 ? 'tool_calls' : 'stop'), usage });
+      return {
+        text: output,
+        thinking: thinkingOutput || undefined,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        invalidToolCalls: invalidToolCalls.length > 0 ? invalidToolCalls : undefined,
+        finishReason,
+        usage,
+        outboundModel,
+        model: upstreamModel
+      };
     } finally {
+      if (options?.signal) {
+        options.signal.removeEventListener('abort', onOuterAbort);
+      }
       if (firstTokenTimer) {
         clearTimeout(firstTokenTimer);
         firstTokenTimer = null;
