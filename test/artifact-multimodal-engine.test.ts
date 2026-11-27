@@ -38,6 +38,7 @@ import {
   generateDocxArchive,
   generateXlsxArchive,
   generatePptxArchive,
+  generatePdfArchive,
 } from '../src/utils/officeDocumentExporter.js';
 
 import {
@@ -258,6 +259,17 @@ graph TD
     assert.equal(pptxBuf.length > 500, true);
     assert.equal(pptxBuf[0], 0x50);
     assert.equal(pptxBuf[1], 0x4b);
+
+    // 4. PDF (Phase 4B targeted closure)
+    const pdfBuf = generatePdfArchive('Strategic Overview', '# Executive Summary\n\nRevenue grew by 25% year-over-year.');
+    assert.equal(pdfBuf instanceof Uint8Array, true);
+    assert.equal(pdfBuf.length > 300, true);
+    const pdfText = new TextDecoder().decode(pdfBuf);
+    assert.equal(pdfText.startsWith('%PDF-1.4'), true, 'PDF must start with %PDF-1.4 header');
+    assert.equal(pdfText.includes('%%EOF'), true, 'PDF must terminate with %%EOF marker');
+    assert.equal(pdfText.includes('xref'), true, 'PDF must include xref table');
+    assert.equal(pdfText.includes('/Type /Catalog'), true, 'PDF must include Catalog dictionary');
+    assert.equal(pdfText.includes('(Strategic Overview) Tj'), true, 'PDF must include title in text stream');
   });
 
   await t.test('8. Artifact Patch & Conflict Engine', () => {

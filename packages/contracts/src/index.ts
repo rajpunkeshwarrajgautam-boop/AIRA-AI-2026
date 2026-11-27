@@ -1043,4 +1043,5 @@ export * from './genui-reactive.js';
 export * from './a2ui.js';
 export * from './mcp-apps.js';
 export * from './artifacts.js';
+export * from './collaboration.js';
 

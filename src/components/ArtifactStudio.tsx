@@ -47,7 +47,8 @@ import { createRollbackRevision, diffArtifactLines } from '../utils/artifactRevi
 import { GenUISheetEditor } from './genui/GenUISheetEditor';
 import { GenUISlideEditor } from './genui/GenUISlideEditor';
 import { GenUIDiagram } from './genui/GenUIDiagram';
-import { generateDocxArchive, generateXlsxArchive, generatePptxArchive } from '../utils/officeDocumentExporter';
+import { GenUICollaborativeCanvas } from './genui/GenUICollaborativeCanvas';
+import { generateDocxArchive, generateXlsxArchive, generatePptxArchive, generatePdfArchive } from '../utils/officeDocumentExporter';
 import type { SpreadsheetWorkbook, PresentationDeck } from '../../packages/contracts/src/artifacts';
 
 function parseSpreadsheetWorkbook(content: string, title: string): SpreadsheetWorkbook {
@@ -382,6 +383,17 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  const handleDownloadPdf = () => {
+    const bytes = generatePdfArchive(artifact.title, currentContent);
+    const blob = new Blob([bytes as any], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${artifact.title.toLowerCase().replace(/[^a-z0-9]/g, '-')}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // CRITICAL FIX A: Never open untrusted executable generated HTML as an unrestricted same-origin Blob document
   const handleOpenInNewTab = () => {
     const isExecutable = artifact.type === 'text/html' || artifact.type === 'application/vnd.ant.react' || artifact.type === 'application/vnd.aira.app';
@@ -662,6 +674,26 @@ export const ArtifactStudio: React.FC<ArtifactStudioProps> = ({
                 >
                   {isCopied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                 </button>
+                {(artifact.type === 'text/markdown' || (artifact.type as string) === 'text/plain') && (
+                  <>
+                    <button
+                      onClick={handleDownloadDocx}
+                      className="hidden sm:inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
+                      title="Export as Microsoft Word (.docx)"
+                      data-testid="export-docx-btn"
+                    >
+                      DOCX
+                    </button>
+                    <button
+                      onClick={handleDownloadPdf}
+                      className="hidden sm:inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark"
+                      title="Export as Adobe PDF (.pdf)"
+                      data-testid="export-pdf-btn"
+                    >
+                      PDF
+                    </button>
+                  </>
+                )}
                 <button
                   onClick={handleDownload}
                   className="p-1.5 hidden sm:block rounded-lg text-claude-muted-light dark:text-claude-muted-dark hover:bg-claude-surface2-light dark:hover:bg-claude-surface2-dark hover:text-claude-text-light dark:hover:text-white transition-colors"

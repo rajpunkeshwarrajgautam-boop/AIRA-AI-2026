@@ -362,3 +362,101 @@ export function generatePptxArchive(deck: PresentationDeck): Uint8Array {
     ...slideEntries,
   ]);
 }
+
+/**
+ * Generates a valid PDF 1.4 binary document from title and markdown/plain text content.
+ * Follows ISO 32000-1 / PDF 1.4 specification with binary comments, cross-reference table,
+ * catalog dictionary, pages tree, and standard font resources without external dependencies.
+ */
+export function generatePdfArchive(title: string, markdownOrText: string): Uint8Array {
+  const encoder = new TextEncoder();
+  const escapePdfText = (text: string): string => {
+    return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  };
+
+  const paragraphs = markdownOrText
+    .split(/\r?\n\r?\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+
+  // PDF Content Stream construction
+  let contentStream = 'BT\n';
+  // Title in bold font /F2, size 18
+  contentStream += '/F2 18 Tf\n72 720 Td\n(' + escapePdfText(title) + ') Tj\n';
+
+  let currentY = 720;
+  for (const para of paragraphs) {
+    if (currentY < 100) break; // stay within single page bounds
+    if (para.startsWith('# ')) {
+      currentY -= 32;
+      contentStream += `0 -32 Td\n/F2 14 Tf\n(${escapePdfText(para.slice(2))}) Tj\n`;
+    } else if (para.startsWith('## ') || para.startsWith('### ')) {
+      currentY -= 26;
+      const heading = para.replace(/^#{2,3}\s+/, '');
+      contentStream += `0 -26 Td\n/F2 12 Tf\n(${escapePdfText(heading)}) Tj\n`;
+    } else {
+      const cleanPara = para.replace(/\*\*(.*?)\*\*/g, '$1');
+      const words = cleanPara.split(/\s+/);
+      let curLine = '';
+      for (const w of words) {
+        if ((curLine + ' ' + w).trim().length > 75) {
+          currentY -= 16;
+          contentStream += `0 -16 Td\n/F1 10 Tf\n(${escapePdfText(curLine.trim())}) Tj\n`;
+          curLine = w;
+        } else {
+          curLine = (curLine + ' ' + w).trim();
+        }
+      }
+      if (curLine) {
+        currentY -= 16;
+        contentStream += `0 -16 Td\n/F1 10 Tf\n(${escapePdfText(curLine.trim())}) Tj\n`;
+      }
+      currentY -= 10;
+      contentStream += '0 -10 Td\n';
+    }
+  }
+  contentStream += 'ET\n';
+
+  const streamBytes = encoder.encode(contentStream);
+
+  // Objects:
+  // 1: Catalog
+  // 2: Pages
+  // 3: Page
+  // 4: Contents stream
+  // 5: Font F1 (Helvetica)
+  // 6: Font F2 (Helvetica-Bold)
+
+  let pdfStr = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
+  const offsets: number[] = [0];
+
+  offsets.push(encoder.encode(pdfStr).length);
+  pdfStr += '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n';
+
+  offsets.push(encoder.encode(pdfStr).length);
+  pdfStr += '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n';
+
+  offsets.push(encoder.encode(pdfStr).length);
+  pdfStr += '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>\nendobj\n';
+
+  offsets.push(encoder.encode(pdfStr).length);
+  pdfStr += `4 0 obj\n<< /Length ${streamBytes.length} >>\nstream\n${contentStream}endstream\nendobj\n`;
+
+  offsets.push(encoder.encode(pdfStr).length);
+  pdfStr += '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n';
+
+  offsets.push(encoder.encode(pdfStr).length);
+  pdfStr += '6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n';
+
+  const startXref = encoder.encode(pdfStr).length;
+  pdfStr += 'xref\n0 7\n0000000000 65535 f \n';
+  for (let i = 1; i <= 6; i++) {
+    const off = String(offsets[i]).padStart(10, '0');
+    pdfStr += `${off} 00000 n \n`;
+  }
+
+  pdfStr += `trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n${startXref}\n%%EOF\n`;
+
+  return encoder.encode(pdfStr);
+}
+

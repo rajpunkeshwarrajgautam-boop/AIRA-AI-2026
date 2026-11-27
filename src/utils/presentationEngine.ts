@@ -135,3 +135,15 @@ export function getSlideThemeStyles(theme: PresentationDeck['theme'] = 'default'
       };
   }
 }
+
+/**
+ * Safely parses a presentation deck JSON payload, falling back to a default deck if invalid.
+ */
+export function parsePresentationDeck(content: string, title = 'Executive Presentation'): PresentationDeck {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && Array.isArray(parsed.slides) && parsed.slides.length > 0) return parsed;
+  } catch {}
+  return createDefaultPresentationDeck(title);
+}
+

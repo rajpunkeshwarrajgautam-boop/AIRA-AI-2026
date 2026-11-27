@@ -556,3 +556,25 @@ export function recalculateSpreadsheet(workbook: SpreadsheetWorkbook): Spreadshe
     sheets: nextSheets,
   };
 }
+
+/**
+ * Safely parses a spreadsheet workbook JSON payload, falling back to a default workbook if invalid.
+ */
+export function parseSpreadsheetWorkbook(content: string, title = 'Workbook'): SpreadsheetWorkbook {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && Array.isArray(parsed.sheets) && parsed.sheets.length > 0) return parsed;
+  } catch {}
+  return {
+    activeSheet: 'Sheet1',
+    sheets: [
+      {
+        name: 'Sheet1',
+        rowCount: 20,
+        colCount: 10,
+        cells: { A1: { raw: title || 'Title', computed: title || 'Title' } },
+      },
+    ],
+  };
+}
+

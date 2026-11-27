@@ -282,3 +282,24 @@ Historical `.planning/STATE.md` (`2026-10`) recorded GitHub Free HTTP 403 on bra
 - **Decision — Zero-Migration Conversation Metadata Artifact Persistence (`src/utils/conversationSearch.ts`):**
   Persisted multimodal artifacts directly within existing PostgreSQL JSONB `conversation_messages.metadata` (Migration `013`). Validated, normalized, and hydrated artifact descriptors on client reload with zero new database schema migrations.
 
+---
+
+## Phase 4C Additions (Real-Time Collaborative Canvas, CRDT-Based Artifact Editing & Multi-Agent Co-Authoring)
+- **Decision — Unified Collaboration Contract (`aira-collab/v1` in `packages/contracts/src/collaboration.ts`):**
+  Defined `AIRA_COLLAB_CONTRACT_VERSION = 'aira-collab/v1'`, `CollabActorSchema`, `CollabOperationSchema`, `CollabPresenceSchema`, and `CollabSessionStateSchema`. Strict payload caps: individual update <= 512 KB, presence update <= 10 Hz with 30s TTL. Enforced roles: `owner`, `editor`, `viewer`, `agent`, ensuring viewers cannot emit mutating operations.
+- **Decision — Convergence Model per Data Type (`src/utils/collaborationEngine.ts`):**
+  - *Text & Documents:* Causal Lamport clock and positional rebase for concurrent inserts/deletes based on older sequences, preserving concurrent edits.
+  - *Spreadsheets:* Cell-level causal Last-Writer-Wins (LWW) with coordinate addressing, deterministic AST recalculation, and explicit conflict detection on concurrent same-cell modifications.
+  - *Presentations:* Slide-level fractional indexing and keyed operations (`insert`, `update`, `reorder`, `delete`) with stable slide UUIDs.
+  - *Diagrams:* Referential node/edge integrity checks.
+- **Decision — Separation of Durable Document Ops from Ephemeral Presence:**
+  Durable operations are sequenced by the server, idempotent via client-generated `opId`, and persisted to PostgreSQL. Ephemeral presence (cursors, selections, active artifact) is kept in memory with a 30-second TTL and rate-limited fanout, never polluting the durable document log.
+- **Decision — Participant-Scoped Undo/Redo Invariants:**
+  Implemented per-actor undo/redo stacks. Undoing an actor's operation generates an inverse delta that leaves other collaborators' concurrent work untouched.
+- **Decision — State-Vector Resumption over Vercel 300s Socket Timeout Bounds:**
+  Clients track `lastServerSeq` and submit state vectors (`actorId => maxLamportClock`) on reconnect. `computeDeltaSince` computes the exact missing delta, allowing seamless resumption without full document re-fetch.
+- **Decision — Pure TypeScript PDF 1.4 Binary Serialization (`src/utils/officeDocumentExporter.ts`):**
+  Implemented `generatePdfArchive` conforming to standard PDF 1.4 specification with `%PDF-1.4` binary header, catalog dictionary, pages tree, Helvetica font resources, content streams, and xref table with `%%EOF` marker, with zero external npm dependencies.
+- **Decision — Server-Authoritative Mutation & Tenant Isolation (`src/server/collaborationManager.ts`):**
+  Enforced atomic sequence assignment, cross-tenant modification rejection (`TENANT_ISOLATION_VIOLATION`), and real-time actor revocation (`ACTOR_REVOKED`).
+
