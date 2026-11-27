@@ -11,6 +11,9 @@ import {
   CoderSpecialistAgent,
   AnalysisSpecialistAgent,
   SynthesizerSpecialistAgent,
+  BaseSpecialistAgent,
+  type SpecialistExecutionContext,
+  type SpecialistExecutionResult,
 } from '../packages/agent-runtime/src/index.js';
 import { CollaborationSessionManager } from '../src/server/collaborationManager.js';
 import type {
@@ -531,11 +534,12 @@ test.describe('AIRA GenUI Phase 5B — Autonomous Intelligence & Swarm Collabora
   // MISSION H: Provider Failure & Safe Fallback
   // =========================================================================
   test('Mission H: Provider Failure & Error Reporting — Specialist failure halts cleanly', async () => {
+    // 1. Test missing unregistered specialist role halts cleanly
     const { engine } = setupEngine();
 
-    const plan: AgentObjectivePlan = {
-      planId: 'plan_failing_provider',
-      objective: 'Execution with Failing Specialist',
+    const planUnregistered: AgentObjectivePlan = {
+      planId: 'plan_failing_provider_unregistered',
+      objective: 'Execution with Unregistered Specialist',
       estimatedWaves: 1,
       maxBudgetTokens: 10000,
       createdAt: Date.now(),
@@ -551,21 +555,86 @@ test.describe('AIRA GenUI Phase 5B — Autonomous Intelligence & Swarm Collabora
       ],
     };
 
-    const task = await engine.createTask(
-      'Execution with Failing Specialist',
+    const taskUnregistered = await engine.createTask(
+      'Execution with Unregistered Specialist',
       dummyPrincipal,
-      plan,
+      planUnregistered,
       undefined,
       false
     );
 
-    await engine.startTask(task.taskId);
+    await engine.startTask(taskUnregistered.taskId);
     await new Promise((r) => setTimeout(r, 120));
 
-    const finalTask = await engine.getTask(task.taskId);
-    assert.notEqual(finalTask, null);
-    assert.equal(finalTask?.state, 'FAILED');
-    assert.equal(finalTask?.plan?.steps[0].status, 'FAILED');
+    const finalUnregistered = await engine.getTask(taskUnregistered.taskId);
+    assert.notEqual(finalUnregistered, null);
+    assert.equal(finalUnregistered?.state, 'FAILED');
+    assert.equal(finalUnregistered?.plan?.steps[0].status, 'FAILED');
+
+    // 2. Test registered specialist with isolated upstream provider fault simulation (HTTP 504 timeout)
+    class FaultyProviderSpecialistAgent extends BaseSpecialistAgent {
+      public readonly role = 'researcher' as const;
+      public readonly name = 'Faulty Provider Researcher Specialist';
+      public readonly description = 'Simulates an upstream provider timeout (HTTP 504)';
+      public readonly requiredCapabilities = ['deep_research', 'tool_execution'] as const;
+
+      protected async performExecution(
+        context: SpecialistExecutionContext,
+        startedAt: number
+      ): Promise<SpecialistExecutionResult> {
+        return this.buildResult(context, 'FAILED', undefined, startedAt, {
+          code: 'PROVIDER_TIMEOUT_504',
+          message: '[PROVIDER_TIMEOUT_504] Upstream LLM provider inference timed out after 30000ms. Non-retryable budget exceeded.',
+          retryable: false,
+        });
+      }
+    }
+
+    const customRegistry = new SpecialistRegistry();
+    customRegistry.registerSpecialist(new FaultyProviderSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
+    customRegistry.registerSpecialist(new VerificationSpecialistAgent(), 'IMPLEMENTED_LOCALLY');
+    const customRepo = new InMemoryAutonomousTaskRepository();
+    const customEngine = new AutonomousAgentEngine({
+      repository: customRepo,
+      specialistRegistry: customRegistry,
+      requireVerification: false,
+    });
+
+    const planProviderFault: AgentObjectivePlan = {
+      planId: 'plan_provider_fault_sim',
+      objective: 'Execution with Provider Timeout',
+      estimatedWaves: 1,
+      maxBudgetTokens: 10000,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      steps: [
+        {
+          stepId: 'step_faulty_inference',
+          title: 'Execute Upstream LLM Inference',
+          role: 'researcher',
+          assignedSpecialist: 'Faulty Provider Researcher Specialist',
+          sideEffectLevel: 'READ',
+          status: 'PENDING',
+        },
+      ],
+    };
+
+    const taskFault = await customEngine.createTask(
+      'Execution with Provider Timeout',
+      dummyPrincipal,
+      planProviderFault,
+      undefined,
+      false
+    );
+
+    await customEngine.startTask(taskFault.taskId);
+    await new Promise((r) => setTimeout(r, 120));
+
+    const finalFault = await customEngine.getTask(taskFault.taskId);
+    assert.notEqual(finalFault, null);
+    assert.equal(finalFault?.state, 'FAILED');
+    assert.equal(finalFault?.plan?.steps[0].status, 'FAILED');
+    assert.equal(finalFault?.plan?.steps[0].resultSummary?.includes('PROVIDER_TIMEOUT_504'), true);
   });
 
   // =========================================================================

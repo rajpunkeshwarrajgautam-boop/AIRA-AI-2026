@@ -462,30 +462,78 @@ test.describe('AIRA GenUI Phase 5A — Comprehensive CRDT Property & Concurrency
     assert.equal(engine.getContent().includes('C --> D[(PostgreSQL)]'), true);
   });
 
-  test('Property 10: Server-authoritative presence receipt timestamp enforcement', () => {
+  test('Property 10: Server-authoritative presence receipt timestamp enforcement & revocation defense', () => {
     const manager = new CollaborationSessionManager();
     const sessionAuth = { principalId: 'p_owner', conversationId: 'c_test' };
     manager.getOrCreateSession('room-pres-auth', baseArtifact, sessionAuth);
 
-    // Client attempts to spoof an expiration timestamp in the far past (timestamp 1000)
-    const spoofedPresence: CollabPresence = {
+    // 1. Client attempts to spoof an expiration timestamp in the far past (timestamp 1000)
+    //    and attempts to inject a client-side _testClockOverride: 50000
+    const spoofedPresence = {
       actorId: alice.actorId,
       principalId: alice.principalId,
       displayName: alice.displayName,
       role: alice.role,
-      status: 'active',
+      status: 'active' as const,
       updatedAt: 1000, // Spoofed client timestamp
+      _testClockOverride: 50000, // Malicious client override injection
     };
 
-    manager.updatePresence('room-pres-auth', spoofedPresence);
+    manager.updatePresence('room-pres-auth', spoofedPresence as any);
 
-    const state = manager.getSessionState('room-pres-auth');
-    assert.notEqual(state, null);
-    const recordedPresence = state!.participants[alice.actorId];
-    assert.notEqual(recordedPresence, undefined);
-    // Server must have stamped authoritative receipt time (around Date.now()), NOT the client spoofed 1000
-    assert.equal(recordedPresence.updatedAt > 1000000, true);
-    assert.equal(Math.abs(Date.now() - recordedPresence.updatedAt) < 5000, true);
+    const state1 = manager.getSessionState('room-pres-auth');
+    assert.notEqual(state1, null);
+    const recorded1 = state1!.participants[alice.actorId];
+    assert.notEqual(recorded1, undefined);
+    // Server must have stamped authoritative receipt time (around Date.now()), NOT spoofed 1000 or override 50000
+    assert.equal(recorded1.updatedAt > 1000000, true);
+    assert.equal(Math.abs(Date.now() - recorded1.updatedAt) < 5000, true);
+    assert.equal((recorded1 as any)._testClockOverride, undefined);
+
+    // 2. Deterministic test clock support via trusted server dependency
+    const trustedTestTime = Date.now() - 2000; // 2 seconds ago (within 30s TTL)
+    manager.setClockForTesting(() => trustedTestTime);
+    manager.updatePresence('room-pres-auth', {
+      actorId: bob.actorId,
+      principalId: bob.principalId,
+      displayName: bob.displayName,
+      role: bob.role,
+      status: 'active' as const,
+      updatedAt: 9999, // spoofed client time
+    });
+    const state2 = manager.getSessionState('room-pres-auth');
+    assert.notEqual(state2, null);
+    assert.notEqual(state2!.participants[bob.actorId], undefined);
+    assert.equal(state2!.participants[bob.actorId].updatedAt, trustedTestTime);
+
+    // 3. Presence expiration: updates older than 30s TTL expire from active state
+    const expiredTestTime = Date.now() - 40000; // 40 seconds ago (> 30s TTL)
+    manager.setClockForTesting(() => expiredTestTime);
+    manager.updatePresence('room-pres-auth', {
+      actorId: charlie.actorId,
+      principalId: charlie.principalId,
+      displayName: charlie.displayName,
+      role: charlie.role,
+      status: 'active' as const,
+      updatedAt: Date.now(), // spoofed current time
+    });
+    const stateExp = manager.getSessionState('room-pres-auth');
+    assert.equal(stateExp!.participants[charlie.actorId], undefined);
+
+    // 4. Revoked participant handling: revoked actor presence updates are rejected
+    manager.setClockForTesting(() => Date.now());
+    manager.revokeActor('room-pres-auth', alice.actorId);
+    manager.updatePresence('room-pres-auth', {
+      actorId: alice.actorId,
+      principalId: alice.principalId,
+      displayName: alice.displayName,
+      role: alice.role,
+      status: 'active' as const,
+      updatedAt: Date.now(),
+    });
+    // Recorded presence for alice should still have recorded1.updatedAt, NOT new time
+    const state3 = manager.getSessionState('room-pres-auth');
+    assert.equal(state3!.participants[alice.actorId].updatedAt, recorded1.updatedAt);
   });
 
   test('Property 11: Randomized stress sequence with deterministic seed converges stably', () => {

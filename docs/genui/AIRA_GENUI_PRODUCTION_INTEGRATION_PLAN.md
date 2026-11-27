@@ -1,6 +1,6 @@
 # AIRA GenUI — Production Integration & Staging Deployment Plan
 
-**Document Version:** 1.0.0  
+**Document Version:** 1.1.0 (Hardened & Reconciled)  
 **Date:** 2026-11-28  
 **Scope:** Architecture, Lineage, Rollback, Environment Configuration, and Release Governance for AIRA GenUI  
 **Authors:** Agency Software Architect & SRE Site Reliability Engineer Specialists  
@@ -14,34 +14,36 @@ This document establishes the comprehensive staging rollout, environmental prere
 
 ### Strict Production Boundaries
 - **Production Deployment Status:** **STRICT HOLD**. No automated production deployment or Git push to `prod-release` is authorized.
-- **Commercial Candidate PR #215 Isolation:** PR #215 (`fd2f8b9a3df8bd226a1bf05c1c79aab721e0e568`, containing the commercial invoicing, GST reporting, and payment gateway fixes) remains completely decoupled and isolated on STRICT HOLD.
-- **Standing Release Delegation Non-Applicability:** In accordance with repository `AGENTS.md`, standing release delegation covers only bounded code-only releases that have fulfilled all mandatory gates. Because GenUI constitutes a major multi-phase capability addition across 16 presentation modes and autonomous agent runtimes, final production release requires explicit owner review and staging verification.
+- **Commercial Candidate PR #215 Isolation:** PR #215 (`fd2f8b9a3df8bd226a1bf05c1c79aab721e0e568`, containing commercial invoicing, GST reporting, and payment gateway fixes) remains completely decoupled and isolated on STRICT HOLD.
+- **Standing Release Delegation Non-Applicability:** In accordance with repository `AGENTS.md`, standing release delegation covers only bounded code-only releases that have fulfilled all mandatory gates. Because GenUI constitutes a major multi-phase capability addition across 16 presentation modes and autonomous agent runtimes, final production release requires explicit owner review, staging verification, and separate owner attestation.
 
 ---
 
 ## 2. Branch Lineage & Architecture Differential
 
-### 2.1 Commit Lineage
+### 2.1 Commit Lineage & Reconciled Baseline
 - **Production Reference HEAD:** `f429d90a1f4322a0d362956fb9e55a38cb3b5508` (`prod-release`)
 - **Commercial Candidate Baseline:** PR #215 (`fd2f8b9a3df8bd226a1bf05c1c79aab721e0e568`)
 - **GenUI Development Branch:** `feat/aira-genui-phase1-foundation`
-- **GenUI Milestone Commits:**
+- **GenUI Milestone Commits (Reconciled Linear History):**
   - `f2e9b40`: Phase 1 Native GenUI Foundation & A2UI Base Engine
-  - `4d35cb6`: Phase 2 Declarative Schema & Rendering Runtime
+  - `f39ecab`: Phase 2 Declarative A2UI v1.0 Runtime, Reactive Engine & Security Hardening *(Reconciled: replaces speculative hash `4d35cb6`)*
+  - `104ced7`: Phase 3 Open Generative UI Applications & Sandboxed Runtime
   - `dfd01a2`: Phase 3.5 Security Closure & Phase 4A Local MCP Apps Containment
   - `a335198`: Phase 4B Multimodal Artifact Workspace & Interactive Canvas
   - `cd7f88a`: Phase 4C Real-Time Collaborative Canvas, CRDT Synchronization & Multi-Agent Co-Authoring
-  - `HEAD` (Phase 5): Integrated Foundation Closure, Autonomous Intelligence Integration, and Final Release Certification
+  - `112a0f6`: Phase 5 Integrated Foundation Closure, Autonomous Intelligence Integration, and Final Release Certification
+  - `HEAD`: Phase 5 Assurance Remediation (Presence Timestamp Hardening & Provider Fault Simulation)
 
 ### 2.2 Subsystem Invariants & Additions
 | Subsystem | Change Type | Impact / Backward Compatibility |
 |---|---|---|
 | **A2UI Runtime (`src/components/genui/`)** | Non-breaking Addition | Renders declarative components safely in sandboxed iframe or direct React DOM. Default fallback handles non-GenUI markdown responses. |
 | **Artifact Studio (`src/components/artifacts/`)** | Non-breaking Addition | Extends artifact viewing with 5 multimodal editors (Code, Document, Spreadsheet, Presentation, Flowchart). |
-| **Collaboration Engine (`src/utils/collaborationEngine.ts`)** | Non-breaking Addition | Hybrid positional-rebase & causal LWW CRDT model operating in-memory and over WebSocket/SSE. |
-| **Collaboration Server (`src/server/collaborationManager.ts`)** | Non-breaking Addition | Authoritative sequencing, presence tracking with server receipt timestamps, and tenant isolation. |
+| **Collaboration Engine (`src/utils/collaborationEngine.ts`)** | Non-breaking Addition | Hybrid positional-rebase & causal LWW CRDT model operating in-memory for agent co-authoring. |
+| **Collaboration Server (`src/server/collaborationManager.ts`)** | Non-breaking Addition | Authoritative sequencing, presence tracking with server receipt timestamps, participant revocation defense, and tenant isolation. |
 | **Autonomous Collaborative Bridge (`packages/agent-runtime/`)** | Non-breaking Addition | Bridges `AutonomousAgentEngine` and specialist roles to multi-agent artifact creation without duplicate execution engines. |
-| **Commercial Billing / Payments (`src/server/billing/`)** | **Untouched** | Zero modifications to Razorpay, Stripe, GST calculation, or credit deduction engines. |
+| **Commercial Billing / Payments (`src/server/billing/`)** | **Untouched** | Zero modifications to Razorpay, Cashfree, Stripe, GST calculation, or credit deduction engines. |
 
 ---
 
@@ -50,7 +52,7 @@ This document establishes the comprehensive staging rollout, environmental prere
 ### Zero Migrations Guarantee
 - **New Migrations Introduced:** **0**
 - **Existing Schema Tables Reused:**
-  1. `autonomous_agent_tasks`: Stores durable agent task definitions, DAG step states, and checkpoint metadata.
+  1. `autonomous_agent_tasks`: Stores durable agent task definitions, DAG step states, lease metadata, and checkpoint records.
   2. `runs`: Tracks workflow execution runs, timings, and status transitions.
   3. `workflow_runs`: Persists durable step outcomes and error traces.
   4. `conversation_messages.metadata`: Houses ephemeral artifact references and A2UI message payloads in JSONB.
@@ -58,16 +60,21 @@ This document establishes the comprehensive staging rollout, environmental prere
 
 ---
 
-## 4. Environment Variables & Runtime Feature Flags
+## 4. Environment Variables & Runtime Feature Flags Reality Check
 
-### 4.1 Required Staging Configuration
-| Variable | Staging Recommended | Production Default | Security Function |
+### 4.1 Authoritative Feature Flags & Server-Side Gates
+The runtime relies on authoritative contract-backed feature flags (`packages/contracts/src/featureFlags.ts`) and server-side capability gates rather than speculative documentation-only environment variables:
+
+| Mechanism | Scope / Location | Enforcement Method | Status |
 |---|---|---|---|
-| `ENABLE_GENUI` | `"true"` | `"false"` (Gated) | Master feature flag enabling GenUI UI components. |
-| `ENABLE_COLLABORATIVE_CANVAS` | `"true"` | `"false"` (Gated) | Controls real-time WebSocket connection initialization. |
-| `ENABLE_AUTONOMOUS_AGENTS` | `"true"` | `"false"` (Gated) | Enables specialist agent task execution in worker host. |
-| `MCP_REMOTE_EGRESS_ALLOWED` | `"false"` | `"false"` | **Fail-closed security lock.** Enforces 503 `MCP_EGRESS_ENFORCEMENT_REQUIRED` for any non-approved remote MCP server. |
-| `NVIDIA_API_KEY` | Provided via Secrets | Optional (External) | Powers external live AI revision. In absence, system truthfully falls back to internal deterministic patch engine. |
+| `agent_mode_autonomous` | Contract Feature Flag (`packages/contracts/src/featureFlags.ts`) | Evaluated per tier: `false` for Guest/Free; `true` for Plus/Pro. Server gate `requireCapability('autonomous')` enforces HTTP 403 on unauthorized calls. | **ACTIVE & ENFORCED** |
+| `pro_sandbox_python` | Contract Feature Flag (`packages/contracts/src/featureFlags.ts`) | Evaluated per tier: `true` for Pro only. | **ACTIVE & ENFORCED** |
+| `pro_browser_tools` | Contract Feature Flag (`packages/contracts/src/featureFlags.ts`) | Evaluated per tier: `true` for Pro only. | **ACTIVE & ENFORCED** |
+| `assertApprovedPublicMcpDestination` | Tool Gateway Security (`packages/tool-runtime/`) | Hard-coded fail-closed code blockade throwing 503 `MCP_EGRESS_ENFORCEMENT_REQUIRED` for any unapproved remote MCP host in production. | **FAIL-CLOSED IN CODE** |
+| `PresentationRouter` Fallback | Client / Server Runtime (`packages/agent-runtime/`) | In the event of presentation rendering failure or disabled state, falls back immediately to `text_markdown`. | **ACTIVE & ENFORCED** |
+| `NVIDIA_API_KEY` | Server Secret | When absent, system gracefully and truthfully routes to internal deterministic patch engine. Classified truthfully as `BLOCKED_EXTERNAL`. | **SECURE FALLBACK** |
+
+*Note on Proposed Variables:* Conceptual variables (`ENABLE_GENUI`, `ENABLE_COLLABORATIVE_CANVAS`, `ENABLE_AUTONOMOUS_AGENTS`, `MCP_REMOTE_EGRESS_ALLOWED`) mentioned in early drafts are not ambient environment variables; all capability and security boundaries are enforced server-side through `ExecutionPrincipal`, `entitlement-guard.js`, and `assertApprovedPublicMcpDestination()`.
 
 ---
 
@@ -95,35 +102,50 @@ npx tsx --test \
 Expected: 86/86 tests passing.
 
 ### Stage 3: Live Preview Deployment Verification (Vercel Preview)
-1. Deploy feature branch to isolated Vercel Preview environment (`preview.aira-ai-2026.vercel.app`).
+1. Deploy candidate to isolated Vercel Preview environment via GitHub branch push (once authorized).
 2. Verify browser rendering across 16 presentation modes:
    - A2UI Interactive Card & Form submission.
    - Code Editor syntax highlighting and multi-file project tabs.
    - Spreadsheet AST reactive recalculation (`=A1*B1`).
    - Presentation deck keyboard navigation.
    - Mermaid diagram zoom/pan/render.
-3. Verify WebSocket presence awareness and multi-actor cursor rendering.
-4. Verify tenant isolation under cross-workspace request headers.
+3. Verify tenant isolation under cross-workspace request headers.
 
 ---
 
-## 6. Rollback Strategy & Incident Playbook
+## 6. Owner-Authorized Rollback Strategy & Incident Playbook
 
-### 6.1 Verified Rollback Target
-- **Target Commit SHA:** `f429d90a1f4322a0d362956fb9e55a38cb3b5508`
-- **Recovery Time Objective (RTO):** < 60 seconds (instant Vercel deployment rollback).
-- **Recovery Point Objective (RPO):** Zero data loss (since zero DB migrations or destructive state mutations exist).
+### 6.1 Verified Rollback Target & Governance Invariants
+- **Target Commit SHA:** `f429d90a1f4322a0d362956fb9e55a38cb3b5508` (Last verified stable production commit on `prod-release`).
+- **Protected Branch Enforcement:** GitHub Ruleset `25079946` explicitly forbids `git reset --hard` and force-pushes on `refs/heads/prod-release`.
+- **Prohibited Rollback Actions:**
+  - Automated agents must **NEVER** attempt `git push --force-with-lease` or `git reset --hard` on `prod-release`.
+  - Automated agents must **NEVER** invent or assume unverified deployment identifiers.
+  - Automated agents must **NEVER** invoke `vercel promote` or CLI rollback directly.
 
-### 6.2 Rollback Procedure
-1. If staging or production anomaly is detected:
-   - In Vercel Project Dashboard (`prj_FZLU4vBIYSsBn28AI6drkpD5WfbH`), locate previous production deployment `dpl_prev_f429d90` and select **"Instant Rollback / Promote to Production"**.
-2. Alternatively via CLI (trusted maintainer):
+### 6.2 Owner-Authorized Rollback Procedures
+If a release-blocking anomaly is detected post-deployment:
+
+#### Path A: Forward Revert via Owner-Attested PR (Git-Authoritative Recovery)
+1. On a dedicated fix branch branched from `prod-release`:
    ```bash
-   git checkout prod-release
-   git reset --hard f429d90a1f4322a0d362956fb9e55a38cb3b5508
-   git push origin prod-release --force-with-lease
+   git checkout -b fix/revert-genui-production prod-release
+   git revert --no-edit <merge_commit_sha>
+   git push origin fix/revert-genui-production
    ```
-3. Set `ENABLE_GENUI="false"` in project environment variables to immediately suppress client-side interactive rendering.
+2. Open a Pull Request targeting `prod-release`.
+3. Verify Fast CI and certification tests pass on the revert commit.
+4. Maintainer/owner merges the PR into `prod-release` under standard attestation, triggering Vercel to build and redeploy the stable revert state cleanly without history rewriting.
+
+#### Path B: Vercel Dashboard Instant Redeploy (Owner Operational Recovery)
+1. In the Vercel Project Dashboard (`prj_FZLU4vBIYSsBn28AI6drkpD5WfbH`), the repository owner locates the previous production deployment associated with commit `f429d90a1f4322a0d362956fb9e55a38cb3b5508`.
+2. Select **"Redeploy"** or **"Promote to Production"** directly via the authenticated web interface.
+3. Verify canonical URL `https://aira-ai-2026.vercel.app` serves commit `f429d90`.
+
+### 6.3 Data & Backward Compatibility Assessment
+- **Schema Compatibility:** Zero database migrations were introduced by GenUI. All existing tables remain 100% structurally identical.
+- **Metadata Compatibility:** Older application versions safely ignore unknown JSONB keys in `conversation_messages.metadata` and do not query `autonomous_agent_tasks`. Therefore, rolling back frontend or API versions incurs **zero database data loss** and zero schema corruption.
+- **In-Flight Task Handling:** In-flight autonomous tasks in `autonomous_agent_tasks` will have leases expire cleanly after `leaseExpiresAt` without corrupting user accounts.
 
 ---
 
@@ -135,6 +157,6 @@ Expected: 86/86 tests passing.
 | **System Architecture** | Agency Software Architect | Architecture & Lineage Audit | **VERIFIED NON-BREAKING** |
 | **Security & Containment**| Agency Application Security Engineer | Threat Model & Egress Review | **VERIFIED FAIL-CLOSED** |
 | **Reliability & Rollback**| Agency SRE Specialist | Rollback & Migration Review | **VERIFIED ZERO MIGRATIONS** |
-| **Multi-Agent Systems** | Agency Multi-Agent Systems Architect | Autonomous Swarm Acceptance | **VERIFIED (13/13 MISSIONS)** |
+| **Reality Acceptance** | Agency Reality Checker | Verification & Transport Audit | **VERIFIED ACCURATE** |
 
 **FINAL RELEASE DIRECTIVE:** Keep production deployment on **STRICT HOLD** pending maintainer staging sign-off and separate owner attestation.

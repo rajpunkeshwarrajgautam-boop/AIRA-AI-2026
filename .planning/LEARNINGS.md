@@ -1,16 +1,16 @@
 ---
-phase: "phase-3-open-genui-applications"
-phase_name: "AIRA AI 2026 Engineering Knowledge through GenUI Phase 3"
+phase: "phase-5-final-release-assurance"
+phase_name: "AIRA AI 2026 Engineering Knowledge through GenUI Phase 5 Assurance"
 project: "AIRA-AI-2026"
 branch: "feat/aira-genui-phase1-foundation"
-commit: "d6172655f3f47059baa946a995734a44956731ff"
-verdict: "PHASE_3_OPEN_GENUI_APPLICATIONS_IMPLEMENTED_EXTERNAL_CERTIFICATION_BLOCKED"
-generated: "2026-11-27T16:15:00Z"
+commit: "112a0f6bdf08cc624770589e61554920c7a9f69b"
+verdict: "GENUI_LOCAL_RELEASE_ASSURANCE_COMPLETE_EXTERNAL_ACCEPTANCE_BLOCKED"
+generated: "2026-11-28T00:35:00Z"
 counts:
-  decisions: 12
-  lessons: 9
-  patterns: 8
-  surprises: 5
+  decisions: 22
+  lessons: 15
+  patterns: 14
+  surprises: 8
 missing_artifacts:
   - ".planning/ROADMAP.md"
   - ".planning/REQUIREMENTS.md"
@@ -18,9 +18,9 @@ missing_artifacts:
   - ".planning/phases/*-SUMMARY.md"
 ---
 
-# AIRA AI 2026 Engineering Learnings (Consolidated through GenUI Phase 1)
+# AIRA AI 2026 Engineering Learnings (Consolidated through GenUI Phase 5 Release Assurance)
 
-> **Scope Note:** This repository tracks phase outcomes via certification records (`docs/genui/`, `docs/adr/`, `docs/architecture/`, `.planning/STATE.md`, `.planning/HANDOFF.json`, `.continue-here.md`) rather than `.planning/phases/{N}/*-PLAN.md`. Learnings below are consolidated strictly from verified codebase files, ADRs, and certification artifacts at commit `f2e9b40e26bfaca6172ed90b9d483fa821af2494` (`feat/aira-genui-phase1-foundation`).
+> **Scope Note:** This repository tracks phase outcomes via certification records (`docs/genui/`, `docs/adr/`, `docs/architecture/`, `.planning/STATE.md`, `.planning/HANDOFF.json`, `.continue-here.md`) rather than `.planning/phases/{N}/*-PLAN.md`. Learnings below are consolidated strictly from verified codebase files, ADRs, and certification artifacts across GenUI Phases 0 through 5 at candidate commit `112a0f6bdf08cc624770589e61554920c7a9f69b` (`feat/aira-genui-phase1-foundation`).
 
 ---
 

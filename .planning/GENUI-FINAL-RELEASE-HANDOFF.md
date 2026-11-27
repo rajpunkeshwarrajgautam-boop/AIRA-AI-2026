@@ -1,11 +1,12 @@
 # AIRA GenUI — Final Release Candidate Handoff & Certification Record
 
-**Document Version:** 1.0.0  
+**Document Version:** 1.1.0 (Assurance Hardened)  
 **Date:** 2026-11-28  
-**Scope:** Complete Multimodal GenUI Suite (Phase 1 through Phase 5)  
+**Scope:** Complete Multimodal GenUI Suite (Phase 1 through Phase 5 Assurance)  
 **Branch:** `feat/aira-genui-phase1-foundation`  
-**Current Baseline HEAD:** `cd7f88a6faf97c39cdf5e2a17e02063cc261291a`  
-**Certification Verdict:** `PHASE_5_INTEGRATED_GENUI_CERTIFIED_READY_FOR_STAGING_REVIEW`  
+**Phase 4C Baseline Commit:** `cd7f88a6faf97c39cdf5e2a17e02063cc261291a`  
+**Phase 5 Implementation Commit:** `112a0f6bdf08cc624770589e61554920c7a9f69b`  
+**Certification Verdict:** `GENUI_LOCAL_RELEASE_ASSURANCE_COMPLETE_EXTERNAL_ACCEPTANCE_BLOCKED`  
 **Production Status:** STRICT HOLD (NO DIRECT PUSH OR UNATTENDED RELEASE)
 
 ---
@@ -14,7 +15,7 @@
 
 The entire AIRA GenUI engineering program across Phases 1 through 5 is now fully completed, integrated, and verified against all architectural, security, concurrency, and autonomous agent requirements.
 
-All 16 multimodal presentation modes, the pure TypeScript CRDT collaborative editing engine, the local MCP Apps runtime, and the autonomous multi-agent co-authoring bridge have achieved 100% test passing rates across 8 canonical test suites (86/86 automated tests).
+All 16 multimodal presentation modes, the pure TypeScript CRDT collaborative editing engine, the local MCP Apps runtime, and the autonomous multi-agent co-authoring bridge have achieved 100% test passing rates across 8 canonical test suites (86/86 automated tests) plus all 52 release authorization unit tests (138/138 total passed).
 
 ---
 
@@ -23,11 +24,14 @@ All 16 multimodal presentation modes, the pure TypeScript CRDT collaborative edi
 | Phase | Core Capability | Canonical File(s) | Verification Suite |
 |---|---|---|---|
 | **Phase 1** | Native GenUI Foundations & 39-Component A2UI Registry | `packages/contracts/src/genui.ts`, `src/components/genui/` | Fast CI + component tests |
-| **Phase 2** | Declarative Schema, Presentation Router, Chart & Table Runtimes | `packages/agent-runtime/src/presentation-router.ts` | Unit tests + router tests |
+| **Phase 2** | Declarative Schema, Presentation Router, Chart & Table Runtimes (`f39ecab`) | `packages/agent-runtime/src/presentation-router.ts` | Unit tests + router tests |
 | **Phase 3** | Open GenUI Applications & Secure Iframe Sandbox Isolation | `src/utils/sandboxSecurity.ts`, `src/components/genui/apps/` | `test/genui-phase3-sandbox-isolation.test.ts` (11/11) |
 | **Phase 4A** | Local MCP Apps Runtime, JSON-RPC 2.0 Host & Fail-Closed Egress | `packages/contracts/src/mcp-apps.ts`, `src/components/genui/GenUIMcpApp.tsx` | `test/mcp-apps-local-acceptance.test.ts` (14/14) |
 | **Phase 4B** | Multimodal Artifact Workspace (Code, Docs, Sheets, Slides, Diagrams) | `packages/contracts/src/artifacts.ts`, `src/utils/officeDocumentExporter.ts` | `test/artifact-multimodal-engine.test.ts` (8/8), `test/artifact-workspace-acceptance.test.ts` (8/8) |
 | **Phase 4C** | Real-Time Collaborative Canvas, CRDT Engine & State-Vector Resumption | `packages/contracts/src/collaboration.ts`, `src/utils/collaborationEngine.ts` | `test/collaboration-acceptance.test.ts` (10/10), `test/collaboration-crdt-engine.test.ts` (8/8) |
+| **Phase 5A** | Integrated Foundation Closure, Presence Security & Property Checks | `src/server/collaborationManager.ts` | `test/crdt-property-verification.test.ts` (11/11) |
+| **Phase 5B** | Autonomous Agent Swarm Bridge & Multi-Agent Co-Authoring | `packages/agent-runtime/src/collaborative-bridge.ts` | `test/autonomous-swarm-acceptance.test.ts` (13/13) |
+| **Phase 5C** | Full Release Certification & Staging Integration Planning | `docs/genui/AIRA_GENUI_PRODUCTION_INTEGRATION_PLAN.md` | Full Quality Gates (TypeCheck, Lint, Build, Auth Unit) |
 | **Phase 5A** | Integrated Foundation Closure, Presence Timestamps & Property Checks | `src/server/collaborationManager.ts` | `test/crdt-property-verification.test.ts` (11/11) |
 | **Phase 5B** | Autonomous Agent Swarm Bridge & Multi-Agent Co-Authoring | `packages/agent-runtime/src/collaborative-bridge.ts` | `test/autonomous-swarm-acceptance.test.ts` (13/13) |
 | **Phase 5C** | Full Release Certification & Staging Integration Planning | `docs/genui/AIRA_GENUI_PRODUCTION_INTEGRATION_PLAN.md` | Full Quality Gates (TypeCheck, Lint, Build, Auth Unit) |

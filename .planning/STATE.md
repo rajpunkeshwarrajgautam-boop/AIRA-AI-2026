@@ -1,12 +1,13 @@
 # AIRA-AI-2026 Release Governance & Production Baseline State
 
-## Status: PHASE 5 GENUI CERTIFIED (READY FOR STAGING REVIEW)
+## Status: GENUI LOCAL ASSURANCE COMPLETE (EXTERNAL ACCEPTANCE BLOCKED)
 
 - **Repository**: `rajpunkeshwarrajgautam-boop/AIRA-AI-2026`
 - **Certified Production Reference SHA**: `f429d90a1f4322a0d362956fb9e55a38cb3b5508`
 - **Commercial Candidate PR #215 Baseline**: `fd2f8b9a3df8bd226a1bf05c1c79aab721e0e568` (STRICT HOLD)
 - **Active GenUI Feature Branch**: `feat/aira-genui-phase1-foundation`
-- **GenUI Phase 5 Status**: `PHASE_5_INTEGRATED_GENUI_CERTIFIED_READY_FOR_STAGING_REVIEW`
+- **GenUI Assurance Verdict**: `GENUI_LOCAL_RELEASE_ASSURANCE_COMPLETE_EXTERNAL_ACCEPTANCE_BLOCKED`
+- **Candidate Commit (Phase 5 + Assurance)**: `112a0f6bdf08cc624770589e61554920c7a9f69b` (+ local remediations)
 - **Production URL**: `https://aira-ai-2026.vercel.app`
 - **Default Branch**: `main`
 

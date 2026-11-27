@@ -31,9 +31,23 @@ export class CollaborationSessionManager {
   private roomTenants = new Map<string, string>(); // sessionId => tenantId
   private revokedActors = new Map<string, Set<string>>(); // sessionId => Set<actorId>
   private persistenceAdapter?: (artifact: Artifact) => Promise<void>;
+  private clock: () => number = () => Date.now();
 
-  constructor(persistenceAdapter?: (artifact: Artifact) => Promise<void>) {
+  constructor(
+    persistenceAdapter?: (artifact: Artifact) => Promise<void>,
+    options?: { clock?: () => number }
+  ) {
     this.persistenceAdapter = persistenceAdapter;
+    if (options?.clock) {
+      this.clock = options.clock;
+    }
+  }
+
+  /**
+   * Sets a trusted server-side clock dependency for testing.
+   */
+  public setClockForTesting(clock: () => number): void {
+    this.clock = clock;
   }
 
   /**
@@ -184,14 +198,23 @@ export class CollaborationSessionManager {
     const engine = this.rooms.get(sessionId);
     if (!engine) return;
 
-    // Enforce authoritative server receipt time for presence expiration semantics.
-    // Client-supplied timestamps are never trusted for security or TTL decisions.
-    // Explicit _testClockOverride is supported solely for deterministic clock testing.
-    const authoritativeTimestamp = (presence as any)._testClockOverride ?? Date.now();
+    // Check if actor has been revoked from this session
+    const revoked = this.revokedActors.get(sessionId);
+    if (revoked && revoked.has(presence.actorId)) {
+      return;
+    }
+
+    // Enforce authoritative server receipt time strictly from server-side clock.
+    // Client-supplied timestamps or payload overrides (_testClockOverride) are never
+    // trusted and cannot influence security-sensitive TTL or expiration decisions.
+    const authoritativeTimestamp = this.clock();
     const serverPresence: CollabPresence = {
       ...presence,
       updatedAt: authoritativeTimestamp,
     };
+    if ('_testClockOverride' in (serverPresence as any)) {
+      delete (serverPresence as any)._testClockOverride;
+    }
 
     engine.updatePresence(serverPresence);
 
