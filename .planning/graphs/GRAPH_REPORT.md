@@ -1,25 +1,25 @@
-# Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)
+# Graph Report - AIRA-AI-2026-GENUI  (2026-11-28)
 
 ## Corpus Check
-- 999 files · ~2,195,790 words
+- 1043 files · ~2,920,202 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 22 file(s) not represented in the graph (top: (none) 5, .css 5, .service 3)
 
 ## Summary
-- 9499 nodes · 21294 edges · 415 communities (380 shown, 35 thin omitted)
-- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 1326 edges (avg confidence: 0.89)
+- 9963 nodes · 22270 edges · 452 communities (415 shown, 37 thin omitted)
+- Extraction: 94% EXTRACTED · 6% INFERRED · 0% AMBIGUOUS · INFERRED: 1428 edges (avg confidence: 0.89)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `f39ecab1`
+- Built from commit: `03f21d26`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - approvals/src/repositories.ts
 - agent-runtime/src/index.ts
-- Run
-- AutomationDefinition
+- db
+- AutomationRun
 - PrincipalScope
 - contracts/src/index.ts
 - agentMemoryEngine.ts
@@ -43,7 +43,7 @@
 - compilerOptions
 - AgentRuntime
 - Communities (405 total, 36 thin omitted)
-- react
+- framer-motion
 - ProjectsModal.tsx
 - agentmemory
 - vercel.json
@@ -52,33 +52,33 @@
 - .oxlintrc.json
 - test-oracle-staging-capabilities.ts
 - payment-gateway-service.ts
-- AgentDefinition
+- artifacts.ts
 - ref_node_fs
 - Third-Party Notices and Licenses
 - tsconfig.json
 - AIRA-AI-2026 Production Engineering.md
 - ToolGateway
 - storage.ts
-- specialist-worker/src/index.ts
-- db
+- Artifact
+- ref_node_assert
 - staging-cutover-safety-gates.test.ts
 - genui.ts
 - PaymentGatewayService
-- 2. Targeted Foundation Remediations (Section 3)
+- AIRA GenUI Phase 0 — Engineering Verification & Continuation Record
 - operational-staging-acceptance-and-fault-injection.test.ts
-- m2a-durable-specialist-execution.test.ts
-- conversation-search-semantic.ts
+- sanitizeActivationError
+- retrieval/src/index.ts
 - ExecutionPrincipal
-- ref_node_assert
+- genui-phase3-live-nim-generation.test.ts
 - E2ETestClient
 - commercial-billing-service.ts
 - rehearse-disposable-restore.ts
 - WorkflowEngine
 - PrivateBetaCapacityGuard
-- database-isolation-guard.ts
+- browser-adapter.ts
 - bff-session.ts
 - staging-maintenance-barrier.ts
-- InMemorySpecialistTaskRepository
+- genui-streaming.ts
 - adversarial-entitlements.test.ts
 - src/research-evidence.ts
 - certify-staging-session-revocation.ts
@@ -98,10 +98,10 @@
 - ref_node_child_process
 - DockerIsolatedSandboxProvider
 - behavioral.ts
-- agent-specialists.ts
+- ModelRouter
 - presentation-router.ts
 - attestation
-- SpecialistRegistry
+- SettingsModal.tsx
 - browser-storage-migration-fidelity.test.ts
 - AIRA AI 2026 — Final Production Infrastructure, Database & Release Authorization Preflight
 - ref_fs
@@ -111,13 +111,13 @@
 - capabilityDispatcher.ts
 - steps
 - SandboxProvider
-- auth-environment-boundary.test.ts
+- ref_node_crypto
 - auth-bff-session-gateway.test.ts
 - with
 - adaptive-phase1-browser-acceptance.mjs
 - sandbox.ts
 - ref_node_url
-- AIRA AI 2026 — Truthful Capabilities & Account Isolation Release Report
+- react
 - AIRA AI 2026 — PR #127 FINAL PRODUCTION DEPLOYMENT & OPERATIONAL PRE-CUTOVER CERTIFICATION
 - m2a-real-postgres-verification.test.ts
 - PostgresSpecialistTaskRepository
@@ -149,10 +149,10 @@
 - oauth-phase2-certify.ts
 - unified-intelligence-architecture.test.ts
 - cashfree-plan-provisioning-service.ts
-- payment-gateway-service.ts
+- PricingModal.tsx
 - AIRA AI 2026 — Operational Staging Deployment Contract & Runbook
 - specialist-worker
-- 9.1 Gemini Zero-Content Failover Root Cause & End-to-End Lifecycle Resolution
+- AIRA GenUI — Final Release Assurance & Staging Publication Readiness Report
 - AIRA AI 2026 — PR #185 Combined Production Release Candidate Final Certification
 - FirecrawlResearchAdapter
 - AIRA AI 2026 — P1.6 GEMINI INDEPENDENT FALLBACK & PROVIDER RESILIENCE REPORT
@@ -163,7 +163,7 @@
 - Session trust-boundary remediation and Preview provider policy
 - AIRA AI 2026 — Milestone 2A: Production Activation, Infrastructure Preflight & Final Security Certification Report
 - AIRA AI 2026 — P1.5 Final Reality-Check Certification Report
-- genuiAppBridge.ts
+- validateGenUIApp
 - 7. MISSION 6: COMPLETE 18-STEP DEPENDENCY-AWARE PRODUCTION CUTOVER & ROLLBACK RUNBOOK
 - AIRA AI 2026 — P1.6.3 PRIVATE BETA CAPACITY GUARD RELEASE HARDENING REPORT
 - AIRA AI 2026 — Production-Wide Product Quality, UX Engineering & Functional Remediation Audit
@@ -171,8 +171,8 @@
 - VizAndInteractiveRenderers.tsx
 - AIRA AI 2026 Commercial Domain Glossary
 - 3. Step-by-Step Production Rollout Sequence
-- autonomous-engine.ts
-- normalizeModelIdentifier
+- agent-specialists.ts
+- genui-calculators.ts
 - runner.py
 - AIRA AI 2026 — Final Hallmark UNSLOP Certification & Remediation Report
 - IAutonomousTaskRepository
@@ -196,7 +196,7 @@
 - GenUIChartCanvas.tsx
 - Detailed Functional Evidence:
 - AIRA AI 2026 — PR #92 P0 GOOGLE OAUTH ROOT-CAUSE REMEDIATION & CERTIFICATION REPORT
-- ConversationSearchRepository
+- artifactParser.ts
 - 2. Implemented & Verified Capabilities
 - AIRA AI 2026 — Delegated Production Release Boundary
 - Supported human GO LIVE authorization controls
@@ -225,7 +225,7 @@
 - 2. Adaptive Studio Authoritative Backend Contracts
 - AIRA AI 2026 — Release Authorization Staging Ruleset & Bootstrap Specification
 - AIRA AI 2026 — M2-A PRODUCTION WORKER HOSTING DECISION PACKAGE
-- retrieval/src/index.ts
+- genui-reactive.ts
 - classifyDatabaseUrl
 - entitlements-onboarding-browser.test.ts
 - AIRA Adaptive Studio: Final Stacked PR Integration Strategy & Runbook
@@ -247,9 +247,8 @@
 - AIRA AI 2026 — P1.6.7 Model Routing & Fallback Restrictions Certification
 - AIRA AI 2026 — P1.6.7 Security, Reliability & Non-Regression Report
 - AIRA AI 2026 — P1.6 Latency-Aware Provider Routing Policy
-- verify-runtime.ts
+- ref_node_child_process
 - PARTIALLY CERTIFIED — OWNER CONFIGURATION REQUIRED
-- NvidiaEmbeddingProvider
 - production-owner-wizard.ps1
 - account-settings-isolation-browser.test.ts
 - autonomous-worker-fencing-regression.test.ts
@@ -265,9 +264,9 @@
 - SandboxRequestHandler
 - PR #178 — Production Workflow Artifacts Schema Drift Preflight & Guarded Procedure
 - env
-- LocalIsolatedSandboxProvider
+- sandbox.ts
 - AIRA AI 2026 — P1 Inference Latency Analysis & Bottleneck Decomposition
-- artifact-classifier.ts
+- AutomationDefinition
 - 2. Detailed Breakdown of Maintenance Barrier Assertions
 - capture-motion-studio-preview.ts
 - certify-p1-6-7-browser-capacity.mjs
@@ -278,7 +277,7 @@
 - AIRA AI 2026 — P1.6.7 Streaming & TTFT Empirical Benchmark
 - Adaptive Studio Phase 5 — execution checkpoint
 - AIRA AI 2026 — GitGuardian Security Incidents Resolution Report
-- AIRA AI 2026 — Security Hardening Status
+- RunRepository
 - postgres
 - staging-deployment.yml
 - candidate_sha
@@ -287,15 +286,15 @@
 - AIRA AI 2026 — PR #115 COMBINED RECERTIFICATION PLAN
 - PR #92 — AIRA Research & Agentic Workflow Certification
 - AIRA AI 2026 — Agent and Release Authority
-- benchmark-preview-p1-6-fast.ts
+- AgentContextualPanel.tsx
 - verify-adaptive-studio-e2e.mjs
 - 2. Implemented & Verified Capabilities
-- account-settings-ecosystem.ts
+- playwright
 - settings-full-certification.ts
 - AIRA AI 2026 — Final Production Certification & GO LIVE Report
 - AIRA AI 2026 Commercial Platform — Payment Certification Report
 - 5. DEDICATED PRODUCTION WORKER INFRASTRUCTURE & HOSTING REALITY
-- AIRA AI 2026 — PR #178 Staging Certification Report
+- conversationSearch.ts
 - 2. Workstream Breakdown & Implemented Architecture
 - ADR 0004: pgvector versions in disaster recovery and production
 - Staging Run Recovery Incident Reconciliation Report
@@ -306,7 +305,7 @@
 - Global Constraints
 - PR #127 — Acer Nitro 5 local worker preparation (Option 2)
 - AIRA AI 2026 — P1.4 Entitled Groq Model Benchmark & Fast Route Selection Report
-- memory-context-policy.ts
+- AIRA GenUI — Production Integration & Staging Deployment Plan
 - isolated-neon-certification.ts
 - Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)
 - benchmark-entitled-groq-candidates.ts
@@ -319,7 +318,7 @@
 - AIRA AI 2026 — Adaptive Studio UX & Production Persistence Hardening Report
 - AIRA AI 2026 Commercial Platform — Final Release Certification Dossier
 - 3. PRODUCTION NEON DATABASE TOPOLOGY & 3-LAYER RECOVERY ARCHITECTURE
-- analyze-gemini-failures.ts
+- WorkflowEngine
 - healthcheck
 - Finding SEC-02 — MCP Configuration Secrecy and Tenant Isolation
 - AIRA AI 2026 — Persistent Account Identity (staging workstream)
@@ -332,18 +331,18 @@
 - markdown.ts
 - AIRA AI 2026 — PR #96 Alternate Deployment Coverage Audit
 - benchmark-p1-6-gemini-90requests.ts
-- account-menu-visual-regression.test.ts
+- mcp-apps.ts
 - TestToolCallRepo
 - E2E Test Infra: AIRA Entitlements, Subscription-Management, Onboarding & Announcements
-- mobile-settings-responsive.ts
+- AIRA AI 2026 — Final Corrective Certification & Merge-Readiness Report
 - PreviewClient
 - MockLocalStorage
 - AIRA AI 2026 — Behavioral Intelligence Evaluation Report
 - AIRA AI 2026 — GitHub Actions CI Diagnosis & Remediation Report
 - tool-recovery-engine.ts
 - AIRA AI 2026 — Memory Migration Safety & Data Preservation Report
-- AIRA AI 2026 — PR #96 Staging Maintenance Barrier Architecture
-- MockLocalStorage
+- AutomationEngine
+- WorkspaceAuthorityRepository
 - 3. Gate 1: Independent Python Sandbox Security Certification
 - docker-compose.oracle-staging.yml
 - options
@@ -351,7 +350,7 @@
 - ADR 0002: Payment Gateway, Webhook Authenticity, and GST Tax Model
 - ADR 0003: Vision, Multimodal Operations and Metered Tool Execution
 - Issue Tracker: GitHub Issues — AIRA AI 2026
-- Adaptive Studio Phase 2 — Architecture Specification & Execution Checkpoint
+- 2. Implemented & Verified Capabilities
 - Adaptive Studio — Phase 6 integration checkpoint
 - Adaptive Studio RC — Isolated Review-Gate Remediation
 - Personal Workspace Authority Lifecycle
@@ -364,11 +363,11 @@
 - AIRA AI 2026 — P1.5 Pre-Token Database Waterfall Baseline Report
 - AIRA AI 2026 — Autonomous Intelligence Platform Production Hardening, Operational Staging Certification & Oracle Cloud Always Free Readiness
 - 2. Subscription Plans & Pricing
-- auth-playwright-cross-browser.test.ts
+- .updatePresence
 - TestGrantRepo
 - guest-linking-positive.test.ts
 - AIRA AI 2026 — Live Model Provider Acceptance Certification
-- benchmark-real-preview-suite.ts
+- search-providers.ts
 - 2. IMMUTABLE RELEASE IDENTITY & CI VERIFICATION
 - build
 - Triage Labels Vocabulary — AIRA AI 2026
@@ -391,7 +390,7 @@
 - AIRA AI 2026 — Behavioral Intelligence Evaluation Report
 - 4. PRODUCTION MIGRATION SEQUENCE & FORWARD-RECOVERY CONTRACT
 - 6. EXACT-SHA RELEASE AUTHORIZATION PROTOCOL
-- AIRA AI 2026 — Tool Choice, Recovery & Execution Verification Report
+- AIRA GenUI Phase 4C — Real-Time Collaborative Canvas, CRDT-Based Artifact Editing and Multi-Agent Co-Authoring Specification
 - api/tsconfig.json
 - Domain Documentation Configuration — AIRA AI 2026
 - Test Summary
@@ -407,78 +406,114 @@
 - declarations.d.ts
 - canonical-domain-automation-check.md
 - staging-db-guard.ts
-- AIRA GenUI — Phase 4 Continuation Handoff
+- UpgradeModal.tsx
 - AIRA GenUI — Phase 2 Continuation Handoff
-- disposable-postgres-test-entry.ts
+- recovery.ts
 - Finding UX-05 — Billing and Entitlement Loading States
 - AIRA AI 2026 — Adversarial Security Acceptance Certification Report
-- GeminiAdapter
-- Finding UX-02 — Model Upgrade Routing Misclassification
-- migrate-isolated-preview.ts
+- ActivationSecurityError
+- isModelAllowedForTier
 - 4. Gate 2: Exact Source, Image & Deployment Provenance Verification
-- inspect-staging-main.ts
+- ref_child_process
+- aiEngine.ts
+- AIRA GenUI Phase 4B — Advanced Multimodal Artifact Workspace Certification
+- generatePdfArchive
+- PR #92: Direct Google & GitHub OAuth Authentication Migration Report
+- automation/src/index.ts
+- AIRA GenUI Phase 3.5 — Closure Certification & Containment Audit
+- AIRA GenUI Phase 4C — Handoff & Implementation Prerequisites
+- MISSION 3: DATABASE RECOVERY ASSURANCE & DISPOSABLE RESTORE REHEARSAL
+- invoice-crash-recovery-postgres.test.ts
+- capture-truthful-previews.ts
+- evaluateFormulaExpression
+- ssrf-protection.ts
+- Project: AIRA AI 2026 — Entitlements, Subscription-Management, Onboarding & Announcements
+- 4.3 15-Step Dependency-Aware Production Cutover Runbook
+- AIRA GenUI Phase 5B — Autonomous Intelligence & Swarm Collaboration Specification
+- AIRA GenUI Phase 5C — Integrated Release Certification
+- Global Constraints
+- math-rendering.ts
+- capture-remediated-previews.mjs
+- LibraryView.tsx
+- AIRA AI 2026 — Behavioral Intelligence Layer Engineering Handoff & Certification
+- staging-deployment-attestation.ts
+- 16. EXACT-SHA 5-STAGE PRODUCTION RELEASE RUNBOOK
+- BLOCKING CONSTRAINTS — Read Before Anything Else
+- AIRA GenUI Phase 4A — MCP Apps Implementation Specification
+- AIRA GenUI Phase 5B — Autonomous Intelligence & Swarm Collaboration Certification
+- AIRA GenUI — Phase 3 Continuation Handoff
+- artifactRuntimeError.ts
+- AIRA AI 2026 — Latency, Efficiency & Cost Performance Report
+- ADR 0001: Commercial Billing, Entitlements and Credit Ledger Architecture
+- Global Constraints
+- 5. Multimodal & Advanced Capabilities
+- AIRA AI 2026 — Change Impact Map
+- AIRA GenUI — Phase 4A Closure & Engineering Certification
+- verify-canonical-production-edge.mjs
+- Agent skills
+- verify-migration-032-bounded-locking.ts
 
 ## God Nodes (most connected - your core abstractions)
-1. `Communities (411 total, 41 thin omitted)` - 371 edges
+1. `Communities (415 total, 35 thin omitted)` - 381 edges
 2. `db` - 214 edges
 3. `scripts` - 133 edges
-4. `ExecutionPrincipal` - 122 edges
-5. `AgentRuntime` - 98 edges
-6. `ModelRouter` - 95 edges
-7. `PaymentGatewayService` - 90 edges
-8. `ToolGateway` - 88 edges
-9. `ApprovalKernel` - 86 edges
+4. `ExecutionPrincipal` - 124 edges
+5. `AgentRuntime` - 99 edges
+6. `ModelRouter` - 94 edges
+7. `ToolGateway` - 90 edges
+8. `PaymentGatewayService` - 90 edges
+9. `ApprovalKernel` - 90 edges
 10. `PlanTier` - 80 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `3. Reality Checker Audit & Verification Limitations` --references--> `CollaborativeAgentBridge`  [INFERRED]
+  docs/genui/AIRA_GENUI_EXACT_CANDIDATE_EVIDENCE_LEDGER.md → packages/agent-runtime/src/collaborative-bridge.ts
+- `4.2 Collaboration Transport Reality Audit` --references--> `CollaborativeAgentBridge`  [INFERRED]
+  docs/genui/AIRA_GENUI_FINAL_RELEASE_ASSURANCE.md → packages/agent-runtime/src/collaborative-bridge.ts
 - `H. Agent Workspace Integration` --references--> `AgentRuntime`  [INFERRED]
   docs/genui/AIRA_GENUI_PHASE2_IMPLEMENTATION_PROFILE.md → packages/agent-runtime/src/index.ts
+- `Cross-layer paths verified by source` --references--> `AgentRuntime`  [INFERRED]
+  IMPACT-MAP.md → packages/agent-runtime/src/index.ts
 - `7. Persist-Before-Emit Contract Check` --references--> `AgentRuntime`  [INFERRED]
   phase3_3_task4_certification.md → packages/agent-runtime/src/index.ts
-- `Test Suite: `test/tool-gateway-certification.ts`` --references--> `ToolCall`  [INFERRED]
-  PR92-RESEARCH-AGENTS-CERTIFICATION.md → packages/contracts/src/index.ts
-- `4. Remediation Plan (P1.5 Architecture Contract)` --references--> `Run`  [INFERRED]
-  P1_5_DB_BASELINE.md → packages/contracts/src/index.ts
-- `4. Remediation Plan (P1.5 Architecture Contract)` --references--> `Run`  [INFERRED]
-  P1_5_DB_CRITICAL_PATH_BASELINE.md → packages/contracts/src/index.ts
 
 ## Import Cycles
 - 2-file cycle: `packages/model-router/src/gemini-adapter.ts -> packages/model-router/src/index.ts -> packages/model-router/src/gemini-adapter.ts`
 - 3-file cycle: `packages/contracts/src/genui-calculators.ts -> packages/contracts/src/genui.ts -> packages/contracts/src/genui-reactive.ts -> packages/contracts/src/genui-calculators.ts`
 
-## Communities (415 total, 35 thin omitted)
+## Communities (452 total, 37 thin omitted)
 
 ### Community 0 - "approvals/src/repositories.ts"
 Cohesion: 0.04
-Nodes (35): 3D. Isolated PostgreSQL 18 Certification, ApprovalResolution, grantForDecision(), ApprovalGrant, ApprovalGrantRequest, ApprovalRepository, ApprovalResolutionTarget, ApprovalResumptionEvent (+27 more)
+Nodes (41): AutonomousEngineOptions, ApprovalKernel, ApprovalManagerOptions, ApprovalResolution, grantForDecision(), ApprovalGrant, ApprovalGrantRequest, ApprovalRepository (+33 more)
 
 ### Community 1 - "agent-runtime/src/index.ts"
 Cohesion: 0.04
-Nodes (36): Verified relationships and consumers, AutonomousEngineOptions, WorkflowCompiler, InMemoryWorkflowRepository, ApprovalKernel, ApprovalManagerOptions, Artifact, ModelProvenance (+28 more)
+Nodes (20): ArtifactType, classifyResponseArtifacts(), defaultLanguageFor(), extractFencedCodeBlocks(), FencedBlock, isArtifactDeliveryRequested(), normalizeArtifactType(), parseEnvelopeAttributes() (+12 more)
 
-### Community 2 - "Run"
-Cohesion: 0.06
-Nodes (7): InMemoryRunRepository, RunRepository, Run, StreamingEvent, Suggested Questions, SpiedRunRepository, SpiedRunRepository
+### Community 2 - "db"
+Cohesion: 0.04
+Nodes (25): AgentRepository, InMemoryAgentRepository, InMemoryRunRepository, PostgresAgentRepository, PostgresRunRepository, PostgresAutomationRepository, AgentDefinition, Run (+17 more)
 
-### Community 3 - "AutomationDefinition"
-Cohesion: 0.05
-Nodes (12): AutomationEngine, parseCronExpression(), AutomationRepository, AutomationRunRepository, PostgresAutomationRunRepository, AutomationDefinition, AutomationRun, SchedulerCapabilities (+4 more)
+### Community 3 - "AutomationRun"
+Cohesion: 0.13
+Nodes (7): AutomationRunRepository, PostgresAutomationRunRepository, AutomationDefinitionSchema, AutomationRun, TestTransactionalRunRepo, mockAgentRuntime, MockAutomationRunRepo
 
 ### Community 4 - "PrincipalScope"
-Cohesion: 0.07
-Nodes (11): KnowledgeChunk, KnowledgeEdge, KnowledgeEntity, KnowledgeSource, MemoryRecord, PrincipalScope, InMemoryKnowledgeRepository, isRecordAccessible() (+3 more)
+Cohesion: 0.06
+Nodes (15): KnowledgeChunk, KnowledgeEdge, KnowledgeEntity, KnowledgeSource, MemoryRecord, PrincipalScope, BrainV2KnowledgeEngine, InMemoryKnowledgeRepository (+7 more)
 
 ### Community 5 - "contracts/src/index.ts"
 Cohesion: 0.02
-Nodes (79): AgentDefinitionSchema, ApprovalRequestSchema, ArtifactSchema, ArtifactVersion, ArtifactVersionSchema, AutomationRunSchema, AutomationTriggerType, AutomationTriggerTypeSchema (+71 more)
+Nodes (83): CuratedSkillDefinition, SkillEvaluationRecord, SkillPermissionPolicy, SkillProvenanceRecord, SkillTrustLevel, AgentDefinitionSchema, ApprovalRequestSchema, ArtifactSchema (+75 more)
 
 ### Community 6 - "agentMemoryEngine.ts"
 Cohesion: 0.07
-Nodes (33): AIRA UNSLOP — Post-Release Evidence Reconciliation (2026-11-09), Historical artifacts — provenance preserved, Identity and session disclosure review, Precise certification boundary, Release coordinates (independently observed), Additional privacy hardening, 2026-11-09 — memory metadata, AIRA UNSLOP — Integrated P0/P1/P2 Repair and Release Evidence, Evidence interpretation (+25 more)
+Nodes (35): AIRA UNSLOP — Post-Release Evidence Reconciliation (2026-11-09), Historical artifacts — provenance preserved, Identity and session disclosure review, Precise certification boundary, Release coordinates (independently observed), Additional privacy hardening, 2026-11-09 — memory metadata, AIRA UNSLOP — Integrated P0/P1/P2 Repair and Release Evidence, Evidence interpretation (+27 more)
 
 ### Community 7 - "model-router/src/index.ts"
-Cohesion: 0.05
-Nodes (42): 3A. Retired NVIDIA Model Remediation (`nvidia/llama-3.1-nemotron-70b-instruct` HTTP 410), RoutingInput, IntentTaxonomy, ModelId, ModelProvenanceSchema, ModelToolChoice, ModelToolDefinition, ReasoningControlMode (+34 more)
+Cohesion: 0.07
+Nodes (23): ModelProvenanceSchema, ModelToolChoice, ModelToolDefinition, ACTIVE_NVIDIA_DEEP_MODEL, ACTIVE_NVIDIA_DEFAULT_MODEL, ACTIVE_NVIDIA_FAST_MODEL, DeterministicMockAdapter, ProviderUnavailableError (+15 more)
 
 ### Community 8 - "AIRA PRODUCTION CHAT — FIX + CERTIFY + RELEASE"
 Cohesion: 0.07
@@ -498,15 +533,15 @@ Nodes (38): devDependencies, autoprefixer@^10.6.1, oxlint@^1.81.0, playwright@^1
 
 ### Community 12 - "knex"
 Cohesion: 0.03
-Nodes (10): config, down(), up(), knex, client, main(), rawCs, AcceptanceReport (+2 more)
+Nodes (7): config, down(), up(), knex, client, env, main()
 
 ### Community 13 - "authenticatedApiFetch"
-Cohesion: 0.05
-Nodes (72): GenUILifecycleEvent, AgentContextualPanel(), AgentPanelTab, FileResult, ToolStep, AgentDefinition, AgentRunState, AgentsView() (+64 more)
+Cohesion: 0.13
+Nodes (26): AutomationDefinition, AutomationRun, AutomationsView(), authenticatedApiFetch(), AuthenticationRequiredError, AuthStateListener, NeonSessionData, STORAGE_KEYS (+18 more)
 
 ### Community 14 - "auth/session-auth.ts"
-Cohesion: 0.09
-Nodes (40): attachUser(), clearSessionCookie(), createSessionAuthMiddleware(), createSessionPayload(), encodePayload(), ensureAuthenticatedSession(), getSessionSecret(), issueSessionToken() (+32 more)
+Cohesion: 0.13
+Nodes (29): attachUser(), clearSessionCookie(), createSessionAuthMiddleware(), createSessionPayload(), encodePayload(), ensureAuthenticatedSession(), getSessionSecret(), LegacySessionPayloadV1 (+21 more)
 
 ### Community 15 - "AiraBrandMark.tsx"
 Cohesion: 0.18
@@ -514,11 +549,11 @@ Nodes (16): AiraBrandMark(), AiraBrandMarkProps, sizeClassMap, FacetDefinition, 
 
 ### Community 16 - "App.tsx"
 Cohesion: 0.04
-Nodes (82): isTemporaryDatabaseError(), Announcement, getAnnouncementsForTier(), App(), ArtifactStudio, MODE_CONTEXT, ProjectsModal, SettingsModal (+74 more)
+Nodes (53): App(), ArtifactStudio, MODE_CONTEXT, UnifiedWorkspace, CommandPalette(), DownloadAppsModal(), DownloadAppsModalProps, PlatformItem (+45 more)
 
 ### Community 17 - "dependencies"
-Cohesion: 0.06
-Nodes (31): dependencies, @ag-ui/core@1.0.5, canvas-confetti@^1.9.4, clsx@^2.1.1, cors@^2.8.6, cron-parser@^5.10.1, dotenv@^18.0.4, e2b@^2.64.0 (+23 more)
+Cohesion: 0.07
+Nodes (29): dependencies, @ag-ui/core@1.0.5, canvas-confetti@^1.9.4, clsx@^2.1.1, cors@^2.8.6, e2b@^2.64.0, express@^5.2.1, framer-motion@^14.0.0 (+21 more)
 
 ### Community 18 - "DESIGN.md"
 Cohesion: 0.05
@@ -529,8 +564,8 @@ Cohesion: 0.02
 Nodes (133): scripts, billing:provision-cashfree-plans, build, db:migrate, db:migrate:032, db:up, db:verify:deploy, dev (+125 more)
 
 ### Community 20 - "UnifiedWorkspace.tsx"
-Cohesion: 0.05
-Nodes (97): Pillar 1.4: Cross-Phase Integration Defect Resolution, 2. Implemented & Verified Capabilities, Pillar 2.1: Multi-File Artifact Data Model & Manifests, Pillar 2.2: Path Normalization & Traversal Security Boundary, Pillar 2.3: Module Dependency Analyzer & Reference Extraction, Pillar 2.4: Interactive Workspace File Explorer, Pillar 2.5: Sandboxed Multi-File Preview Runtime, Pillar 2.6: Pure Zero-Dependency PKZip Project Exporter (+89 more)
+Cohesion: 0.08
+Nodes (54): Pillar 2.1: Multi-File Artifact Data Model & Manifests, Pillar 2.3: Module Dependency Analyzer & Reference Extraction, 4. Technical & Security Validation Summary, ArtifactStudio(), ArtifactStudioProps, newSandboxNonce(), parsePresentationDeck(), parseSpreadsheetWorkbook() (+46 more)
 
 ### Community 21 - "compilerOptions"
 Cohesion: 0.10
@@ -541,28 +576,28 @@ Cohesion: 0.03
 Nodes (38): agentRuntime, ApiMemoryItem, ApiProjectItem, app, approvalKernel, automationEngine, autoRepo, autoRunRepo (+30 more)
 
 ### Community 23 - "commercial.ts"
-Cohesion: 0.03
-Nodes (100): Summary, EntitlementServiceUnavailableError, requireCapability(), requireEntitledModel(), requirePlanTier(), requireToolEntitlement(), resolveCallerTier(), TIER_RANKS (+92 more)
+Cohesion: 0.04
+Nodes (69): AIRA AI 2026 — PR #178 Staging Certification Report, CI Requirements, Open Risks and Discrepancies, Release Decision, Remaining Acceptance Scenario, Summary, Verification Results, CANDIDATE_PRICE_CATALOG (+61 more)
 
 ### Community 24 - "compilerOptions"
 Cohesion: 0.12
 Nodes (16): compilerOptions, allowImportingTsExtensions, erasableSyntaxOnly, lib, module, moduleDetection, noEmit, noFallthroughCasesInSwitch (+8 more)
 
 ### Community 25 - "AgentRuntime"
-Cohesion: 0.07
-Nodes (19): Strict Architectural Boundaries:, 1. Preserved Certified Baselines, 2. Production Behavioural Discovery & Root Causes (`https://aira-ai-2026.vercel.app/`, SHA `f429d90`), 3. Commercial Entitlement Matrix (Design Proposal — Unchanged in Code/Billing), AIRA GenUI Phase 0 — Engineering Verification & Continuation Record, Transactional approval-resumption outbox, AIRA AI 2026 — Change Impact Map, Change protocol (+11 more)
+Cohesion: 0.10
+Nodes (10): AgentRuntime, WorkflowCompiler, CreateRunRequest, withInferencePrincipal(), executeSinglePrompt(), executePrompt(), executeAuditRun(), runRealityAuditSuite() (+2 more)
 
 ### Community 26 - "Communities (405 total, 36 thin omitted)"
 Cohesion: 0.01
-Nodes (366): Communities (411 total, 41 thin omitted), Community 0 - "ModelRouter", Community 100 - "with", Community 101 - "adaptive-phase1-browser-acceptance.mjs", Community 102 - "sandbox.ts", Community 103 - "ref_node_url", Community 104 - "AgentContextualPanel.tsx", Community 105 - "AIRA AI 2026 — PR #127 FINAL PRODUCTION DEPLOYMENT & OPERATIONAL PRE-CUTOVER CERTIFICATION" (+358 more)
+Nodes (376): Communities (415 total, 35 thin omitted), Community 0 - "approvals/src/repositories.ts", Community 100 - "with", Community 101 - "adaptive-phase1-browser-acceptance.mjs", Community 102 - "sandbox.ts", Community 103 - "ref_node_url", Community 104 - "AIRA AI 2026 — Truthful Capabilities & Account Isolation Release Report", Community 105 - "AIRA AI 2026 — PR #127 FINAL PRODUCTION DEPLOYMENT & OPERATIONAL PRE-CUTOVER CERTIFICATION" (+368 more)
 
-### Community 27 - "react"
-Cohesion: 0.04
-Nodes (103): framer-motion, lucide-react, react, react-dom, AccountBillingModal(), AccountBillingModalProps, AccountMenuDropdown(), AccountMenuDropdownProps (+95 more)
+### Community 27 - "framer-motion"
+Cohesion: 0.09
+Nodes (33): VisionQuality, VisionResolution, framer-motion, AccountBillingModal(), AccountBillingModalProps, AccountMenuDropdown(), AccountMenuDropdownProps, AiraMark() (+25 more)
 
 ### Community 28 - "ProjectsModal.tsx"
-Cohesion: 0.24
-Nodes (9): ProjectsModal(), buildKnowledgeGraphFromDocs(), calculateSha256(), EntityNode, estimateTokens(), KnowledgeGraph, RelationshipEdge, SourceNode (+1 more)
+Cohesion: 0.18
+Nodes (13): ProjectsModal, ProjectsModal(), ProjectsModalProps, ProjectDoc, buildKnowledgeGraphFromDocs(), calculateSha256(), EntityNode, estimateTokens() (+5 more)
 
 ### Community 29 - "agentmemory"
 Cohesion: 0.18
@@ -577,80 +612,80 @@ Cohesion: 0.29
 Nodes (6): 1. `apps/harbor` (Contracts & Centralized Policy), 2. `apps/x/packages/core` (Runtime, Models, MCP, Knowledge), Adaptation Rules for AIRA AI 2026, Rowboat Upstream Architecture Reference, Subsystems Analyzed, Upstream Tracking
 
 ### Community 32 - "a2ui.ts"
-Cohesion: 0.04
-Nodes (83): 3. Phase 1 Architecture & Security Summary, 1. Verdict, 2. Accepted Implementation Scope & Architecture (`Phase 2`), 3. Independent Review & Remediations Resolved, 4. A2UI v1.0 Supported vs Unsupported Profile Matrix, 5. Verification Evidence Summary (Run After Final Code Edit), 6. External Blockers & Phase 3 Continuation Scope, AIRA GenUI Phase 2 — Declarative A2UI v1.0 & Reactive Runtime Certification Record (+75 more)
+Cohesion: 0.05
+Nodes (49): A2UI_BASIC_CATALOG_ID, A2UI_PROTOCOL_VERSION, A2UIAccessibilitySchema, A2UIActionSchema, A2UIAgentCapabilitiesSchema, A2UIAgentToRendererMessage, A2UIAgentToRendererMessageSchema, A2UICheckRuleWireSchema (+41 more)
 
 ### Community 33 - ".oxlintrc.json"
 Cohesion: 0.33
 Nodes (5): plugins, rules, react/only-export-components, react/rules-of-hooks, $schema
 
 ### Community 34 - "test-oracle-staging-capabilities.ts"
-Cohesion: 0.09
-Nodes (21): APPROVED_STDIO_COMMANDS, assertApprovedPublicMcpDestination(), isMcpToolInvocationAuthorized(), McpHost, McpOperationOptions, McpServerStatus, sanitizeStdioEnv(), FORBIDDEN_METADATA_HOSTNAMES (+13 more)
+Cohesion: 0.08
+Nodes (28): 1. Executive Verdict, 2. Specification & Implementation Evidence, 3. Remote MCP Security & Threat Model, 4. Phase 4A Gate Matrix, A. Contract Definition (`packages/contracts/src/mcp-apps.ts`), AIRA Containment Invariants, AIRA GenUI Phase 4A — MCP Apps Engineering Certification, B. Host Bridge Container (`src/components/genui/GenUIMcpApp.tsx`) (+20 more)
 
 ### Community 35 - "payment-gateway-service.ts"
-Cohesion: 0.10
-Nodes (36): extractRawWebhookBody(), validateAndNormalizeIndianPhone(), createBillingRoutes(), createCashfreeReturnHandler(), createInternalReconcileAmbiguousHandler(), createWorkerOutboxHandler(), isAuthorizedWorkerRequest(), timingSafeSecretMatch() (+28 more)
+Cohesion: 0.04
+Nodes (70): CANDIDATE_CASHFREE_PLANS, CANDIDATE_RAZORPAY_PLANS, ContactDetails, CreditTopupPack, extractRawWebhookBody(), GatewayOrderTransport, InvoiceRecord, isPriceApprovedForProduction() (+62 more)
 
-### Community 36 - "AgentDefinition"
-Cohesion: 0.15
-Nodes (4): AgentRepository, InMemoryAgentRepository, PostgresAgentRepository, AgentDefinition
+### Community 36 - "artifacts.ts"
+Cohesion: 0.07
+Nodes (66): 2. Multimodal Capability Matrix, D-03: Structured Presentation Engine, AIRA_ARTIFACT_CONTRACT_VERSION, AiraArtifactCapabilities, AiraArtifactCapabilitiesSchema, AiraArtifactDescriptor, AiraArtifactDescriptorSchema, ArtifactClass (+58 more)
 
 ### Community 37 - "ref_node_fs"
-Cohesion: 0.02
-Nodes (67): playwright, evidence, pullNumber, REPO_DIR, run(), saveScreenshot(), captureAllPreviews(), createBrowserSession() (+59 more)
+Cohesion: 0.03
+Nodes (50): allFailures, allRequests, benchmarkPath, breakdown, data, geminiFailures, geminiRequests, nonGeminiFailures (+42 more)
 
 ### Community 44 - "ToolGateway"
-Cohesion: 0.04
-Nodes (41): BLOCKING CONSTRAINTS — Read Before Anything Else, Critical Anti-Patterns, Critical Anti-Patterns (do NOT repeat these), Infrastructure State, Required Reading (in order), 4.2 Intelligent Prompt Composer (`IntelligentPromptComposer`), 4.3 Chat vs Agent Mode Integration, 4. Architecture Implementation Summary (+33 more)
+Cohesion: 0.03
+Nodes (40): 4.2 Intelligent Prompt Composer (`IntelligentPromptComposer`), 4.3 Chat vs Agent Mode Integration, 4. Architecture Implementation Summary, createOfflinePostgresClient(), ApprovalDecisionSchema, DurableToolCall, ToolDefinition, ToolDefinitionSchema (+32 more)
 
 ### Community 45 - "storage.ts"
-Cohesion: 0.04
-Nodes (94): 4. Resilient Storage & Quota Hardening Ledger, 2. Root Cause Analysis & Architectural Remediation, Browser Storage Quota Exhaustion (`QuotaExceededError`), On-Demand Studio Behavior & Responsive Layout, 10. Production Safety Confirmation, 11. Pull Request URL Targeting `prod-release`, 12. Final Merge-Readiness Verdict, 1. Root-Cause Analysis: Microtask Assimilation Deadlock in `loadProjects()` (+86 more)
+Cohesion: 0.05
+Nodes (77): 4. Resilient Storage & Quota Hardening Ledger, Browser Storage Quota Exhaustion (`QuotaExceededError`), 1. Root-Cause Analysis: Microtask Assimilation Deadlock in `loadProjects()`, The Failure Mechanism:, 4. Resilient Storage & Quota Hardening Ledger, Lineage & Commits, PlanRestrictionError, 5. Tier Default Model Mismatch Locks Out Guest Users (`P1`) (+69 more)
 
-### Community 46 - "specialist-worker/src/index.ts"
-Cohesion: 0.06
-Nodes (31): activationConfig, analysisSpecialist, approvalKernel, approvalRepo, autoEngine, autoHost, autoRepo, classification (+23 more)
+### Community 46 - "Artifact"
+Cohesion: 0.07
+Nodes (39): 1. Problem Statement & Scope, 3.2 Collaborative Agent Bridge (`CollaborativeAgentBridge`), CollaborativeAgentBridge, CollaborativeAgentBridgeOptions, AIRA_COLLAB_CONTRACT_VERSION, CollabActor, CollabActorRole, CollabActorRoleSchema (+31 more)
 
-### Community 47 - "db"
+### Community 47 - "ref_node_assert"
 Cohesion: 0.04
-Nodes (57): paymentGatewayService, seedDefaultAutomation(), PostgresRunRepository, PostgresAutomationRepository, closeDb(), db, __dirname, effectiveConnectionString (+49 more)
+Nodes (38): createDatabaseReadinessProbe(), evaluateRuntimeReadiness(), closeDb(), __dirname, effectiveConnectionString, MigrationMaintenancePlanResult, resolveEffectiveDatabaseUrl(), RunMigrationsOptions (+30 more)
 
 ### Community 48 - "staging-cutover-safety-gates.test.ts"
 Cohesion: 0.02
-Nodes (81): validateHealthCheckResponse(), validateMaintenanceRestrictionResponse(), afterImport, afterMerge, afterMigBeforeMerge, beforeMig, benchmarkRes, bypassTokenDeclIndex (+73 more)
+Nodes (79): afterImport, afterMerge, afterMigBeforeMerge, beforeMig, benchmarkRes, bypassTokenDeclIndex, bypassTokenFirstUse, chat200 (+71 more)
 
 ### Community 49 - "genui.ts"
 Cohesion: 0.02
 Nodes (86): A2UI_V1_COMPATIBILITY_BOUNDARY, A2UIV1BoundaryEnvelope, ActionButtonComponentSchema, AdaptiveContainerComponentSchema, AIRA_GENUI_LIMITS, ApprovalRequestComponentSchema, ArtifactReferenceComponentSchema, BarChartComponentSchema (+78 more)
 
 ### Community 50 - "PaymentGatewayService"
-Cohesion: 0.10
-Nodes (3): hasPaidPeriodEntitlement(), PaymentGatewayService, isStagingSandboxRehearsalActive()
+Cohesion: 0.08
+Nodes (8): hasPaidPeriodEntitlement(), hasPaidSubscriptionEvidence(), assertCommercialFulfillmentAllowed(), isTerminalError(), PaymentGatewayService, TerminalRejectionError, isStagingSandboxRehearsalActive(), setupTopupService()
 
-### Community 51 - "2. Targeted Foundation Remediations (Section 3)"
-Cohesion: 0.25
-Nodes (6): 1. Verdict, 2. Targeted Foundation Remediations (Section 3), 3B. `PresentationRouter` Live Tier 2 Classification Fix, 3C. Artifact Preview Assessment, 4. Verification Matrix, AIRA GenUI Phase 1 — Native GenUI Certification & Continuation Record
+### Community 51 - "AIRA GenUI Phase 0 — Engineering Verification & Continuation Record"
+Cohesion: 0.12
+Nodes (15): 1. Preserved Certified Baselines, 2. Production Behavioural Discovery & Root Causes (`https://aira-ai-2026.vercel.app/`, SHA `f429d90`), 3. Commercial Entitlement Matrix (Design Proposal — Unchanged in Code/Billing), 5. Phase 0 & Phase 0.5 Implementation Ledger, 6. Post-Fix Verification Ledger, AIRA GenUI Phase 0 — Engineering Verification & Continuation Record, Live Provider Probe (NVIDIA NIM), Measured PresentationRouter Benchmarks (+7 more)
 
 ### Community 52 - "operational-staging-acceptance-and-fault-injection.test.ts"
-Cohesion: 0.10
-Nodes (29): CompositeAnalystSpecialistAgent, AnalysisSpecialistAgent, AutomationSpecialistAgent, BrowserSpecialistAgent, CoderSpecialistAgent, DocumentSpecialistAgent, createAutonomousSpecialistRegistry(), MathematicalSpecialistAgent (+21 more)
+Cohesion: 0.05
+Nodes (65): activationConfig, analysisSpecialist, approvalKernel, approvalRepo, autoEngine, autoHost, autoRepo, classification (+57 more)
 
-### Community 53 - "m2a-durable-specialist-execution.test.ts"
-Cohesion: 0.09
-Nodes (9): main(), DurableExecutionCoordinator, DurableTaskScheduler, SpecialistTaskRepository, SpecialistWorkerRuntime, TaskLeaseManager, SpecialistWorkerHost, validateTaskDAG() (+1 more)
+### Community 53 - "sanitizeActivationError"
+Cohesion: 0.20
+Nodes (10): 2.1 Reconciled Production Worker Sizing for 1 OCPU / 6 GB RAM Oracle VM Envelope, 2.2 Sizing Justification & Architecture Invariants, 2.3 Standby Isolation Certified Fail-Closed (Stage A vs Stage B), 2.4 Dual-Layer Database Identity & Crossover Protection, MISSION 2: PRODUCTION WORKER SIZING & STANDBY ISOLATION CERTIFICATION, 12. PRODUCTION ACTIVATION SAFEGUARDS (TWO-STAGE PATTERN), Database Crossover & Credential Sanitization, main() (+2 more)
 
-### Community 54 - "conversation-search-semantic.ts"
-Cohesion: 0.19
-Nodes (9): Workstream 5: Vision, Research, Agents & Builder Integration, EmbeddingBatch, EmbeddingProvider, EmbeddingPurpose, ConversationEmbeddingIndexer, HybridConversationSearchService, cleanup(), DeterministicEmbeddingProvider (+1 more)
+### Community 54 - "retrieval/src/index.ts"
+Cohesion: 0.07
+Nodes (31): Workstream 5: Vision, Research, Agents & Builder Integration, createEmbeddingProvider(), EmbeddingBatch, EmbeddingProvider, EmbeddingPurpose, normalizeInput(), NvidiaEmbeddingProvider, NvidiaEmbeddingResponse (+23 more)
 
 ### Community 55 - "ExecutionPrincipal"
-Cohesion: 0.05
-Nodes (19): ResearchOptions, ExecutionPrincipal, BrowserAdapter, BrowserAdapterOptions, BrowserPersistenceUnavailableError, BrowserSessionInfo, IBrowserSessionStorage, InMemoryBrowserSessionStorage (+11 more)
+Cohesion: 0.08
+Nodes (10): ResearchOptions, ExecutionPrincipal, BrowserAdapter, ConnectorActionDefinition, ConnectorAdapter, ConnectorRegistry, ConnectorState, GitHubConnectorAdapter (+2 more)
 
-### Community 56 - "ref_node_assert"
-Cohesion: 0.04
-Nodes (16): createDatabaseReadinessProbe(), evaluateRuntimeReadiness(), Engineering work preserved and completed, AutomationDefinitionSchema, PRESET_THEMES, TestContext, mockAgentRuntime, __dirname (+8 more)
+### Community 56 - "genui-phase3-live-nim-generation.test.ts"
+Cohesion: 0.08
+Nodes (30): AIRA_GENUI_APP_CONTRACT_VERSION, validateMcpAppDescriptor(), 3. Defense-in-Depth Sandbox Sanitization + Concurrent Slot Cap, generateSecureNonce(), GenUIMcpApp(), GenUIMcpAppProps, ARTIFACT_CSP_META_TAG, ARTIFACT_REACT_CSP_META_TAG (+22 more)
 
 ### Community 57 - "E2ETestClient"
 Cohesion: 0.10
@@ -658,123 +693,127 @@ Nodes (26): Announcement, E2ETestClient, E2ETestServer, globalTestRegistry, Gues
 
 ### Community 58 - "commercial-billing-service.ts"
 Cohesion: 0.07
-Nodes (30): CommercialBillingService, commercialBillingService, hasPaidSubscriptionEvidence(), InsufficientCreditsError, parseJsonSafe(), StandardChatPlanChangedError, StandardChatReplayError, StandardChatReservation (+22 more)
+Nodes (27): CommercialBillingService, commercialBillingService, InsufficientCreditsError, parseJsonSafe(), StandardChatPlanChangedError, StandardChatReplayError, StandardChatReservation, StandardQuotaExceededError (+19 more)
 
 ### Community 59 - "rehearse-disposable-restore.ts"
 Cohesion: 0.07
-Nodes (55): DatabaseClassification, BackupRehearsalResult, __dirname, execWslScript(), __filename, REPO_ROOT, runProductionBackupAndRestoreRehearsal(), toWslPath() (+47 more)
+Nodes (56): DatabaseClassification, pg, BackupRehearsalResult, __dirname, execWslScript(), __filename, REPO_ROOT, runProductionBackupAndRestoreRehearsal() (+48 more)
 
 ### Community 60 - "WorkflowEngine"
-Cohesion: 0.08
-Nodes (10): WorkflowEngine, PostgresWorkflowRepository, WorkflowRepository, WorkflowDefinition, WorkflowRun, WorkflowStepDefinition, WorkflowStepExecution, WorkflowStepState (+2 more)
+Cohesion: 0.07
+Nodes (18): InMemoryWorkflowRepository, PostgresWorkflowRepository, WorkflowRepository, RunSchema, validateWorkflowDag(), WorkflowDefinition, WorkflowRun, WorkflowStepExecution (+10 more)
 
 ### Community 61 - "PrivateBetaCapacityGuard"
-Cohesion: 0.07
-Nodes (19): 3. Truthful Multi-Instance Evidence Classification, PrivateBetaCapacityConfig, resolveCapacityConfig(), AdmissionDecisionType, AdmitOptions, PrivateBetaCapacityGuard, QueuedItem, QueueProgressEvent (+11 more)
+Cohesion: 0.05
+Nodes (28): normalizeModelIdentifier(), UnsupportedModelIdentifierError, PrivateBetaCapacityConfig, resolveCapacityConfig(), AdmissionDecisionType, AdmissionPermit, AdmissionResult, PrivateBetaCapacityGuard (+20 more)
 
-### Community 62 - "database-isolation-guard.ts"
-Cohesion: 0.12
-Nodes (25): assertCanRunMigrations(), COMMERCIAL_PR92_BRANCH_ID, COMMERCIAL_PR92_ENDPOINT_ID, DatabaseEnvironmentCategory, DatabaseIdentityEvidence, DatabaseIdentityVerificationResult, NEON_CONTROL_PLANE_REGISTRY, NeonControlPlaneMetadata (+17 more)
+### Community 62 - "browser-adapter.ts"
+Cohesion: 0.08
+Nodes (15): 4. Worker Image & Architecture Compatibility (Arm64 Ampere A1), Arm64 Execution Classification, Dependency Audit for `linux/arm64`, Multi-Architecture Container Support, down(), up(), BrowserAdapterOptions, BrowserPersistenceUnavailableError (+7 more)
 
 ### Community 63 - "bff-session.ts"
 Cohesion: 0.08
-Nodes (57): appendSetCookieHeader(), BFF_COOKIE_NAME_PROD, BFF_FLOW_COOKIE_NAME_DEV, BFF_FLOW_COOKIE_NAME_PROD, BFF_SESSION_TTL_SECONDS, BffOAuthProvider, BffSessionPayload, bffSessionStore (+49 more)
+Nodes (49): appendSetCookieHeader(), BFF_COOKIE_NAME_DEV, BFF_COOKIE_NAME_PROD, BFF_FLOW_COOKIE_NAME_DEV, BFF_FLOW_COOKIE_NAME_PROD, BFF_SESSION_TTL_SECONDS, BffOAuthProvider, BffSessionPayload (+41 more)
 
 ### Community 64 - "staging-maintenance-barrier.ts"
-Cohesion: 0.09
-Nodes (46): createStagingMaintenanceMiddleware(), isStagingMaintenanceActive(), MaintenanceConfig, MUTATING_GET_PATHS, setStagingMaintenanceState(), evaluateMigrationMaintenancePlan(), PRODUCTION_NEON_PROJECT_ID, STAGING_NEON_ENDPOINT_ID (+38 more)
-
-### Community 65 - "InMemorySpecialistTaskRepository"
 Cohesion: 0.08
-Nodes (8): InMemorySpecialistTaskRepository, DURABLE_SPECIALIST_TOOL_ALLOWLIST, ToolScopeValidation, validateDurableToolScopes(), MismatchedIdentityRepository, principal, RevokedWorkspaceRepository, RevokesBetweenChecksRepository
+Nodes (46): createStagingMaintenanceMiddleware(), isStagingMaintenanceActive(), MaintenanceConfig, MUTATING_GET_PATHS, setStagingMaintenanceState(), evaluateMigrationMaintenancePlan(), activateStagingMaintenance(), assertNonProductionTarget() (+38 more)
+
+### Community 65 - "genui-streaming.ts"
+Cohesion: 0.09
+Nodes (24): 3. Phase 1 Architecture & Security Summary, D. Progressive Surface Lifecycle, G. Adaptive Presentation Routing & Model Integration, Solution, adaptAiraEventToAGUI(), authorizeGenUIActionServerSide(), buildDeterministicCalculatorPromptSurface(), buildGenUISystemInstruction() (+16 more)
 
 ### Community 66 - "adversarial-entitlements.test.ts"
-Cohesion: 0.07
-Nodes (23): canonicalizePayload(), computePayloadHash(), DEFAULT_LOCK_LEASE_MS, DurableIdempotencyManager, durableIdempotencyManager, FailOptions, IdempotencyConflictError, IdempotencyDatabaseError (+15 more)
+Cohesion: 0.09
+Nodes (22): canonicalizePayload(), computePayloadHash(), DEFAULT_LOCK_LEASE_MS, DurableIdempotencyManager, durableIdempotencyManager, FailOptions, IdempotencyConflictError, IdempotencyDatabaseError (+14 more)
 
 ### Community 67 - "src/research-evidence.ts"
-Cohesion: 0.09
-Nodes (42): evaluateFreshness(), extractCalculatorExpression(), isRepositoryIntent(), buildDomainResearchGuidelines(), buildResearchEvidenceContext(), buildResearchSourcesAppendix(), buildTargetedSearchQuery(), dateLabel() (+34 more)
+Cohesion: 0.14
+Nodes (26): buildDomainResearchGuidelines(), buildResearchEvidenceContext(), buildResearchSourcesAppendix(), buildTargetedSearchQuery(), dateLabel(), decodeHtmlEntities(), evaluateEvidenceSufficiency(), EvidenceSufficiency (+18 more)
 
 ### Community 68 - "certify-staging-session-revocation.ts"
 Cohesion: 0.08
 Nodes (42): ARTIFACTS_DIR, evidenceList, main(), record(), STAGING_URL, StepEvidence, RFC-7636, artifacts (+34 more)
 
 ### Community 69 - "AIRA AI 2026 — PR #127 PRODUCTION DEPLOYMENT READINESS, RECOVERY ASSURANCE & OPERATIONAL CERTIFICATION"
-Cohesion: 0.04
-Nodes (47): 10. SELECTED PRODUCTION WORKER ARCHITECTURE (OPTION A), 11.1 Container Hardening & Compose Contract (`infrastructure/production/docker-compose.prod.yml`), 11.2 Systemd Supervision Unit (`infrastructure/production/systemd/aira-production-worker.service`), 11. PRODUCTION WORKER DEPLOYMENT CONTRACT, 12. PRODUCTION ACTIVATION SAFEGUARDS (TWO-STAGE PATTERN), 13. RESOURCE AND CONCURRENCY RECOMMENDATIONS, 14. OPERATIONAL ACCEPTANCE THRESHOLDS (9 MEASURABLE SLO DOMAINS), 15.1 Core Architectural Principle: Data-Preserving Forward Correction (+39 more)
+Cohesion: 0.05
+Nodes (40): 10. SELECTED PRODUCTION WORKER ARCHITECTURE (OPTION A), 11.1 Container Hardening & Compose Contract (`infrastructure/production/docker-compose.prod.yml`), 11.2 Systemd Supervision Unit (`infrastructure/production/systemd/aira-production-worker.service`), 11. PRODUCTION WORKER DEPLOYMENT CONTRACT, 13. RESOURCE AND CONCURRENCY RECOMMENDATIONS, 14. OPERATIONAL ACCEPTANCE THRESHOLDS (9 MEASURABLE SLO DOMAINS), 15.1 Core Architectural Principle: Data-Preserving Forward Correction, 15.2 Edge Failure Scenarios & Recovery Procedures (+32 more)
 
 ### Community 70 - "CapabilityRegistry"
 Cohesion: 0.10
-Nodes (20): main(), 4.1 Shared Capability Registry (`CapabilityRegistry`), CapabilityRegistry, ServerIntentRouter, CapabilityDefinition, CapabilityDefinitionSchema, ExecutionTarget, RoutingDecision (+12 more)
+Nodes (24): main(), 4.1 Shared Capability Registry (`CapabilityRegistry`), evaluateFreshness(), FreshnessEvaluation, SemanticReasonerInput, CapabilityRegistry, RoutingInput, ServerIntentRouter (+16 more)
 
 ### Community 71 - "m2a-durable-specialist-execution.test.ts"
-Cohesion: 0.10
-Nodes (32): MissionExecutionResult, SchedulerOptions, SchedulingBatchResult, assertSamePersistedTaskIdentity(), AuthoritativeTaskIdentity, canonicalJson(), DurableSpecialistTask, TaskClaimResult (+24 more)
+Cohesion: 0.04
+Nodes (44): DurableExecutionCoordinator, MissionExecutionResult, DurableTaskScheduler, SchedulerOptions, SchedulingBatchResult, assertSamePersistedTaskIdentity(), AuthoritativeTaskIdentity, canonicalJson() (+36 more)
 
 ### Community 72 - "ModelPolicy"
-Cohesion: 0.10
-Nodes (25): ModelPolicy, ModelPolicySchema, anySignal(), GeminiContent, GeminiContentPart, GeminiParsedChunk, GeminiRequestPayload, ChatMessageInput (+17 more)
+Cohesion: 0.09
+Nodes (21): 1. Chronological Audit & Remediation History, Live Preview & Staging Acceptance Status, Summary, isRepositoryIntent(), ModelPolicy, anySignal(), GeminiAdapter, GeminiContent (+13 more)
 
 ### Community 73 - "benchmark-p1-6-1-gemini-120requests.ts"
-Cohesion: 0.09
-Nodes (24): BenchmarkPrompt, quantile(), runBenchmark(), RunResult, scoreQuality(), testPrompts, BatchStats, classifyError() (+16 more)
+Cohesion: 0.07
+Nodes (30): BenchmarkPrompt, quantile(), runBenchmark(), RunResult, scoreQuality(), testPrompts, BatchStats, classifyError() (+22 more)
 
 ### Community 74 - "production-worker-activation-guard.test.ts"
-Cohesion: 0.09
-Nodes (39): 2.4 Dual-Layer Database Identity & Crossover Protection, Database Crossover & Credential Sanitization, checkSandboxHealth(), EnvironmentValidationReport, parseEnvFile(), runValidatorCLI(), validateEnvFilePermissions(), validateProductionEnvironmentConfig() (+31 more)
+Cohesion: 0.17
+Nodes (23): checkSandboxHealth(), EnvironmentValidationReport, parseEnvFile(), runValidatorCLI(), validateEnvFilePermissions(), validateProductionEnvironmentConfig(), ValidationOptions, assertWorkerActivationAuthorized() (+15 more)
 
 ### Community 75 - "builder-agent.test.ts"
-Cohesion: 0.06
-Nodes (35): createBuilderRoutes(), 1. Confirmed paths and security findings, `AIRA_SESSION_SECRET` runtime uses, Findings, BuilderAction, BuilderActionSchema, BuilderEvent, BuilderFile (+27 more)
+Cohesion: 0.07
+Nodes (24): createBuilderRoutes(), BuilderAction, BuilderActionSchema, BuilderEvent, BuilderFile, BuilderRequest, BuilderRequestSchema, filePath (+16 more)
 
 ### Community 76 - "revoke"
 Cohesion: 0.04
 Nodes (44): description, required, type, cancel-in-progress, group, CANDIDATE_SHA, GH_TOKEN, PR_NUMBER (+36 more)
 
 ### Community 77 - "AIRA AI 2026 — PR #127 FINAL ENGINEERING CLOSURE & GO-LIVE READINESS"
-Cohesion: 0.05
-Nodes (42): 1.1 Cryptographic 3-Way Git Synchronization, 1.2 GitHub PR #127 Operational Metadata, 1.3 Authoritative GitHub Actions Workflow Execution on Candidate SHA 378425a, 1.4 GitGuardian & Credential Hygiene Analysis, 1.5 Release Authorization Guard Unit Certification, 1. Live Subprocess Execution Mode (`--live`):, 2.1 Reconciled Production Worker Sizing for 1 OCPU / 6 GB RAM Oracle VM Envelope, 2.2 Sizing Justification & Architecture Invariants (+34 more)
+Cohesion: 0.11
+Nodes (18): 1.1 Cryptographic 3-Way Git Synchronization, 1.2 GitHub PR #127 Operational Metadata, 1.3 Authoritative GitHub Actions Workflow Execution on Candidate SHA 378425a, 1.4 GitGuardian & Credential Hygiene Analysis, 1.5 Release Authorization Guard Unit Certification, AIRA AI 2026 — PR #127 FINAL ENGINEERING CLOSURE & GO-LIVE READINESS, ANTIGRAVITY CAPABILITY ACTIVATION LEDGER, **`CONDITIONALLY READY — SPECIFIC PREREQUISITES`** (+10 more)
 
 ### Community 78 - "registry.tsx"
-Cohesion: 0.12
-Nodes (27): GenUIComponentType, ApprovalRequestRenderer(), ArtifactReferenceRenderer(), ErrorRecoveryRenderer(), ExecutionTimelineRenderer(), MissionSummaryRenderer(), StatusPill(), TaskStatusRenderer() (+19 more)
+Cohesion: 0.16
+Nodes (20): GenUIComponentType, ApprovalRequestRenderer(), ArtifactReferenceRenderer(), ErrorRecoveryRenderer(), ExecutionTimelineRenderer(), MissionSummaryRenderer(), StatusPill(), TaskStatusRenderer() (+12 more)
 
 ### Community 79 - "ProviderHealthTracker"
-Cohesion: 0.09
-Nodes (20): Fast Provider Resilience & Tail-Latency Remediation Implementation Plan, Global Constraints, Task 1: Provider Health Tracker & Circuit Breaker Engine, Task 2: Latency-Aware Provider Selection Policy & Quality Floor, Task 3: First-Token Content Deadline & Truthful Fallback Engine, Task 4: Controlled Hedged-Request Experiment Engine, Task 5: Integration with AgentRuntime, API Telemetry, and Multi-Turn Consistency, Task 6: Preview Deployment, Multi-Batch Variance Testing, and Reporting (+12 more)
+Cohesion: 0.07
+Nodes (27): Task 1: Provider Health Tracker & Circuit Breaker Engine, ModelPolicySchema, CircuitBreakerState, InternalRecord, ProviderHealthTracker, ProviderHealthTrackerOptions, ProviderTelemetry, quantile() (+19 more)
 
 ### Community 80 - "steps"
 Cohesion: 0.05
 Nodes (40): concurrency, cancel-in-progress, group, AIRA_AUTH_EVIDENCE_DIR, AIRA_EXPECTED_SHA, AIRA_RESPONSIVE_EVIDENCE_DIR, AIRA_RESPONSIVE_URL, AIRA_SURFACE_EVIDENCE_DIR (+32 more)
 
 ### Community 81 - "DistributedPostgresCapacityStore"
-Cohesion: 0.06
-Nodes (30): 1. Architectural Architecture & Dependency Injection Audit, 2. Database Schema & Migration Verification, 3. Single-Roundtrip Atomic CTE Execution Architecture, 4. Multi-Instance Concurrency & Race Condition Verification, 5. Live PostgreSQL Data Verification, 6. Verification Verdict, AIRA AI 2026 — P1.6.7 Distributed Capacity Store & Concurrency Certification, Deployed Runtime Verification: (+22 more)
+Cohesion: 0.07
+Nodes (24): 1. Architectural Architecture & Dependency Injection Audit, 2. Database Schema & Migration Verification, 3. Single-Roundtrip Atomic CTE Execution Architecture, 4. Multi-Instance Concurrency & Race Condition Verification, 5. Live PostgreSQL Data Verification, 6. Verification Verdict, AIRA AI 2026 — P1.6.7 Distributed Capacity Store & Concurrency Certification, Deployed Runtime Verification: (+16 more)
 
 ### Community 82 - "ref_node_child_process"
 Cohesion: 0.10
 Nodes (34): areConstraintDefsEquivalent(), auditRestoredDatabaseParity(), canonicalizeArrayCastPattern(), ConstraintsBreakdown, ExactColumnRequirement, ExactConstraintDefRequirement, ExactConstraintsRequirement, ExactExtensionRequirement (+26 more)
 
+### Community 83 - "DockerIsolatedSandboxProvider"
+Cohesion: 0.15
+Nodes (3): DockerIsolatedSandboxProvider, OCISandboxProvider, SandboxWorkspace
+
 ### Community 84 - "behavioral.ts"
 Cohesion: 0.06
 Nodes (34): 7. Prompt Token Audit (Section 7), AdaptiveSynthesizer, INJECTION_PATTERNS, InstructionResolver, PROVENANCE_HIERARCHY, ResolveInstructionsInput, AdaptiveWritingMode, AdaptiveWritingModeSchema (+26 more)
 
-### Community 85 - "agent-specialists.ts"
-Cohesion: 0.09
-Nodes (25): ALL_SPECIALIST_ROLES, SpecialistAuthorizationRequirementsSchema, SpecialistBudgetLimitsSchema, SpecialistErrorDetails, SpecialistErrorDetailsSchema, SpecialistEvidenceReference, SpecialistEvidenceReferenceSchema, SpecialistExecutionConstraintsSchema (+17 more)
+### Community 85 - "ModelRouter"
+Cohesion: 0.14
+Nodes (16): 3A. Retired NVIDIA Model Remediation (`nvidia/llama-3.1-nemotron-70b-instruct` HTTP 410), ModelId, ModelIdSchema, isRetiredNvidiaModel(), ModelRouter, nonRetiredNvidiaEnv(), OpenAIAdapter, resolveNvidiaModel() (+8 more)
 
 ### Community 86 - "presentation-router.ts"
 Cohesion: 0.07
-Nodes (30): 5. Phase 0 & Phase 0.5 Implementation Ledger, 6. Post-Fix Verification Ledger, Live Provider Probe (NVIDIA NIM), Measured PresentationRouter Benchmarks, approachForMode(), ModelPresentationChoiceSchema, parseFirstValidJsonObject(), PRESENTATION_JSON_SCHEMA (+22 more)
+Nodes (30): approachForMode(), ModelPresentationChoiceSchema, parseFirstValidJsonObject(), PRESENTATION_JSON_SCHEMA, PRESENTATION_MODES, PresentationApproach, PresentationApproachSchema, PresentationBenchmarkCase (+22 more)
 
 ### Community 87 - "attestation"
 Cohesion: 0.05
 Nodes (38): description, required, type, env, if, name, runs-on, steps (+30 more)
 
-### Community 88 - "SpecialistRegistry"
-Cohesion: 0.08
-Nodes (16): ISpecialistAgent, SpecialistOperationalStatus, SpecialistRegistrationMetadata, SpecialistRegistry, repo, resolve(), approvalKernel, heartbeatIntervalMs (+8 more)
+### Community 88 - "SettingsModal.tsx"
+Cohesion: 0.16
+Nodes (27): SettingsModal, CommandPaletteProps, PaletteItem, ConversationSearchOverlayProps, GreetingScreenProps, PrivacyCenterModalProps, PresetTheme, SettingsModal() (+19 more)
 
 ### Community 89 - "browser-storage-migration-fidelity.test.ts"
 Cohesion: 0.07
@@ -785,40 +824,40 @@ Cohesion: 0.05
 Nodes (37): 10. Production Environment Configuration Requirements, 11.1 Neon PostgreSQL PITR:, 11.2 Rollback Safety Barrier:, 11. Backup, Point-in-Time Recovery & Data Retention, 12. Vercel Production Deployments & Rollback Targets, 13. Production Worker Drain & Lease Rollback Procedures, 14.1 Read-Only Verification Results:, 14.2 Protocol Security Constraints (Verified by 68 Unit Tests): (+29 more)
 
 ### Community 91 - "ref_fs"
-Cohesion: 0.05
-Nodes (28): PROMPTS, RunMetrics, DetailedSample, main(), PROMPTS, quantile(), runSample(), PROMPTS (+20 more)
+Cohesion: 0.04
+Nodes (31): runBenchmark(), PROMPTS, RunMetrics, DetailedSample, main(), PROMPTS, quantile(), runSample() (+23 more)
 
 ### Community 92 - "AIRA AI 2026 — Oracle Cloud Always Free Staging Worker Deployment Specification & Operational Runbook"
-Cohesion: 0.05
-Nodes (36): 10. Container Deployment Procedures (Step-by-Step & Reproducible), 11.5 Live Oracle Cloud ARM64 Capability Acceptance Audit (8 / 8 Capabilities Verified):, 11. Health & Readiness Verification, 12. Worker Recovery Verification, 13. Rollback & Troubleshooting Procedures, 14. Current Staging Status & Production Gate Handoff, 1. Final Engineering Certification Verdict, 2. Certified Git Commit Metadata (+28 more)
+Cohesion: 0.06
+Nodes (32): 10. Container Deployment Procedures (Step-by-Step & Reproducible), 11.5 Live Oracle Cloud ARM64 Capability Acceptance Audit (8 / 8 Capabilities Verified):, 11. Health & Readiness Verification, 12. Worker Recovery Verification, 13. Rollback & Troubleshooting Procedures, 14. Current Staging Status & Production Gate Handoff, 1. Final Engineering Certification Verdict, 2. Certified Git Commit Metadata (+24 more)
 
 ### Community 93 - "Decisions"
-Cohesion: 0.12
-Nodes (15): 1. Contract-First Discriminated Zod Schema with Explicit Structural Limits, 1. Live Production DB Version Differed from Legacy Docs (PostgreSQL 18.7, not 16/17), 2. Local Graph Tooling Divergence Across MCP Servers, 3. `test-results/behavioral/*.md` Indexed into Graph Alongside Active Source, 4. Incremental AST Code Graph Caching + Community Hubs for Token Conservation, 4. Pre-Existing Scenario 17 & GitHub Free vs Pro History Evolution, 5. Tiered Two-Phase Credit Reservation (`HOLD` -> `SETTLE` / `RELEASE`), 6. Sequential Isolated Disposable Postgres Certification (`--test-concurrency=1`) (+7 more)
+Cohesion: 0.10
+Nodes (19): 1. Contract-First Discriminated Zod Schema with Explicit Structural Limits, 1. Live Production DB Version Differed from Legacy Docs (PostgreSQL 18.7, not 16/17), 2. Local Graph Tooling Divergence Across MCP Servers, 2. Server-Authoritative GenUI Interaction & Workflow Approval Dispatch, 3. `test-results/behavioral/*.md` Indexed into Graph Alongside Active Source, 4. Incremental AST Code Graph Caching + Community Hubs for Token Conservation, 4. Pre-Existing Scenario 17 & GitHub Free vs Pro History Evolution, 5. Tiered Two-Phase Credit Reservation (`HOLD` -> `SETTLE` / `RELEASE`) (+11 more)
 
 ### Community 94 - "steps"
 Cohesion: 0.05
 Nodes (36): concurrency, cancel-in-progress, group, if, name, runs-on, steps, timeout-minutes (+28 more)
 
 ### Community 95 - "capabilityDispatcher.ts"
-Cohesion: 0.19
-Nodes (14): CapabilityIntent, CreateAutomationParams, CreateAutomationResult, detectCapabilityIntent(), DetectedCapability, VisionGenerationResult, AMBIGUOUS_TIMEZONE_ABBREVIATIONS, DAYS_OF_WEEK (+6 more)
+Cohesion: 0.20
+Nodes (9): AMBIGUOUS_TIMEZONE_ABBREVIATIONS, DAYS_OF_WEEK, getWallClockInTimezone(), isValidIanaTimezone(), resolveSchedule(), ScheduleResolution, WallClockDateTime, wallClockToUtcEpoch() (+1 more)
 
 ### Community 96 - "steps"
 Cohesion: 0.06
 Nodes (35): environment, if, name, runs-on, steps, timeout-minutes, concurrency, cancel-in-progress (+27 more)
 
 ### Community 97 - "SandboxProvider"
-Cohesion: 0.08
-Nodes (5): SandboxProvider, E2BSandboxFactory, LightningSandboxFactory, MultiProviderSandboxFactory, ProviderBoundSandbox
+Cohesion: 0.10
+Nodes (3): SandboxProvider, LightningSandboxFactory, ProviderBoundSandbox
 
-### Community 98 - "auth-environment-boundary.test.ts"
-Cohesion: 0.08
-Nodes (25): DirectOAuthFlowState, directOAuthService, FirstPartyJwtPayload, getSessionSecret(), LinkedProviderSummary, signFirstPartyJwt(), RFC-7636, verifyFirstPartyJwt() (+17 more)
+### Community 98 - "ref_node_crypto"
+Cohesion: 0.09
+Nodes (32): bffSessionStore, DirectOAuthFlowState, directOAuthService, FirstPartyJwtPayload, getSessionSecret(), LinkedProviderSummary, OAuthUserProfile, signFirstPartyJwt() (+24 more)
 
 ### Community 99 - "auth-bff-session-gateway.test.ts"
 Cohesion: 0.14
-Nodes (33): BFF_COOKIE_NAME_DEV, BffServerSession, clearBffSessionCookie(), createBffSessionMiddleware(), createCsrfProtectionMiddleware(), generateCsrfToken(), generateSessionId(), serializeBffToken() (+25 more)
+Nodes (37): BffServerSession, clearBffSessionCookie(), createBffSessionMiddleware(), createCsrfProtectionMiddleware(), fetchNeonJwtFromServer(), generateCsrfToken(), generateSessionId(), getAuthBaseUrl() (+29 more)
 
 ### Community 100 - "with"
 Cohesion: 0.06
@@ -829,32 +868,36 @@ Cohesion: 0.06
 Nodes (19): @sparticuz/chromium@153.0.0, @sparticuz/chromium, externalServer, launchBrowser(), port, seedPhase1Fixture(), createWavDataUri(), externalServer (+11 more)
 
 ### Community 102 - "sandbox.ts"
-Cohesion: 0.32
-Nodes (12): MAX_DOWNLOAD_BYTES, WORKSPACE, DockerSandboxProviderOptions, LightningConfig, SandboxCommandOptions, SandboxCommandResult, SandboxCreateOptions, SandboxFile (+4 more)
+Cohesion: 0.31
+Nodes (11): MAX_DOWNLOAD_BYTES, WORKSPACE, LightningConfig, parseCommandArgs(), SandboxCommandOptions, SandboxCommandResult, SandboxCreateOptions, SandboxFile (+3 more)
 
 ### Community 103 - "ref_node_url"
-Cohesion: 0.05
-Nodes (35): __dirname, expectedMigrationNames(), main(), migrationsDir, __dirname, __filename, resultsDir, rootDir (+27 more)
+Cohesion: 0.07
+Nodes (25): __dirname, __filename, resultsDir, rootDir, screenshotsDir, createInitialTestState(), __dirname, distDir (+17 more)
 
-### Community 104 - "AIRA AI 2026 — Truthful Capabilities & Account Isolation Release Report"
-Cohesion: 0.12
-Nodes (16): 2.0 Preflight Health & Environment Verification, 2.1 Genuine Third-Party OAuth Staging Verification, 2.2 Dual-Profile Microsoft Edge Isolation & Account Acceptance (`scripts/verify-staging-dual-account-isolation.ts`), 2. Live Deployed Staging Acceptance (`64c8614`, `https://staging.virexaaiventures.com`), 3. Live Staging Model Execution & Truthful Routing Verification (`64c8614`), 4. Authoritative Commercial Quotas & Staging Database Post-Cleanup State, 5. Automated CI & Quality Verification, 6. Known Operational Limitations & Release Boundary (+8 more)
+### Community 104 - "react"
+Cohesion: 0.15
+Nodes (21): react, react-dom, AdaptiveStudioEmptyState(), AdaptiveStudioEmptyStateProps, AgentExecutionGraphProps, AgentExecutionGraphView(), formatDuration(), ROLE_METADATA (+13 more)
 
 ### Community 105 - "AIRA AI 2026 — PR #127 FINAL PRODUCTION DEPLOYMENT & OPERATIONAL PRE-CUTOVER CERTIFICATION"
 Cohesion: 0.06
 Nodes (31): 10. POST-CUTOVER LIVE ACCEPTANCE & SOAK PROTOCOL (PHASES 7–9), 11. FINAL OPERATIONAL SIGN-OFF, 1. EXECUTIVE SUMMARY & DEFINITIVE RELEASE RECOMMENDATION, 2. CAPABILITY ECOSYSTEM & ACTIVE SPECIALIST SQUAD, 3.1 Provenance & Git Lineage, 3.2 GitHub Actions CI Evidence (Ruleset 25079946), 3.3 Authorization Rules Engine Fail-Closed Proof, 3. PHASE A — EXACT RELEASE CANDIDATE REVALIDATION (+23 more)
 
 ### Community 106 - "m2a-real-postgres-verification.test.ts"
-Cohesion: 0.20
-Nodes (10): down(), up(), down(), up(), down(), up(), down(), up() (+2 more)
+Cohesion: 0.22
+Nodes (9): down(), down(), up(), down(), up(), down(), up(), down() (+1 more)
+
+### Community 107 - "PostgresSpecialistTaskRepository"
+Cohesion: 0.10
+Nodes (11): PostgresSpecialistTaskRepository, approvalKernel, heartbeatIntervalMs, host, leaseDurationMs, mathSpecialist, pollIntervalMs, registry (+3 more)
 
 ### Community 108 - "permissions"
 Cohesion: 0.06
 Nodes (30): concurrency, cancel-in-progress, group, GH_AUTONOMOUS_RELEASE_TOKEN, if, name, runs-on, steps (+22 more)
 
 ### Community 109 - "SemanticReasoner"
-Cohesion: 0.07
-Nodes (21): 1. Executive Summary & Percentiles, 2. Latency Waterfall Breakdown, 3. Individual Prompt Benchmark Results, 4. Key Architectural Findings, AIRA AI 2026 — P1 Inference Baseline Benchmark Report, FreshnessEvaluation, SemanticReasoner, SemanticReasonerInput (+13 more)
+Cohesion: 0.10
+Nodes (16): 1. Executive Summary & Percentiles, 2. Latency Waterfall Breakdown, 3. Individual Prompt Benchmark Results, 4. Key Architectural Findings, AIRA AI 2026 — P1 Inference Baseline Benchmark Report, SemanticReasoner, SemanticIntentAnalysis, Community 180 - "GenUIChartCanvas.tsx" (+8 more)
 
 ### Community 110 - "eval-runner.ts"
 Cohesion: 0.14
@@ -869,16 +912,16 @@ Cohesion: 0.07
 Nodes (28): default, description, required, concurrency, cancel-in-progress, group, PRODUCTION_URL, RAW_BATCH_SIZE (+20 more)
 
 ### Community 114 - "types/index.ts"
-Cohesion: 0.05
-Nodes (77): ALLOWED_CONSTANTS, ALLOWED_FUNCTIONS, buildCalculatorSurface(), CalculatorResult, CompoundInterestInput, CompoundInterestOutput, CompoundInterestScheduleRow, computeCompoundInterest() (+69 more)
+Cohesion: 0.08
+Nodes (44): GenUIApp, GenUIInteractionEvent, GenUIStateRecord, GenUIStateValue, GenUISurface, ReactiveEvaluationResult, writeStateKeyOrPointer(), lucide-react (+36 more)
 
 ### Community 115 - "projects-storage-regression.test.ts"
 Cohesion: 0.11
 Nodes (8): MockIDBDatabase, MockIDBObjectStore, MockIDBRequest, MockIDBTransaction, mockIndexedDb, MockIndexedDBFactory, MockLocalStorage, mockStorage
 
 ### Community 116 - "staging-live-authenticated-acceptance.ts"
-Cohesion: 0.10
-Nodes (24): 2. Test Harness Security & Tracked Secrets Hygiene (P0-A Resolution), PRODUCTION_CANONICAL_HOST, PRODUCTION_NEON_ENDPOINT_ID, STAGING_CANONICAL_DOMAIN, runAuthenticatedFreeAcceptance(), STAGING_URL, GeneratedTestCredentials, generateStagingTestCredentials() (+16 more)
+Cohesion: 0.07
+Nodes (39): 2. Test Harness Security & Tracked Secrets Hygiene (P0-A Resolution), assertCanRunMigrations(), DatabaseEnvironmentCategory, DatabaseIdentityEvidence, DatabaseIdentityVerificationResult, NEON_CONTROL_PLANE_REGISTRY, NeonControlPlaneMetadata, PRODUCTION_CANONICAL_HOST (+31 more)
 
 ### Community 117 - "trigger-outbox-worker"
 Cohesion: 0.07
@@ -889,16 +932,16 @@ Cohesion: 0.15
 Nodes (25): assert(), checkFreeze(), evaluateLiveCandidate(), FREEZE_ISSUE_TITLE, getAllPages(), github(), isUnattendedSafePath(), main() (+17 more)
 
 ### Community 119 - "PostgresAutonomousTaskRepository"
-Cohesion: 0.16
-Nodes (8): isDatabaseUnavailable(), PostgresAutonomousTaskRepository, calculateStats(), createSimulatedPostgresKnex(), LatencyStats, PoolMetrics, runSustainedStressBenchmark(), SimulatedNeonConnectionPool
+Cohesion: 0.15
+Nodes (9): isDatabaseUnavailable(), PostgresAutonomousTaskRepository, safeJsonParse(), calculateStats(), createSimulatedPostgresKnex(), LatencyStats, PoolMetrics, runSustainedStressBenchmark() (+1 more)
 
 ### Community 120 - "BffSessionStore"
-Cohesion: 0.10
-Nodes (13): BffSessionStore, 1. Executive Summary & Problem Statement, 3.1 First-Party Opaque Session Cookie Contract, 3.2 Implemented BFF Gateway Endpoints (`apps/api/src/auth/bff-session.ts`), 3.3 Verification Suite, 3. Target Production Architecture: First-Party BFF Gateway, 4. Release Blocker Definition & Resolution Certification, AIRA AI 2026 — Authentication Session Security Architecture & BFF Migration Design (+5 more)
+Cohesion: 0.12
+Nodes (9): BffSessionStore, 1. Executive Summary & Problem Statement, 3.1 First-Party Opaque Session Cookie Contract, 3.2 Implemented BFF Gateway Endpoints (`apps/api/src/auth/bff-session.ts`), 3.3 Verification Suite, 3. Target Production Architecture: First-Party BFF Gateway, 4. Release Blocker Definition & Resolution Certification, AIRA AI 2026 — Authentication Session Security Architecture & BFF Migration Design (+1 more)
 
 ### Community 121 - "NeonAuthClient"
-Cohesion: 0.16
-Nodes (7): 2. Server-Side Revocation vs. Client Storage Purge, Task 3: Complete Frontend Migration in `src/lib/neonAuth.ts`, NeonAuthClient, testProductionAuthUrlFailClosed(), main(), testProductionUrlFailClosed(), main()
+Cohesion: 0.15
+Nodes (8): 9.1 Gemini Zero-Content Failover Root Cause & End-to-End Lifecycle Resolution, 2. Server-Side Revocation vs. Client Storage Purge, Task 3: Complete Frontend Migration in `src/lib/neonAuth.ts`, NeonAuthClient, testProductionAuthUrlFailClosed(), main(), testProductionUrlFailClosed(), main()
 
 ### Community 122 - "release-authorization-validator.ts"
 Cohesion: 0.18
@@ -917,20 +960,20 @@ Cohesion: 0.08
 Nodes (24): AGENT INBOX, AGENT SELECTION, AI RUNTIME STANDARD, AIRA-AI-2026 — GSD ORCHESTRATION, AVAILABLE STACK, COMPLETION STANDARD, CONTEXT PACKET, CORE POLICY (+16 more)
 
 ### Community 126 - "auth-google-oauth-loop-remediation.test.ts"
-Cohesion: 0.11
-Nodes (21): authConfig(), createNeonAuthPrincipalMiddleware(), Jwks, JwtHeader, JwtPayload, loadJwks(), ManagedPrincipal, parseSegment() (+13 more)
+Cohesion: 0.10
+Nodes (22): authConfig(), createNeonAuthPrincipalMiddleware(), Jwks, JwtHeader, JwtPayload, loadJwks(), ManagedPrincipal, parseSegment() (+14 more)
 
 ### Community 127 - "Implementation Profile (Sections 5A–5H)"
-Cohesion: 0.17
-Nodes (12): A. Protocol Interoperability (`profiled` A2UI v1.0), Acceptance Scenarios & Testing Decisions (Section 6), AIRA GenUI Phase 2 — Declarative A2UI v1.0 Implementation Profile, B. Declarative Component Composition, E. Bidirectional AI–UI Communication, F. Persistent Interactive State, G. Adaptive Presentation Routing & Model Integration, H. Agent Workspace Integration (+4 more)
+Cohesion: 0.18
+Nodes (11): A. Protocol Interoperability (`profiled` A2UI v1.0), Acceptance Scenarios & Testing Decisions (Section 6), AIRA GenUI Phase 2 — Declarative A2UI v1.0 Implementation Profile, B. Declarative Component Composition, E. Bidirectional AI–UI Communication, F. Persistent Interactive State, H. Agent Workspace Integration, Implementation Profile (Sections 5A–5H) (+3 more)
 
 ### Community 128 - "steps"
 Cohesion: 0.08
 Nodes (24): concurrency, cancel-in-progress, group, jobs, postgres-certification, name, on, pull_request (+16 more)
 
 ### Community 129 - "run-guarded-migration-032.ts"
-Cohesion: 0.06
-Nodes (35): pg, killPort(), REPO_DIR, run(), saveScreenshot(), sleep(), waitForHttp(), ADVISORY_LOCK_KEY_1 (+27 more)
+Cohesion: 0.12
+Nodes (20): ADVISORY_LOCK_KEY_1, ADVISORY_LOCK_KEY_2, APPROVED_REHEARSAL_ENDPOINT_ID, AUTHORIZED_MIGRATION_FILE, CANONICAL_PRODUCTION_ENDPOINT_ID, __dirname, executeGuardedMigration032(), __filename (+12 more)
 
 ### Community 130 - "AIRA AI 2026 — P1.2 Inference Tail-Latency Certification & Fast Model Selection Report"
 Cohesion: 0.08
@@ -941,24 +984,24 @@ Cohesion: 0.19
 Nodes (23): APPROVAL_WORKFLOW, APPROVAL_WORKFLOW_PATH, githubApi(), isTrustedWorkflowName(), main(), MAX_RUN_AGE_MS, parseApprovalTitle(), publishApprovedStatus() (+15 more)
 
 ### Community 132 - "AutonomousAgentTask"
-Cohesion: 0.09
-Nodes (11): isExplicitAutonomousApprovalDecision(), InMemoryAutonomousTaskRepository, down(), up(), HeartbeatFailingRepository, createRunningTask(), makePlan(), principal (+3 more)
+Cohesion: 0.11
+Nodes (11): isExplicitAutonomousApprovalDecision(), AutonomousTaskClaimResult, InMemoryAutonomousTaskRepository, AutonomousAgentTask, HeartbeatFailingRepository, createRunningTask(), makePlan(), principal (+3 more)
 
 ### Community 133 - "oauth-phase2-certify.ts"
-Cohesion: 0.18
-Nodes (20): 8.1 SHA-Safe Certification Runner & Production Host Guard ([scripts/oauth-phase2-certify.ts](../../scripts/oauth-phase2-certify.ts)), 8.2 Exact-SHA (`5466020`) Genuine Google + GitHub OAuth & Two-Account Isolation Re-Acceptance, 8.3 CI Status Classification & Final Verdict (`5466020` & Subsequent Docs-Only Closure Commit), 8. Final Closure Pass (`5466020`) — SHA-Safe OAuth Runner, Workflow Classification & Re-Certified Two-Account Acceptance, ARTIFACTS_DIR, assertDeployedShaMatches(), assertStagingTargetUrl(), assertValidFullSha() (+12 more)
+Cohesion: 0.08
+Nodes (40): 2.0 Preflight Health & Environment Verification, 2.1 Genuine Third-Party OAuth Staging Verification, 2.2 Dual-Profile Microsoft Edge Isolation & Account Acceptance (`scripts/verify-staging-dual-account-isolation.ts`), 2. Live Deployed Staging Acceptance (`64c8614`, `https://staging.virexaaiventures.com`), 3. Live Staging Model Execution & Truthful Routing Verification (`64c8614`), 4. Authoritative Commercial Quotas & Staging Database Post-Cleanup State, 5. Automated CI & Quality Verification, 6. Known Operational Limitations & Release Boundary (+32 more)
 
 ### Community 134 - "unified-intelligence-architecture.test.ts"
-Cohesion: 0.20
-Nodes (9): ComposedPromptResult, ComposePromptInput, estimatePromptTokens(), INJECTION_PATTERNS, IntelligentPromptComposer, PromptProfileRegistry, ExecutionMode, PromptProfile (+1 more)
+Cohesion: 0.17
+Nodes (11): ComposedPromptResult, ComposePromptInput, estimatePromptTokens(), INJECTION_PATTERNS, IntelligentPromptComposer, PromptProfileRegistry, CapabilityDefinitionSchema, ExecutionMode (+3 more)
 
 ### Community 135 - "cashfree-plan-provisioning-service.ts"
 Cohesion: 0.15
 Nodes (13): AUTHORITATIVE_CASHFREE_SPECS, CashfreeCredentials, CashfreePlanProvisioningService, cashfreePlanProvisioningService, CashfreePlanSpecification, getAuthoritativeCashfreeSpec(), PlanLookupResult, PlanVerificationResult (+5 more)
 
-### Community 136 - "payment-gateway-service.ts"
-Cohesion: 0.06
-Nodes (40): assertCommercialFulfillmentAllowed(), CANDIDATE_CASHFREE_PLANS, CANDIDATE_PRICE_CATALOG, CANDIDATE_RAZORPAY_PLANS, CheckoutSessionResult, ContactDetails, CreditTopupPack, GatewayOrderTransport (+32 more)
+### Community 136 - "PricingModal.tsx"
+Cohesion: 0.21
+Nodes (16): CheckoutSessionResult, CurrencyCode, buildFriendlyPendingNotice(), CheckoutDispatchDecision, CheckoutState, determineCheckoutDispatchStrategy(), isTrustedCashfreeUrl(), isTrustedRazorpayUrl() (+8 more)
 
 ### Community 137 - "AIRA AI 2026 — Operational Staging Deployment Contract & Runbook"
 Cohesion: 0.09
@@ -968,9 +1011,9 @@ Nodes (22): 1.1 Strict Release Boundary & Deployment Authority, 1. Executive Sum
 Cohesion: 0.09
 Nodes (22): context, dockerfile, resources, interval, retries, start_period, test, timeout (+14 more)
 
-### Community 139 - "9.1 Gemini Zero-Content Failover Root Cause & End-to-End Lifecycle Resolution"
-Cohesion: 0.33
-Nodes (5): 9.1 Gemini Zero-Content Failover Root Cause & End-to-End Lifecycle Resolution, 9.2 Exact-SHA (`521b41c`) Live Deployed Staging & CI Recertification, 9.3 Production Merge-Commit SHA Verification Rule (5-Coordinate Standard), 9.4 Emergency Rollback Readiness & Verified Baseline, 9. Final Pre-Release Verification Pass (`521b41c`) — Gemini Streaming Reliability, Persistence Fixes, Merge-SHA Rule & Emergency Rollback Readiness
+### Community 139 - "AIRA GenUI — Final Release Assurance & Staging Publication Readiness Report"
+Cohesion: 0.06
+Nodes (27): 1. Evidence Classification Hierarchy, 2. Evidence Ledger by Requirement, 3. Reality Checker Audit & Verification Limitations, AIRA GenUI — Exact Candidate Evidence Ledger, Section A: P0 Presence Timestamp Security & Concurrency, Section B: P0 Durable PostgreSQL & Worker Recovery, Section C: P0 Autonomous Swarm Runtime Integration, Section D: P0 Generated Application Security & Containment (+19 more)
 
 ### Community 140 - "AIRA AI 2026 — PR #185 Combined Production Release Candidate Final Certification"
 Cohesion: 0.09
@@ -985,7 +1028,7 @@ Cohesion: 0.09
 Nodes (21): 10.1 Failure Diagnosis & Root Cause, 10.2 Architectural Remediations, 10.3 120-Request Multi-Batch Continuous Stress Benchmark Summary, 10.4 Empirical Findings & Capacity Block Analysis, 10. P1.6.1 GEMINI RELIABILITY REMEDIATION & 120-REQUEST EMPIRICAL AUDIT, 1. EXECUTIVE OVERVIEW, 2. WORKSPACE & REPOSITORY INTEGRITY, 3. LIVE GEMINI DISCOVERY & CANDIDATE EVALUATION (+13 more)
 
 ### Community 143 - "AIRA AI 2026 — Agent and Release Authority"
-Cohesion: 0.18
+Cohesion: 0.22
 Nodes (9): 1. GitHub Pro Ruleset Enforcement (`prod-release`), 2. Vercel Production Approval & Deployment Architecture (historical baseline), 3. Legacy Owner-Attested GO LIVE Authorization Controls (superseded default), 4. Previous Operational Invariants (not current instructions), AIRA AI 2026 — Master Execution Prompt & Release Controls, Database Schema Safeguard:, Historical operating directive, Protocol Specifications: (+1 more)
 
 ### Community 144 - "postgres-address-policy.test.mjs"
@@ -997,20 +1040,20 @@ Cohesion: 0.24
 Nodes (19): acquire_maintenance_bypass_token(), ask(), ask_secret(), banner(), _clear(), confirm(), _existing(), finish() (+11 more)
 
 ### Community 147 - "Session trust-boundary remediation and Preview provider policy"
-Cohesion: 0.12
-Nodes (16): 10. Owner authorizations still required, 11. Operational boundary, 2. Local source changes, 3. Token/version inventory and failure policy, 4. Compatibility impact and owner decision, 5. Preview startup and unavailable provider behavior, 6. Vercel read-only inventory and evidence limits, 7. Existing deployments, aliases, and retirement (+8 more)
+Cohesion: 0.11
+Nodes (18): 10. Owner authorizations still required, 11. Operational boundary, 1. Confirmed paths and security findings, 2. Local source changes, 3. Token/version inventory and failure policy, 4. Compatibility impact and owner decision, 5. Preview startup and unavailable provider behavior, 6. Vercel read-only inventory and evidence limits (+10 more)
 
 ### Community 148 - "AIRA AI 2026 — Milestone 2A: Production Activation, Infrastructure Preflight & Final Security Certification Report"
-Cohesion: 0.10
-Nodes (19): 10. Full Regression & Security Test Summary, 11. Known Limitations & Outstanding Operational Blockers, 12. Proposed Controlled Production Deployment Sequence, 13. Final Release-Readiness Verdict, 1. Executive Summary, 2. Exact Branch and Commit Verification, 3.1 Policy Configuration Model, 3.2 Dual-Layer Verification Flow (+11 more)
+Cohesion: 0.11
+Nodes (18): 10. Full Regression & Security Test Summary, 11. Known Limitations & Outstanding Operational Blockers, 12. Proposed Controlled Production Deployment Sequence, 13. Final Release-Readiness Verdict, 1. Executive Summary, 2. Exact Branch and Commit Verification, 3.1 Policy Configuration Model, 3.2 Dual-Layer Verification Flow (+10 more)
 
 ### Community 149 - "AIRA AI 2026 — P1.5 Final Reality-Check Certification Report"
 Cohesion: 0.10
 Nodes (19): 1. Resolution of Pre-Release Inconsistencies, 2. Remediated Database Waterfall & Query Count, 3. End-to-End Latency Telemetry Breakdown (Clocks T0 – T12), 4. 20-Prompt Balanced Preview Benchmark Statistics, 5. Serverless Memory, Durability & Concurrency Safety, 6. Concurrency Benchmark Results (Preview), 7. Real Browser Acceptance & Viewport Testing, 8. Final Comparison Summary (+11 more)
 
-### Community 150 - "genuiAppBridge.ts"
-Cohesion: 0.12
-Nodes (26): 1. Verdict, 2. Accepted Implementation Scope & Architecture (`Phase 3`), 3. Verified Browser Acceptance Scenarios (Playwright Chromium), 4. Verification Evidence Summary, 5. Security & Isolation Matrix, 6. External Blockers & Next Phase Continuation, AIRA GenUI Phase 3 — Open Generative UI Applications & Sandbox Runtime Certification Record, AIRA_GENUI_APP_CONTRACT_VERSION (+18 more)
+### Community 150 - "validateGenUIApp"
+Cohesion: 0.06
+Nodes (36): 1. Verdict, 2. Accepted Implementation Scope & Architecture (`Phase 3`), 3. Verified Browser Acceptance Scenarios (Playwright Chromium), 4. Verification Evidence Summary, 5. Security & Isolation Matrix, 6. External Blockers & Next Phase Continuation, AIRA GenUI Phase 3 — Open Generative UI Applications & Sandbox Runtime Certification Record, 1. Problem Statement (+28 more)
 
 ### Community 151 - "7. MISSION 6: COMPLETE 18-STEP DEPENDENCY-AWARE PRODUCTION CUTOVER & ROLLBACK RUNBOOK"
 Cohesion: 0.11
@@ -1018,7 +1061,7 @@ Nodes (19): 7. MISSION 6: COMPLETE 18-STEP DEPENDENCY-AWARE PRODUCTION CUTOVER &
 
 ### Community 152 - "AIRA AI 2026 — P1.6.3 PRIVATE BETA CAPACITY GUARD RELEASE HARDENING REPORT"
 Cohesion: 0.12
-Nodes (16): 1. Executive Summary & Authoritative Release Posture, 2.1 Runtime DDL Elimination, 2.2 Explicit Knex Database Migration 019, 2.3 Read-Only Schema Verification & Fail-Closed Behavior, 2.4 Diagnostics Authorization & Endpoint Protection, 2.5 Public Readiness Sanitization, 2. Release Hardening Achievements, 4.1 Certified Capacity Limits (Unaltered) (+8 more)
+Nodes (16): 1. Executive Summary & Authoritative Release Posture, 2.1 Runtime DDL Elimination, 2.2 Explicit Knex Database Migration 019, 2.3 Read-Only Schema Verification & Fail-Closed Behavior, 2.5 Public Readiness Sanitization, 2. Release Hardening Achievements, 3. Truthful Multi-Instance Evidence Classification, 4.1 Certified Capacity Limits (Unaltered) (+8 more)
 
 ### Community 153 - "AIRA AI 2026 — Production-Wide Product Quality, UX Engineering & Functional Remediation Audit"
 Cohesion: 0.11
@@ -1033,20 +1076,20 @@ Cohesion: 0.36
 Nodes (14): getActionById(), resolveDataRefValue(), ActionButtonRenderer(), CheckboxRenderer(), FieldErrorBanner(), getFieldErrors(), MetricDisplayRenderer(), NumericInputRenderer() (+6 more)
 
 ### Community 156 - "AIRA AI 2026 Commercial Domain Glossary"
-Cohesion: 0.15
-Nodes (12): 1. Identity & Customer Principals, 3. Entitlements & Allowances, 5. Multimodal & Advanced Capabilities, AIRA AI 2026 Commercial Domain Glossary, `AiraAgents`, `AiraBuilder`, `AiraResearch`, `AiraVision` (+4 more)
+Cohesion: 0.25
+Nodes (7): 1. Identity & Customer Principals, 3. Entitlements & Allowances, AIRA AI 2026 Commercial Domain Glossary, `BillingCustomer` (`billing_customers`), `ComplimentaryReasoningBoost`, `GuestPrincipal`, `StandardChatAllowance`
 
 ### Community 157 - "3. Step-by-Step Production Rollout Sequence"
 Cohesion: 0.11
 Nodes (18): 1. Five Independent Operational Authorization Boundaries, 2.1 Release Metadata, 2.2 Dual-Evidence GitHub Actions Dispatch Template, 2. Production Release Authorization Submission Form, 3. Step-by-Step Production Rollout Sequence, 4. Production Rollback & Emergency Incident Runbook, 5. Formal Approval Sign-Off Block, AIRA AI 2026 — M2-A EXACT-SHA GO LIVE AUTHORIZATION TEMPLATE (+10 more)
 
-### Community 158 - "autonomous-engine.ts"
-Cohesion: 0.08
-Nodes (23): AutonomousWorkerHealth, AutonomousWorkerHostConfig, AutonomousTaskClaimResult, createOfflinePostgresClient(), safeJsonParse(), AgentObjectivePlanSchema, AgentObservation, AgentObservationSchema (+15 more)
+### Community 158 - "agent-specialists.ts"
+Cohesion: 0.04
+Nodes (49): server, shutdown(), zod@^4.6.7, AutonomousWorkerHealth, AutonomousWorkerHost, ALL_SPECIALIST_ROLES, SpecialistAuthorizationRequirementsSchema, SpecialistBudgetLimitsSchema (+41 more)
 
-### Community 159 - "normalizeModelIdentifier"
+### Community 159 - "genui-calculators.ts"
 Cohesion: 0.15
-Nodes (12): normalizeModelIdentifier(), UnsupportedModelIdentifierError, AdmissionPermit, AdmissionResult, context, InferenceCapacityError, InferenceContext, protectInferenceAdapter() (+4 more)
+Nodes (27): ALLOWED_CONSTANTS, ALLOWED_FUNCTIONS, buildCalculatorSurface(), CalculatorResult, CompoundInterestInput, CompoundInterestOutput, CompoundInterestScheduleRow, computeCompoundInterest() (+19 more)
 
 ### Community 160 - "runner.py"
 Cohesion: 0.14
@@ -1056,8 +1099,12 @@ Nodes (3): kill_process_tree(), run_server(), set_subprocess_limits()
 Cohesion: 0.11
 Nodes (17): 1. Executive Summary & Production Certification, 2. Baseline & Production Endpoints Verification, 3.1 Root Cause Isolation, 3.2 Authoritative Verification in Both Modes, 3. Hallmark Lint-Report Discrepancy Reconciliation, 4.1 Reflex Findings (40 Reported Baseline -> 0 Remaining), 4.2 Warning Dispositions (117 Baseline -> 89 Current), 4. Finding-by-Finding Reconciliation Ledger (+9 more)
 
+### Community 162 - "IAutonomousTaskRepository"
+Cohesion: 0.13
+Nodes (3): IAutonomousTaskRepository, AgentObservation, AutonomousTaskState
+
 ### Community 163 - "PolyfillElement"
-Cohesion: 0.15
+Cohesion: 0.16
 Nodes (5): browserSanitize(), NodeDOMParser, PolyfillAttribute, PolyfillElement, PolyfillTextNode
 
 ### Community 164 - "AIRA AI 2026 — Independent Security Certification & Vulnerability Audit Report"
@@ -1069,8 +1116,8 @@ Cohesion: 0.12
 Nodes (16): 1. Executive Summary & Release Scope, 2.1 Complete Root Cause Analysis, 2.2 Corrective Engineering Implementation, 2. Priority Defect Remediation: Light / Dark Theme Switching, 3.1 16 Preset Combinations (8 Presets × Light & Dark), 3.2 Application Surfaces Tested & Visual Evidence Captured, 3. Theme Verification Evidence Matrix, 4.1 Authoritative Source of Truth (+8 more)
 
 ### Community 166 - "Aira website/file builder — Multi-Provider Architecture & Setup"
-Cohesion: 0.12
-Nodes (15): 1. Provider Architecture, 2. Environment Configuration, 3. Remote Filesystem & Security Boundary, 4. UI Diagnostics, 5. Automated Verification Suites, Aira website/file builder — Multi-Provider Architecture & Setup, Future Provider Boundary: Oracle Cloud Infrastructure (OCI), Optional Fallback: E2B Sandbox (+7 more)
+Cohesion: 0.11
+Nodes (17): 1. Provider Architecture, 2. Environment Configuration, 3. Remote Filesystem & Security Boundary, 4. UI Diagnostics, 5. Automated Verification Suites, Aira website/file builder — Multi-Provider Architecture & Setup, Future Provider Boundary: Oracle Cloud Infrastructure (OCI), Optional Fallback: E2B Sandbox (+9 more)
 
 ### Community 167 - "AIRA AI 2026 Commercial Platform Primary Research"
 Cohesion: 0.14
@@ -1080,33 +1127,25 @@ Nodes (13): 2. Payment Gateway Integration: Razorpay & Cashfree, 3. Indian GST T
 Cohesion: 0.12
 Nodes (16): 1. Executive Summary & Authoritative State, 2. Configuration & Empirical Policy Calibration, 3.1 Distributed Capacity Store & Fail-Closed Safety, 3.2 Bounded FIFO Queue & SSE Progress, 3.3 Dynamic Circuit Breaker Throttling, 3. Architecture & Multi-Instance Implementation, 4. Multi-Instance & Serverless Verification, 5. Security & Authentication Audit (+8 more)
 
-### Community 169 - "AutonomousPersistenceUnavailableError"
-Cohesion: 0.24
-Nodes (3): AutonomousPersistenceUnavailableError, FailClosedAutonomousTaskRepository, AutonomousAgentTask
-
-### Community 170 - "CuratedSkillRegistry"
-Cohesion: 0.13
-Nodes (6): CuratedSkillDefinition, CuratedSkillRegistry, SkillEvaluationRecord, SkillPermissionPolicy, SkillProvenanceRecord, SkillTrustLevel
-
 ### Community 171 - "STAGING_NEON_PROJECT_ID"
-Cohesion: 0.19
-Nodes (11): 3. Production Neon Database Identity & Cloud Topology, assertAuthorizedStagingDatabase(), getStagingConnectionString(), resolveDeploymentInfo(), runEdgeAgentCertification(), getStagingConnectionString(), resolveDeploymentInfo(), runDeployedStagingAcceptance() (+3 more)
+Cohesion: 0.21
+Nodes (11): assertAuthorizedStagingDatabase(), STAGING_NEON_PROJECT_ID, getStagingConnectionString(), resolveDeploymentInfo(), runEdgeAgentCertification(), getStagingConnectionString(), resolveDeploymentInfo(), runDeployedStagingAcceptance() (+3 more)
 
 ### Community 172 - "AIRA AI 2026 — Dual OAuth (Google & GitHub) Final Remediation"
 Cohesion: 0.12
 Nodes (16): 1.1 Google OAuth Failure Root Cause, 1.2 GitHub OAuth Failure Root Cause, 1. EXACT ROOT CAUSE ANALYSIS, 2. REGRESSION-CAUSING CODE & COMMITS, 3.1 `apps/api/src/auth/bff-session.ts`, 3.2 Frontend Resilience for Private Emails, 3.3 Test Suite Hardening, 3. MODIFIED FILES AND ARCHITECTURAL FIXES (+8 more)
 
 ### Community 173 - "4. Operational Runbook for Live Staging Cutover"
-Cohesion: 0.12
-Nodes (16): 1. Release Certification Verdict, 2. Release Gates & Verification Scorecard, 3. Inventory of Changed and Created Files, 4. Operational Runbook for Live Staging Cutover, 5. Rollback Procedure, AIRA AI 2026 — PR #96 Staging Cutover Readiness Certification, Rationale:, Step 1: Pre-Cutover Verification (+8 more)
+Cohesion: 0.08
+Nodes (22): 1. Release Certification Verdict, 2. Release Gates & Verification Scorecard, 4. Operational Runbook for Live Staging Cutover, 5. Rollback Procedure, AIRA AI 2026 — PR #96 Staging Cutover Readiness Certification, Rationale:, Step 1: Pre-Cutover Verification, Step 2: Create Fresh Neon Recovery Checkpoint (+14 more)
 
 ### Community 174 - "preview-real-acceptance.ts"
 Cohesion: 0.21
 Nodes (15): AcceptanceEvidence, AcceptanceReport, ARTIFACTS_DIR, clickNewChat(), extractSourceLinks(), getAutomationBypassSecret(), getDeploymentContext(), isExecutedDirectly (+7 more)
 
 ### Community 175 - "SidecarSandboxProvider"
-Cohesion: 0.22
-Nodes (3): Approved Isolation Implementations, 3.3 Sidecar vs. MicroVM Security Spectrum, SidecarSandboxProvider
+Cohesion: 0.15
+Nodes (7): Approved Isolation Implementations, 3.3 Sidecar vs. MicroVM Security Spectrum, SidecarSandboxProvider, __dirname, __filename, REPO_ROOT, RUNNER_SCRIPT
 
 ### Community 176 - "2. Security Vector Audits & Verification"
 Cohesion: 0.12
@@ -1121,24 +1160,24 @@ Cohesion: 0.26
 Nodes (16): steps, steps, steps, steps, steps, if, name, run (+8 more)
 
 ### Community 179 - "**GO — PRODUCTION RELEASE CANDIDATE CERTIFIED**"
-Cohesion: 0.20
-Nodes (9): 1. Executive Summary & Final Verdict, 2. Release Candidate & Environment Topology, 4. Test Suite Execution Summary, 5. Certification Deliverables Index, 6. Next Steps & Release Protocol, AIRA AI 2026 — P1.6.7 Preview Release Certification Report, Final Certification Verdict:, **GO — PRODUCTION RELEASE CANDIDATE CERTIFIED** (+1 more)
+Cohesion: 0.12
+Nodes (15): 1. Executive Summary & Final Verdict, 2. Release Candidate & Environment Topology, 3. Core P1.6.7 Certification Objectives & Results, 4. Test Suite Execution Summary, 5. Certification Deliverables Index, 6. Next Steps & Release Protocol, AIRA AI 2026 — P1.6.7 Preview Release Certification Report, Final Certification Verdict: (+7 more)
 
 ### Community 180 - "GenUIChartCanvas.tsx"
-Cohesion: 0.11
-Nodes (20): chart.js@4.6.2, 2. Dual-Mode Intent + Presentation Routing Separation (`SemanticReasoner` + `PresentationRouter`), 3. Self-Hosted Lazy Chart.js v4 Visualization Split (`GenUIChartCanvas`), 4. Pure Recursive-Descent Zero-`eval` Deterministic Calculators, 5. Authoritative Server-Side BFF Session & Principal Binding, 6. Neon PostgreSQL Authoritative Financial & Workflow Persistence, 7. Atomic Release Candidate Integration & Hobby Vercel Trigger Discipline, 8. Strict Static Sandbox Containment for Non-HTML Preview Types (+12 more)
+Cohesion: 0.15
+Nodes (14): chart.js@4.6.2, GenUIComponent, 3. Self-Hosted Lazy Chart.js v4 Visualization Split (`GenUIChartCanvas`), chart.js, GenUIChartCanvas(), GenUIChartComponent, readThemeColors(), ThemeColors (+6 more)
 
 ### Community 181 - "Detailed Functional Evidence:"
-Cohesion: 0.13
-Nodes (14): 1. Plan Allowances & Launch Specification, 2. Multi-Tier Ledger Verification, 3. AIRA Multimodal Tariff Baseline Consistency, 4. Controlled Paid Tier Staging Fixture, A. Initial Free Account Grant, B. Atomic Quota Consumption & Ceilings, C. Complimentary Reasoning Boosts, Detailed Functional Evidence: (+6 more)
+Cohesion: 0.12
+Nodes (15): 1. Plan Allowances & Launch Specification, 2. Multi-Tier Ledger Verification, 3. AIRA Multimodal Tariff Baseline Consistency, 4. Controlled Paid Tier Staging Fixture, A. Initial Free Account Grant, B. Atomic Quota Consumption & Ceilings, C. Complimentary Reasoning Boosts, D. Two-Phase Commit (2PC) Credit Reservations (+7 more)
 
 ### Community 182 - "AIRA AI 2026 — PR #92 P0 GOOGLE OAUTH ROOT-CAUSE REMEDIATION & CERTIFICATION REPORT"
 Cohesion: 0.12
 Nodes (15): 1. Architectural Correction: First-Party BFF Google OAuth Initiation & Callback Handshake, 1. Exact Failing Boundary, 1. Git Commit & PR Status, 2. Browser Evidence & Network Traces, 2. GitHub Actions CI Verification Gates, 3. Live Staging Probe Evidence, 3. Retained Security Invariants, 3. Supporting Backend Evidence (+7 more)
 
-### Community 183 - "ConversationSearchRepository"
-Cohesion: 0.22
-Nodes (6): handleGuestLinking(), ConversationSearchRepository, makeSnippet(), normalizeForSearch(), vectorLiteral(), main()
+### Community 183 - "artifactParser.ts"
+Cohesion: 0.10
+Nodes (21): ArtifactType, ArtifactVersion, CLOSE_ENVELOPES, createStreamingArtifactDetector(), extractArtifactsFromText(), extractBundleFromArtifactContent(), ExtractedArtifactsResult, normalizeArtifactType() (+13 more)
 
 ### Community 184 - "2. Implemented & Verified Capabilities"
 Cohesion: 0.13
@@ -1169,12 +1208,12 @@ Cohesion: 0.13
 Nodes (14): 1. Google OAuth Provider Setup (Google Cloud Console), 2. GitHub OAuth App Setup (GitHub Developer Settings), 3. Multimodal Image Generation & Inpainting (FLUX Engine), 4. Builder Remote MicroVM Sandbox Execution, 5. Payment Gateways (When Authorized for Commercial Billing), 6. Summary Environment Variable Reference Table, Cashfree:, Option A: Replicate (+6 more)
 
 ### Community 191 - "PlanTier"
-Cohesion: 0.08
-Nodes (43): PlanTier, MotionStudioModalProps, OnboardingWalkthrough(), OnboardingWalkthroughProps, ActivatedConfirmationSummary, buildFriendlyPendingNotice(), CheckoutDispatchDecision, CheckoutState (+35 more)
+Cohesion: 0.07
+Nodes (62): AutonomousWorkerHostConfig, Announcement, ANNOUNCEMENT_REGISTRY, AnnouncementCategory, AnnouncementCategorySchema, AnnouncementSchema, getAnnouncementById(), getAnnouncementsForTier() (+54 more)
 
 ### Community 192 - "live-dual-account-isolation.ts"
-Cohesion: 0.13
-Nodes (16): AutonomousWorkerHost, DEPLOYMENT_ID, EXPECTED_COMMIT_SHA, fetchWithRetry(), GateEvidence, getStagingDatabaseUrl(), ledger, main() (+8 more)
+Cohesion: 0.18
+Nodes (14): DEPLOYMENT_ID, EXPECTED_COMMIT_SHA, fetchWithRetry(), GateEvidence, getStagingDatabaseUrl(), ledger, main(), executeStream() (+6 more)
 
 ### Community 193 - "db"
 Cohesion: 0.14
@@ -1252,13 +1291,13 @@ Nodes (13): 1. Verified Platform Baseline & Constraints (2026-10-14), 3. Problem
 Cohesion: 0.15
 Nodes (12): 1. Executive Summary & Core Hosting Requirements, 2. Comprehensive Provider Evaluation Matrix, 3. Financial Scenarios & Cost Breakdown, 4. Architectural Recommendation, 5. Minimum Production Container Configuration, 6. Decision & Human Authorization Boundaries, AIRA AI 2026 — M2-A PRODUCTION WORKER HOSTING DECISION PACKAGE, Alternative (Fast-Start / Budget) Option: **Railway (Pro)** (+4 more)
 
-### Community 212 - "retrieval/src/index.ts"
-Cohesion: 0.15
-Nodes (12): ConversationIndexingResult, ConversationMessageRole, ConversationSearchMatchType, ConversationSearchQuery, ConversationSearchResult, ConversationSyncInput, ConversationSyncMessage, DurableConversationResult (+4 more)
+### Community 212 - "genui-reactive.ts"
+Cohesion: 0.12
+Nodes (25): 1. Verdict, 2. Accepted Implementation Scope & Architecture (`Phase 2`), 4. A2UI v1.0 Supported vs Unsupported Profile Matrix, 5. Verification Evidence Summary (Run After Final Code Edit), 6. External Blockers & Phase 3 Continuation Scope, AIRA GenUI Phase 2 — Declarative A2UI v1.0 & Reactive Runtime Certification Record, C. Shared Reactive Data Models, GenUICheckRuleSchema (+17 more)
 
 ### Community 213 - "classifyDatabaseUrl"
-Cohesion: 0.09
-Nodes (33): classifyDatabaseUrl(), createReadOnlySourceClient(), ImportOptions, ImportSummary, importVerifiedCommercialIdentities(), main(), sanitizeEmail(), sanitizeId() (+25 more)
+Cohesion: 0.08
+Nodes (41): 3. Production Neon Database Identity & Cloud Topology, classifyDatabaseUrl(), COMMERCIAL_PR92_BRANCH_ID, COMMERCIAL_PR92_ENDPOINT_ID, STAGING_NEON_ENDPOINT_ID, STAGING_VERCEL_PREVIEW_HOST, validateDatabaseEnvironment(), validateOAuthOrigin() (+33 more)
 
 ### Community 214 - "entitlements-onboarding-browser.test.ts"
 Cohesion: 0.28
@@ -1340,17 +1379,13 @@ Nodes (10): 1. Authentication & Tenant Isolation Audit, 2. Server-Side Secret Co
 Cohesion: 0.18
 Nodes (10): 1. Objective & Policy Architecture, 2. Catalog & Empirical Model Selection, 3. Circuit Breaker Specification (Section 7), 4. First-Token Deadline & Request Stickiness (Sections 8 & 15), 5. Truthful Fallback Provenance (Section 9), 6. Multi-Turn Context Integrity (Section 16), 7. Hedged Request Experimentation (Section 10), AIRA AI 2026 — P1.6 Latency-Aware Provider Routing Policy (+2 more)
 
-### Community 234 - "verify-runtime.ts"
-Cohesion: 0.07
-Nodes (26): DevPrincipalProvider, PrincipalProvider, createPrincipalMiddleware(), defaultPrincipalProvider, Express, Request, assertActiveAuthority(), derivePersonalWorkspaceId() (+18 more)
+### Community 234 - "ref_node_child_process"
+Cohesion: 0.06
+Nodes (27): Provisioning and legacy accounts, assertActiveAuthority(), derivePersonalWorkspaceId(), InMemoryWorkspaceAuthorityRepository, PostgresWorkspaceAuthorityRepository, requiresPersistentWorkspaceAuthority, up(), cleanup() (+19 more)
 
 ### Community 235 - "PARTIALLY CERTIFIED — OWNER CONFIGURATION REQUIRED"
 Cohesion: 0.18
 Nodes (10): 1. Environment & Architecture Configuration, 2. GitHub CI & Automated Verification Gate Results, 3. Staging Test Suite Execution Summary, 4. Capability-versus-Evidence Matrix, 5. Security & Isolation Verification, 6. Deliverable Directory Reference, Executive Summary & Final Verdict, PARTIALLY CERTIFIED — OWNER CONFIGURATION REQUIRED (+2 more)
-
-### Community 236 - "NvidiaEmbeddingProvider"
-Cohesion: 0.31
-Nodes (5): createEmbeddingProvider(), normalizeInput(), NvidiaEmbeddingProvider, NvidiaEmbeddingResponse, main()
 
 ### Community 237 - "production-owner-wizard.ps1"
 Cohesion: 0.29
@@ -1381,8 +1416,8 @@ Cohesion: 0.20
 Nodes (9): 10.1 Definitive Recommendation: `GO (CONTINGENT ON OWNER PREREQUISITES)`, 10.2 Production Release Sign-Off Matrix, 10. FINAL GO / NO-GO RECOMMENDATION & SIGN-OFF TABLE, 1.1 Master Verdict: `CONDITIONALLY READY — OWNER PREREQUISITES`, 1.2 PR #127 Draft Status Preservation, 1. EXECUTIVE SUMMARY & VERDICT, 8. MEASURABLE OPERATIONAL SLOS & RECOVERY THRESHOLDS, 9. REMAINING OWNER ACTIONS (EXPLICIT HUMAN PREREQUISITES) (+1 more)
 
 ### Community 245 - "E2BSandboxProvider"
-Cohesion: 0.24
-Nodes (4): E2BSandboxProvider, quote(), resolveIsolatedSandboxProvider(), e2b
+Cohesion: 0.22
+Nodes (4): E2BSandboxProvider, quote(), E2BSandboxFactory, e2b
 
 ### Community 246 - "2. Implemented & Verified Capabilities"
 Cohesion: 0.20
@@ -1393,8 +1428,8 @@ Cohesion: 0.20
 Nodes (9): 1. Overview & Operational Principles, 2. Pre-Integration Verification & SHA Record, 3. Tiered Rollback Protocols, 4. Post-Rollback Verification & Smoke Testing Checklist, AIRA Adaptive Studio: Exact-SHA Integration & Rollback Runbook, Core Safety Guarantee, Tier 1: Instant Feature Flag Rollback (Preferred), Tier 2: Atomic Git Revert on `prod-release` (+1 more)
 
 ### Community 248 - "AIRA AI 2026 — External Repositories, Skills & Advanced Agent Patterns Evaluation"
-Cohesion: 0.22
-Nodes (8): 1. Executive Summary & Architectural Invariants, 2. External Repositories Audit Matrix, 3.1 `Shubhamsaboo/awesome-llm-apps` & `advanced_ai_agents`, 3.2 Curated Skills Provenance and Trust Matrix, 3.3 `firecrawl/firecrawl`, 3. Detailed Component Evaluation, 5. Verification & Release Status, AIRA AI 2026 — External Repositories, Skills & Advanced Agent Patterns Evaluation
+Cohesion: 0.20
+Nodes (9): 1. Executive Summary & Architectural Invariants, 2. External Repositories Audit Matrix, 3.1 `Shubhamsaboo/awesome-llm-apps` & `advanced_ai_agents`, 3.2 Curated Skills Provenance and Trust Matrix, 3.3 `firecrawl/firecrawl`, 3. Detailed Component Evaluation, 5. Verification & Release Status, AIRA AI 2026 — External Repositories, Skills & Advanced Agent Patterns Evaluation (+1 more)
 
 ### Community 250 - "PR #178 — Production Workflow Artifacts Schema Drift Preflight & Guarded Procedure"
 Cohesion: 0.20
@@ -1404,17 +1439,17 @@ Nodes (9): 1. Fail-Closed Invariants, 2. Manual Lock Inspection & Verification P
 Cohesion: 0.20
 Nodes (10): AIRA_EXPECTED_SHA, AIRA_RESPONSIVE_EVIDENCE_DIR, AIRA_RESPONSIVE_URL, AIRA_SEMANTIC_SEARCH, EXPECTED_SHA, PLAYWRIGHT_CHANNEL, VERCEL_AUTOMATION_BYPASS_SECRET, VERCEL_TEAM_ID (+2 more)
 
-### Community 252 - "LocalIsolatedSandboxProvider"
-Cohesion: 0.16
-Nodes (4): LocalIsolatedSandboxProvider, parseCommandArgs(), OCISandboxProvider, SandboxWorkspace
+### Community 252 - "sandbox.ts"
+Cohesion: 0.15
+Nodes (5): DockerSandboxProviderOptions, LocalIsolatedSandboxProvider, MultiProviderSandboxFactory, ResolveIsolatedSandboxOptions, resolveIsolatedSandboxProvider()
 
 ### Community 253 - "AIRA AI 2026 — P1 Inference Latency Analysis & Bottleneck Decomposition"
 Cohesion: 0.20
 Nodes (9): 1. Executive Latency Waterfall Breakdown, 2. Ranked Bottleneck Analysis, 3. Upstream Provider & Model Suitability Analysis, 4. Residual Latency & Next Optimizations, AIRA AI 2026 — P1 Inference Latency Analysis & Bottleneck Decomposition, 🥇 Bottleneck 1: Tier 2 LLM Intent Classification on Normal Chat (RESOLVED), 🥈 Bottleneck 2: Cross-Continental Database Roundtrips on Streaming Critical Path (RESOLVED), 🥉 Bottleneck 3: Extended Thinking Tokens on `nvidia/nemotron-3-super-120b-a12b` (ACTIVE RESIDUAL) (+1 more)
 
-### Community 254 - "artifact-classifier.ts"
-Cohesion: 0.31
-Nodes (9): ArtifactType, classifyResponseArtifacts(), defaultLanguageFor(), extractFencedCodeBlocks(), FencedBlock, isArtifactDeliveryRequested(), normalizeArtifactType(), parseEnvelopeAttributes() (+1 more)
+### Community 254 - "AutomationDefinition"
+Cohesion: 0.12
+Nodes (4): AutomationRepository, AutomationDefinition, TestTransactionalAutomationRepo, MockAutomationRepo
 
 ### Community 255 - "2. Detailed Breakdown of Maintenance Barrier Assertions"
 Cohesion: 0.20
@@ -1433,8 +1468,8 @@ Cohesion: 0.27
 Nodes (7): getContrast(), getLuminance(), getMetrics(), contrast(), lum(), runThemeMatrix(), SCREENSHOT_DIR
 
 ### Community 259 - "seo-metadata.test.ts"
-Cohesion: 0.11
-Nodes (14): indexHtml, indexHtmlPath, ldJsonMatch, parsedLdJson, robots, robotsPath, rootDir, sitemap (+6 more)
+Cohesion: 0.09
+Nodes (19): AFTER_DIR, BEFORE_DIR, captureShot(), generateComparisonHtml(), main(), evidenceDir, failures, results (+11 more)
 
 ### Community 260 - "AIRA AI 2026 — Dual Permanent CI/CD Pipeline Architecture"
 Cohesion: 0.22
@@ -1456,9 +1491,9 @@ Nodes (8): Adaptive Studio Phase 5 — execution checkpoint, Milestone 5.1 candi
 Cohesion: 0.22
 Nodes (8): 1. Executive Summary, 2. Workspace Incident Distribution (42 Total), 3. Comprehensive Per-Incident Ledger for AIRA AI 2026 (31 Incidents), 4. Status of External Repositories (11 Incidents), 5. Security & Secret Hygiene Certification, 6. Release Gate 1 Security Recommendation, AIRA AI 2026 — GitGuardian Security Incidents Resolution Report, Key Outcomes:
 
-### Community 265 - "AIRA AI 2026 — Security Hardening Status"
-Cohesion: 0.22
-Nodes (8): AIRA AI 2026 — Security Hardening Status, Approval resolution, grants, and once-only authorization, Durable execution and workspace boundaries, Executive summary, Implemented locally, Remaining blockers and residual risks, Repository and publication handling, Verification performed locally
+### Community 265 - "RunRepository"
+Cohesion: 0.08
+Nodes (10): AIRA AI 2026 — Security Hardening Status, Approval resolution, grants, and once-only authorization, Durable execution and workspace boundaries, Executive summary, Implemented locally, Remaining blockers and residual risks, Repository and publication handling, Transactional approval-resumption outbox (+2 more)
 
 ### Community 266 - "postgres"
 Cohesion: 0.22
@@ -1481,32 +1516,32 @@ Cohesion: 0.22
 Nodes (9): resources, cpus, memory, cpus, memory, limits, reservations, deploy (+1 more)
 
 ### Community 271 - "AIRA AI 2026 — PR #115 COMBINED RECERTIFICATION PLAN"
-Cohesion: 0.25
-Nodes (7): 1.1 Branch Hierarchy, 1.2 Merge-Readiness Gate for PR #116 into PR #115, 1. Stacked PR Architecture & Read-Only Integration Assessment, 3. Post-Merge Recertification Procedure, 4. Certification Statement Boundary, AIRA AI 2026 — PR #115 COMBINED RECERTIFICATION PLAN, Stacked PR Integration Verification, Comprehensive Invariants & Release Candidate Gates
+Cohesion: 0.22
+Nodes (8): 1.1 Branch Hierarchy, 1.2 Merge-Readiness Gate for PR #116 into PR #115, 1. Stacked PR Architecture & Read-Only Integration Assessment, 2. Invariants Governing the Combined M2-A Release Candidate, 3. Post-Merge Recertification Procedure, 4. Certification Statement Boundary, AIRA AI 2026 — PR #115 COMBINED RECERTIFICATION PLAN, Stacked PR Integration Verification, Comprehensive Invariants & Release Candidate Gates
 
 ### Community 272 - "PR #92 — AIRA Research & Agentic Workflow Certification"
 Cohesion: 0.22
 Nodes (8): 1. AIRA Research Engine Certification, 2. AIRA Agentic Systems & Workflow Engine Certification, 3. Tool Gateway & Safety Interception Certification, 4. Honest Completion Reporting & Work Lifecycle, PR #92 — AIRA Research & Agentic Workflow Certification, Test Suite: `test/tool-gateway-certification.ts`, Test Suite: `test/workflow-engine.ts`, Verified Architecture & Defenses:
 
 ### Community 273 - "AIRA AI 2026 — Agent and Release Authority"
-Cohesion: 0.20
-Nodes (10): Agent skills, AIRA AI 2026 — Agent and Release Authority, Domain docs, Issue tracker, Release protocol, Standing delegation for bounded code-only production releases, Strict release consequence & deployment reality:, Triage labels (+2 more)
+Cohesion: 0.25
+Nodes (6): AIRA AI 2026 — Agent and Release Authority, Release protocol, Standing delegation for bounded code-only production releases, Strict release consequence & deployment reality:, Verified platform protection (2026-10-14), Verified Vercel production release architecture & controls (2026-10-14)
 
-### Community 274 - "benchmark-preview-p1-6-fast.ts"
-Cohesion: 0.33
-Nodes (8): BatchStats, computeStats(), evaluateQuality(), executeSingleRun(), main(), PROMPT_BANK, quantile(), RequestMetric
+### Community 274 - "AgentContextualPanel.tsx"
+Cohesion: 0.20
+Nodes (18): AgentContextualPanel(), AgentContextualPanelProps, AgentPanelTab, FileResult, ToolStep, AgentDefinition, AgentRunState, AgentsView() (+10 more)
 
 ### Community 275 - "verify-adaptive-studio-e2e.mjs"
 Cohesion: 0.31
 Nodes (7): externalServer, launchEdge(), port, runSuite(), seedFullFixture(), createWavDataUri(), waitForServer()
 
 ### Community 276 - "2. Implemented & Verified Capabilities"
-Cohesion: 0.22
-Nodes (8): 1. Executive Summary & Redesign Culmination, 2. Implemented & Verified Capabilities, 3. Verification & Acceptance Gates Summary, 4. Live Backend & Production Execution Gates Status, Adaptive Studio Phase 1 — Architecture Specification & Final Integration Checkpoint, Pillar 1.1: Multi-Modal Asset Viewer (`MultiModalAssetViewer.tsx`), Pillar 1.2: Universal Keyboard Navigation & Accessibility, Pillar 1.3: Cross-Phase Security Hardening
+Cohesion: 0.20
+Nodes (9): 1. Executive Summary & Redesign Culmination, 2. Implemented & Verified Capabilities, 3. Verification & Acceptance Gates Summary, 4. Live Backend & Production Execution Gates Status, Adaptive Studio Phase 1 — Architecture Specification & Final Integration Checkpoint, Pillar 1.1: Multi-Modal Asset Viewer (`MultiModalAssetViewer.tsx`), Pillar 1.2: Universal Keyboard Navigation & Accessibility, Pillar 1.3: Cross-Phase Security Hardening (+1 more)
 
-### Community 277 - "account-settings-ecosystem.ts"
-Cohesion: 0.42
-Nodes (8): artifactPath(), closeModal(), openAccountMenu(), openHelpSubmenu(), openSidebarIfMobile(), PRESETS, run(), setupPage()
+### Community 277 - "playwright"
+Cohesion: 0.06
+Nodes (32): playwright, AcceptanceReport, artifactPath(), openAccountMenu(), openSidebarIfMobile(), PRESETS, runTests(), setupPageWithHistory() (+24 more)
 
 ### Community 278 - "settings-full-certification.ts"
 Cohesion: 0.39
@@ -1517,16 +1552,16 @@ Cohesion: 0.25
 Nodes (7): 1. Executive Summary, 2. Release & Deployment Inventory, 3. Subsystem Health & API Verification, 5. Microsoft Edge Multi-Viewport Verification Matrix, 6. Rollback Procedures, AIRA AI 2026 — Final Production Certification & GO LIVE Report, Verified Edge Screenshots
 
 ### Community 280 - "AIRA AI 2026 Commercial Platform — Payment Certification Report"
-Cohesion: 0.25
+Cohesion: 0.29
 Nodes (6): 1. Payment Sandbox Status, 2. Production Payment Readiness: 14-Gate Audit, 3. Required User Actions for Production Go-Live, 4. Payment Certification Verdict, AIRA AI 2026 Commercial Platform — Payment Certification Report, Verified Payment Lifecycles (Sandbox Mode):
 
 ### Community 281 - "5. DEDICATED PRODUCTION WORKER INFRASTRUCTURE & HOSTING REALITY"
 Cohesion: 0.25
 Nodes (8): 5.1 Hardened Container Deployment Contract, 5.2 Two-Stage Worker Activation Architecture, 5.3 Oracle Cloud Tenancy Limits & Capacity Analysis, 5.4 Rejection of Option B (Staging Co-Location), 5.5 True Commercial Hosting Economics ($44–$140/mo Baseline), 5.6 Preservation of Existing Staging Workloads on `140.238.240.108`, 5. DEDICATED PRODUCTION WORKER INFRASTRUCTURE & HOSTING REALITY, FEASIBILITY ASSESSMENT: OPTION A.1 VS OPTION A.2
 
-### Community 282 - "AIRA AI 2026 — PR #178 Staging Certification Report"
-Cohesion: 0.29
-Nodes (6): AIRA AI 2026 — PR #178 Staging Certification Report, CI Requirements, Open Risks and Discrepancies, Release Decision, Remaining Acceptance Scenario, Verification Results
+### Community 282 - "conversationSearch.ts"
+Cohesion: 0.16
+Nodes (18): isTemporaryDatabaseError(), ConversationSearchOverlay(), HighlightedText(), localSearch(), localSnippet(), authenticatedFetch(), backfillConversationsBestEffort(), composeRequestSignal() (+10 more)
 
 ### Community 283 - "2. Workstream Breakdown & Implemented Architecture"
 Cohesion: 0.22
@@ -1541,8 +1576,8 @@ Cohesion: 0.25
 Nodes (7): 1. Root Cause Analysis, 2. Integrity and Side Effect Assessment, 3. Preservation of Evidence, 4. Reconciled Records, 5. Architectural Safeguards Implemented, Executive Summary, Staging Run Recovery Incident Reconciliation Report
 
 ### Community 286 - "AIRA AI 2026 — PR #171 Release Certification and Residual Gates"
-Cohesion: 0.25
-Nodes (6): AIRA AI 2026 — PR #171 Release Certification and Residual Gates, Eleven audit findings — evidence distinctions, Executed checks and artifact references, Mandatory remaining gates — no fabricated PASS, Release boundary and rollback, Verified deployment and database identity
+Cohesion: 0.22
+Nodes (7): AIRA AI 2026 — PR #171 Release Certification and Residual Gates, Eleven audit findings — evidence distinctions, Engineering work preserved and completed, Executed checks and artifact references, Mandatory remaining gates — no fabricated PASS, Release boundary and rollback, Verified deployment and database identity
 
 ### Community 287 - "AIRA AI 2026 — Production Security, Entitlement, and UX Remediation"
 Cohesion: 0.40
@@ -1568,17 +1603,17 @@ Nodes (7): 1. Bounded scope and known baseline, 2. Changes prepared in this bran
 Cohesion: 0.25
 Nodes (7): 1. Authoritative Verdict & Certification Summary, 2. Model Entitlement Audit & Candidate Comparison, 3. Full AIRA 20-Prompt Benchmark on Preview, 4. Browser Acceptance & Viewport Testing, 5. Route Isolation & Regression Verification, 6. Production Safety & Gating, AIRA AI 2026 — P1.4 Entitled Groq Model Benchmark & Fast Route Selection Report
 
-### Community 293 - "memory-context-policy.ts"
-Cohesion: 0.36
-Nodes (6): buildDurableHistorySystemMessage(), EXPLICIT_MEMORY_RECALL_PATTERNS, isExplicitMemoryRecallPrompt(), history, ordinary, recall
+### Community 293 - "AIRA GenUI — Production Integration & Staging Deployment Plan"
+Cohesion: 0.09
+Nodes (21): 1. Executive Summary & Release Governance, 2.1 Commit Lineage & Reconciled Baseline, 2.2 Subsystem Invariants & Additions, 2. Branch Lineage & Architecture Differential, 3. Database Schema Compatibility Analysis, 4.1 Authoritative Feature Flags & Server-Side Gates, 4. Environment Variables & Runtime Feature Flags Reality Check, 5. Staging Rollout & Verification Procedure (+13 more)
 
 ### Community 294 - "isolated-neon-certification.ts"
 Cohesion: 0.39
 Nodes (5): reconcileRunPromptColumn(), up(), db, main(), parsedUrl
 
 ### Community 295 - "Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)"
-Cohesion: 0.22
-Nodes (8): Community Hubs (Navigation), Corpus Check, Graph Freshness, Graph Report - AIRA-AI-2026-GENUI  (2026-11-27), Import Cycles, Knowledge Gaps, Summary, Surprising Connections (you probably didn't know these)
+Cohesion: 0.20
+Nodes (9): Community Hubs (Navigation), Corpus Check, Graph Freshness, Graph Report - AIRA-AI-2026-GENUI  (2026-11-27), Import Cycles, Knowledge Gaps, Suggested Questions, Summary (+1 more)
 
 ### Community 296 - "benchmark-entitled-groq-candidates.ts"
 Cohesion: 0.32
@@ -1605,8 +1640,8 @@ Cohesion: 0.29
 Nodes (7): metrics, PRESETS, runSuite(), seedStorage(), SHOT_DIR, TestMetrics, VIEWPORTS
 
 ### Community 303 - "AIRA AI 2026 — Adaptive Studio UX & Production Persistence Hardening Report"
-Cohesion: 0.29
-Nodes (6): 1. Executive Overview, 3. Automated Test Verification Ledger, 4. Microsoft Edge Multi-Viewport Verification Matrix, 5. Live Production Rollout & Rollback Protection, AIRA AI 2026 — Adaptive Studio UX & Production Persistence Hardening Report, Screenshot Evidence Directory
+Cohesion: 0.22
+Nodes (8): 1. Executive Overview, 2. Root Cause Analysis & Architectural Remediation, 3. Automated Test Verification Ledger, 4. Microsoft Edge Multi-Viewport Verification Matrix, 5. Live Production Rollout & Rollback Protection, AIRA AI 2026 — Adaptive Studio UX & Production Persistence Hardening Report, On-Demand Studio Behavior & Responsive Layout, Screenshot Evidence Directory
 
 ### Community 304 - "AIRA AI 2026 Commercial Platform — Final Release Certification Dossier"
 Cohesion: 0.29
@@ -1616,9 +1651,9 @@ Nodes (6): 1. Overall Final Verdict, 2. Matt Pocock Engineering Skills Audit, 3.
 Cohesion: 0.29
 Nodes (7): 3.1 Production Database Identification, 3.2 Neon Write-Ahead Log Retention & 6-Hour PITR Window, 3.3 Branch Quota Analysis (10/10 Full) & The Critical Child Branch Dependency, 3.4 The 3-Layer Production Database Recovery Architecture, 3.5 Live Disposable Restore Rehearsal Certification, 3. PRODUCTION NEON DATABASE TOPOLOGY & 3-LAYER RECOVERY ARCHITECTURE, OPTIMAL LEAF BRANCH DISCOVERY & REMEDIATION PROTOCOL
 
-### Community 306 - "analyze-gemini-failures.ts"
-Cohesion: 0.22
-Nodes (8): allFailures, allRequests, benchmarkPath, breakdown, data, geminiFailures, geminiRequests, nonGeminiFailures
+### Community 306 - "WorkflowEngine"
+Cohesion: 0.27
+Nodes (3): WorkflowEngine, WorkflowStepDefinition, WorkflowStepState
 
 ### Community 307 - "healthcheck"
 Cohesion: 0.48
@@ -1637,8 +1672,8 @@ Cohesion: 0.29
 Nodes (7): 2. Problem 1 Remediation: Safe 4-Step Bootstrap Sequence, Step 1: PR #64 Review & Bootstrap Merge (Separate Owner Action), Step 2: Verify Default-Branch Registration, Step 3: Owner Activates Mandatory Status Check in Ruleset (Separate Owner Action), Step 4: Strict Gate Active for All Subsequent Releases, The Chicken-and-Egg Deadlock, The Phased Bootstrap Sequence
 
 ### Community 311 - "AIRA AI 2026 — Auth Workspace Master Remediation Plan (PR #65)"
-Cohesion: 0.25
-Nodes (6): AIRA AI 2026 — Auth Workspace Master Remediation Plan (PR #65), Task 1: P0 — Eliminate Authentication Token Refresh Races (TDD), Task 2: P0 — Eliminate Authenticated-to-Guest Silent Fallback (TDD), Task 3: P0 — Harden Session & Credential Storage and Production Config (TDD), Task 4: P1 — JWT Verification Hardening & Live Key Rotation (TDD), Task 5: Staging Verification, Release Gates, Commit, and CI
+Cohesion: 0.22
+Nodes (7): AIRA AI 2026 — Auth Workspace Master Remediation Plan (PR #65), Task 1: P0 — Eliminate Authentication Token Refresh Races (TDD), Task 2: P0 — Eliminate Authenticated-to-Guest Silent Fallback (TDD), Task 3: P0 — Harden Session & Credential Storage and Production Config (TDD), Task 4: P1 — JWT Verification Hardening & Live Key Rotation (TDD), Task 5: Staging Verification, Release Gates, Commit, and CI, ensureGuestSession()
 
 ### Community 312 - "AIRA AI 2026 — Unified Release Certification"
 Cohesion: 0.29
@@ -1657,8 +1692,8 @@ Cohesion: 0.48
 Nodes (7): interval, retries, start_period, test, timeout, healthcheck, healthcheck
 
 ### Community 316 - "markdown.ts"
-Cohesion: 0.12
-Nodes (19): katex@^0.18.7, marked@^18.0.14, katex, marked, MathBlockRenderer(), RichTextRenderer(), BLOCKED_TAGS, escapeHtml() (+11 more)
+Cohesion: 0.14
+Nodes (18): CaptionRenderer(), CodeBlockRenderer(), DataSummaryRenderer(), DataTableRenderer(), DividerRenderer(), HeadingRenderer(), MathBlockRenderer(), RichTextRenderer() (+10 more)
 
 ### Community 317 - "AIRA AI 2026 — PR #96 Alternate Deployment Coverage Audit"
 Cohesion: 0.29
@@ -1668,17 +1703,17 @@ Nodes (6): 1. Scope of Deployment Surface, 2.1 The Threat Vector, 2.2 Proof of D
 Cohesion: 0.33
 Nodes (8): BatchStats, computeStats(), evaluateQuality(), executeSingleRun(), main(), PROMPT_BANK_30, quantile(), RequestMetric
 
-### Community 319 - "account-menu-visual-regression.test.ts"
-Cohesion: 0.48
-Nodes (6): artifactPath(), openAccountMenu(), openSidebarIfMobile(), PRESETS, runTests(), setupPageWithHistory()
+### Community 319 - "mcp-apps.ts"
+Cohesion: 0.13
+Nodes (18): AIRA_MCP_APP_CONTRACT_VERSION, AIRA_MCP_APP_LIMITS, IdSchema, McpAppCapabilities, McpAppCapabilitiesSchema, McpAppDescriptor, McpAppDescriptorSchema, McpAppDisplayMode (+10 more)
 
 ### Community 321 - "E2E Test Infra: AIRA Entitlements, Subscription-Management, Onboarding & Announcements"
 Cohesion: 0.29
 Nodes (6): Coverage Thresholds, E2E Test Infra: AIRA Entitlements, Subscription-Management, Onboarding & Announcements, Feature Inventory (25 Features), Real-World Application Scenarios (Tier 4), Test Architecture, Test Philosophy
 
-### Community 322 - "mobile-settings-responsive.ts"
-Cohesion: 0.43
-Nodes (6): main(), metrics(), openSettings(), SECTION_IDS, SIZES, waitForDialog()
+### Community 322 - "AIRA AI 2026 — Final Corrective Certification & Merge-Readiness Report"
+Cohesion: 0.10
+Nodes (19): 10. Production Safety Confirmation, 11. Pull Request URL Targeting `prod-release`, 12. Final Merge-Readiness Verdict, 2.1 Storage Layer: `src/utils/storage.ts` (Lines 396–421), 2.2 Application State & Race Guards: `src/App.tsx` (Lines 83–105, 324–329, 364–369), 2. Exact Code Changes, 3.1 Isolated Child-Process Harness (Scenarios 3 & 4), 3.2 12-Point Regression Matrix Results (+11 more)
 
 ### Community 325 - "AIRA AI 2026 — Behavioral Intelligence Evaluation Report"
 Cohesion: 0.29
@@ -1689,16 +1724,16 @@ Cohesion: 0.29
 Nodes (6): 1. Executive Summary, 2. Root Cause Determination, 3. Local Gate Reproduction & Verification Evidence, 4. Pipeline Hardening Applied to `.github/workflows/ci.yml`, 5. Certification Verdict, AIRA AI 2026 — GitHub Actions CI Diagnosis & Remediation Report
 
 ### Community 327 - "tool-recovery-engine.ts"
-Cohesion: 0.16
-Nodes (11): ExecutionAttemptRecord, ToolExecutionContext, ToolRecoveryEngine, ToolRecoveryDecision, VerifiableCompletionState, Finding 6: Unintegrated Tool Recovery & False Completion, AIRA AI 2026 — Behavioral Intelligence Layer (Remediated & Certified), Authoritative 240-Scenario Comparative Scorecard (+3 more)
+Cohesion: 0.11
+Nodes (18): ExecutionAttemptRecord, ToolExecutionContext, ToolRecoveryEngine, ToolRecoveryDecision, VerifiableCompletionState, ToolResult, Finding 6: Unintegrated Tool Recovery & False Completion, AIRA AI 2026 — Behavioral Intelligence Layer (Remediated & Certified) (+10 more)
 
 ### Community 328 - "AIRA AI 2026 — Memory Migration Safety & Data Preservation Report"
 Cohesion: 0.29
 Nodes (6): 1. Executive Summary, 2. Defects Identified & Remediations Applied, 3. Strict Safety Invariants Enforced, 4. Test Suite Coverage (10/10 Passing), 5. Certification Verdict, AIRA AI 2026 — Memory Migration Safety & Data Preservation Report
 
-### Community 329 - "AIRA AI 2026 — PR #96 Staging Maintenance Barrier Architecture"
-Cohesion: 0.25
-Nodes (7): 1.1 The Identified Vulnerability, 1.2 The Multi-Layer Barrier Solution, 1. Executive Summary & Defect Root Cause, 2. Strict Boundary & Fail-Closed Invariants, 3. Data Flow & Transaction Sequence Diagram, 4. Release Protocol Sequence, AIRA AI 2026 — PR #96 Staging Maintenance Barrier Architecture
+### Community 330 - "WorkspaceAuthorityRepository"
+Cohesion: 0.16
+Nodes (9): DevPrincipalProvider, PrincipalProvider, createPrincipalMiddleware(), defaultPrincipalProvider, Express, Request, 2.4 Diagnostics Authorization & Endpoint Protection, WorkspaceAuthorityRepository (+1 more)
 
 ### Community 331 - "3. Gate 1: Independent Python Sandbox Security Certification"
 Cohesion: 0.29
@@ -1713,8 +1748,8 @@ Cohesion: 0.40
 Nodes (6): driver, options, max-file, max-size, logging, logging
 
 ### Community 334 - "ADR 0001: Commercial Billing, Entitlements and Credit Ledger Architecture"
-Cohesion: 0.15
-Nodes (9): ADR 0001: Commercial Billing, Entitlements and Credit Ledger Architecture, Consequences, Context, Decisions, Status, 1. Inspected Authoritative Sources (`a2ui-project/a2ui@36725eee`), 2. Differences Between A2UI v1.0 and v0.8 / v0.9 / v0.9.1, 3. Mandatory vs Optional Semantics in A2UI v1.0 (+1 more)
+Cohesion: 0.25
+Nodes (4): 1. Inspected Authoritative Sources (`a2ui-project/a2ui@36725eee`), 2. Differences Between A2UI v1.0 and v0.8 / v0.9 / v0.9.1, 3. Mandatory vs Optional Semantics in A2UI v1.0, Authoritative A2UI v1.0 Protocol Research (AIRA GenUI Phase 2)
 
 ### Community 335 - "ADR 0002: Payment Gateway, Webhook Authenticity, and GST Tax Model"
 Cohesion: 0.33
@@ -1728,9 +1763,9 @@ Nodes (5): ADR 0003: Vision, Multimodal Operations and Metered Tool Execution, C
 Cohesion: 0.33
 Nodes (5): Issue Tracker: GitHub Issues — AIRA AI 2026, Pull Requests as a Triage Surface, Repository Target, Skill Directives, Standard Issue Operations
 
-### Community 338 - "Adaptive Studio Phase 2 — Architecture Specification & Execution Checkpoint"
-Cohesion: 0.33
-Nodes (5): 1. Executive Summary & Context, 3. Microsoft Edge Browser Acceptance & Evidence Matrix, 4. Verification & Release Gates Summary, Adaptive Studio Phase 2 — Architecture Specification & Execution Checkpoint, Visual Artifacts Captured
+### Community 338 - "2. Implemented & Verified Capabilities"
+Cohesion: 0.17
+Nodes (11): 1. Executive Summary & Context, 2. Implemented & Verified Capabilities, 3. Microsoft Edge Browser Acceptance & Evidence Matrix, 4. Verification & Release Gates Summary, Adaptive Studio Phase 2 — Architecture Specification & Execution Checkpoint, Pillar 2.2: Path Normalization & Traversal Security Boundary, Pillar 2.4: Interactive Workspace File Explorer, Pillar 2.5: Sandboxed Multi-File Preview Runtime (+3 more)
 
 ### Community 339 - "Adaptive Studio — Phase 6 integration checkpoint"
 Cohesion: 0.33
@@ -1741,8 +1776,8 @@ Cohesion: 0.33
 Nodes (5): Adaptive Studio RC — Isolated Review-Gate Remediation, Corrections made on the review branch, Minimum next authorization, Read-only evidence obtained, Real contract and staging blockers
 
 ### Community 341 - "Personal Workspace Authority Lifecycle"
-Cohesion: 0.33
-Nodes (5): Migration and rollback, Personal Workspace Authority Lifecycle, Provisioning and legacy accounts, Revocation semantics, Trust boundary
+Cohesion: 0.40
+Nodes (4): Migration and rollback, Personal Workspace Authority Lifecycle, Revocation semantics, Trust boundary
 
 ### Community 342 - "certify"
 Cohesion: 0.33
@@ -1780,21 +1815,21 @@ Nodes (5): AIRA AI 2026 — Autonomous Intelligence Platform Production Hardenin
 Cohesion: 0.33
 Nodes (7): 2. Subscription Plans & Pricing, `Plan` (`plans`), `PlanPrice` (`plan_prices`), `Subscription` (`subscriptions`), PlanPrice, Subscription, Community 350 - "2. Subscription Plans & Pricing"
 
-### Community 351 - "auth-playwright-cross-browser.test.ts"
-Cohesion: 0.67
-Nodes (5): killPort(), killProcessTree(), main(), sleep(), waitForHttp()
+### Community 351 - ".updatePresence"
+Cohesion: 0.11
+Nodes (15): 1. Executive Summary, 2. Phase 4C Reconciliation & Capability Matrix, 3.1 Custom Concurrency Engine Formal Classification, 3.2 Presence Timestamp & Security Integrity, 3.3 Test Count Reconciliation (8/8 vs 9/9), 3.4 Live Model-Assisted Revision Status, 3. In-Depth Technical Findings & Decisions, 4. Gate Verdict (+7 more)
 
 ### Community 353 - "guest-linking-positive.test.ts"
-Cohesion: 0.60
-Nodes (5): killPort(), killProcessTree(), main(), sleep(), waitForServer()
+Cohesion: 0.39
+Nodes (7): dotenv@^18.0.4, dotenv, killPort(), killProcessTree(), main(), sleep(), waitForServer()
 
 ### Community 354 - "AIRA AI 2026 — Live Model Provider Acceptance Certification"
 Cohesion: 0.33
 Nodes (5): 1. Executive Summary, 2. Category Performance Summary, 3. Sample Live Executions, 4. Certification Verdict, AIRA AI 2026 — Live Model Provider Acceptance Certification
 
-### Community 355 - "benchmark-real-preview-suite.ts"
-Cohesion: 0.43
-Nodes (6): calculatePercentile(), executeSingleChat(), LatencyClocks, main(), executeSingleChatWithRetry(), PROMPTS
+### Community 355 - "search-providers.ts"
+Cohesion: 0.21
+Nodes (14): cleanSearchText(), configuredSearchProviders(), exaSearch(), normalizeHits(), SearchCredentials, SearchHit, SearchProviderName, SearchResponse (+6 more)
 
 ### Community 356 - "2. IMMUTABLE RELEASE IDENTITY & CI VERIFICATION"
 Cohesion: 0.40
@@ -1880,9 +1915,9 @@ Nodes (4): 4.1 Migration Inventory (026–031), 4.2 Why `down()` Is Disabled: Mi
 Cohesion: 0.50
 Nodes (4): 6.1 Cryptographic Two-Workflow Architecture, 6.2 Dual-Evidence Anti-Replay Verification Engine, 6.3 Authoritative Read-Only CLI Verification Demonstration, 6. EXACT-SHA RELEASE AUTHORIZATION PROTOCOL
 
-### Community 378 - "AIRA AI 2026 — Tool Choice, Recovery & Execution Verification Report"
-Cohesion: 0.29
-Nodes (6): 1. Executive Summary, 2. Integrated Tool Execution & Recovery Lifecycle, 3. Strict Safety Invariants Enforced, 4. Test Verification Suite (5/5 Passing), 5. Certification Verdict, AIRA AI 2026 — Tool Choice, Recovery & Execution Verification Report
+### Community 378 - "AIRA GenUI Phase 4C — Real-Time Collaborative Canvas, CRDT-Based Artifact Editing and Multi-Agent Co-Authoring Specification"
+Cohesion: 0.12
+Nodes (16): 1. Problem Statement, 2. Solution, 3. User Stories, 4.1 Schema & Protocol Contracts (`packages/contracts/src/collaboration.ts`), 4.2 Core Collaboration Engine (`src/utils/collaborationEngine.ts`), 4.3 Pure TypeScript PDF Export Engine (`src/utils/officeDocumentExporter.ts`), 4.4 Server-Authoritative Mutation & Concurrency Guard (`src/server/collaborationManager.ts`), 4.5 Collaborative Canvas UI Integration (`src/components/ArtifactStudio.tsx` & `GenUICollaborativeCanvas.tsx`) (+8 more)
 
 ### Community 379 - "api/tsconfig.json"
 Cohesion: 0.50
@@ -1922,23 +1957,23 @@ Nodes (3): Current Status Summary, Gate 4: Cashfree Sandbox Acceptance & Staging
 
 ### Community 388 - "AIRA-AI-2026 Release Governance & Production Baseline State"
 Cohesion: 0.50
-Nodes (3): AIRA-AI-2026 Release Governance & Production Baseline State, Governance & CI Gates Configuration, Status: CERTIFIED PASS (GOVERNANCE HARDENED)
+Nodes (3): AIRA-AI-2026 Release Governance & Production Baseline State, Governance & CI Gates Configuration, Status: GENUI LOCAL ASSURANCE COMPLETE (EXTERNAL ACCEPTANCE BLOCKED)
 
 ### Community 389 - "AIRA AI 2026 — Behavioral Intelligence Comparative Scorecard"
 Cohesion: 0.50
 Nodes (3): AIRA AI 2026 — Behavioral Intelligence Comparative Scorecard, Executive Scorecard: Baseline vs Candidate (Independently Measured), Overall Release Verdict
 
-### Community 405 - "AIRA GenUI — Phase 4 Continuation Handoff"
-Cohesion: 0.33
-Nodes (5): 2. Invariants & Security Mandates, 3. Remaining External Blockers & Phase 4 Scope, 4. Suggested Skills, 5. Short Phase 4 Resumption Prompt, AIRA GenUI — Phase 4 Continuation Handoff
+### Community 405 - "UpgradeModal.tsx"
+Cohesion: 0.16
+Nodes (13): MotionStudioModal(), MotionStudioModalProps, calculateCountdownToUtcMidnight(), getUpgradeModalConfig(), ModalConfig, UpgradeModal(), UpgradeModalProps, UpgradeTrigger (+5 more)
 
 ### Community 406 - "AIRA GenUI — Phase 2 Continuation Handoff"
 Cohesion: 0.40
 Nodes (4): AIRA GenUI — Phase 2 Continuation Handoff, Quick Baseline & Retrieval, Short Phase 2 Resumption Prompt, Suggested Skills
 
-### Community 407 - "disposable-postgres-test-entry.ts"
-Cohesion: 0.38
-Nodes (5): assertDisposablePostgresTestContract(), DisposablePostgresTestEntryOptions, DisposablePostgresTestEnvironment, runWithDisposablePostgresTestContract(), validEnvironment
+### Community 407 - "recovery.ts"
+Cohesion: 0.18
+Nodes (10): runBrowserSuite(), runPreviewSuite(), assertAuthorizedDisposableDatabase(), createRun(), FIXTURE_TAG, killApiServer(), runRecoveryTests(), seedRun() (+2 more)
 
 ### Community 408 - "Finding UX-05 — Billing and Entitlement Loading States"
 Cohesion: 0.50
@@ -1948,45 +1983,185 @@ Nodes (4): Files Changed, Finding UX-05 — Billing and Entitlement Loading Stat
 Cohesion: 0.33
 Nodes (5): 1. Executive Summary, 2. Verified Security Invariants & Audit Results, 3. Quantitative Security Metrics, 4. Certification Verdict, AIRA AI 2026 — Adversarial Security Acceptance Certification Report
 
-### Community 410 - "GeminiAdapter"
-Cohesion: 0.16
-Nodes (7): 1. Chronological Audit & Remediation History, Live Preview & Staging Acceptance Status, Summary, GeminiAdapter, DeterministicMockAdapter, ToolCallStreamAccumulator, runReleaseReadinessTestSuite()
+### Community 410 - "ActivationSecurityError"
+Cohesion: 0.13
+Nodes (13): 4. Default-Deny & Security Test Matrix (TEST A1 – A22), ActivationSecurityError, 1. Executive Summary & Security Verdict, 2.1 Separation of Static Preflight from Runtime Authorization, 2.2 Error Sanitization Architecture, 2. Architectural Hardening Specifications, 3. Comprehensive Verification Matrix, 4. Phase 2 & Phase 3 Security Regression Test Results (+5 more)
 
-### Community 411 - "Finding UX-02 — Model Upgrade Routing Misclassification"
-Cohesion: 0.40
-Nodes (5): Files Changed, Finding UX-02 — Model Upgrade Routing Misclassification, Fix Applied, Root Cause, Test Evidence
-
-### Community 412 - "migrate-isolated-preview.ts"
-Cohesion: 0.40
-Nodes (3): client, __dirname, rawCs
+### Community 411 - "isModelAllowedForTier"
+Cohesion: 0.15
+Nodes (18): Files Changed, Finding UX-02 — Model Upgrade Routing Misclassification, Fix Applied, Root Cause, Test Evidence, getMinimumRequiredTierForModel(), isModelAllowedForTier(), ChatInput() (+10 more)
 
 ### Community 413 - "4. Gate 2: Exact Source, Image & Deployment Provenance Verification"
 Cohesion: 0.50
 Nodes (4): 4.1 Provenance Chain, 4.2 Multi-Architecture & Security Hardening, 4.3 Live OCI ARM64 Container Evidence, 4. Gate 2: Exact Source, Image & Deployment Provenance Verification
 
-### Community 414 - "inspect-staging-main.ts"
+### Community 414 - "ref_child_process"
+Cohesion: 0.10
+Nodes (18): client, main(), rawCs, client, main(), rawCs, rawCs, envVars (+10 more)
+
+### Community 415 - "aiEngine.ts"
+Cohesion: 0.25
+Nodes (12): GenUILifecycleEvent, boundText(), composeSystemPrompt(), normalizeArtifactOpenPayload(), PERSONALIZATION_BOUNDS, postChatStream(), streamAIResponse(), StreamCallbacks (+4 more)
+
+### Community 416 - "AIRA GenUI Phase 4B — Advanced Multimodal Artifact Workspace Certification"
+Cohesion: 0.14
+Nodes (13): 1. Executive Summary, 3.1 Bounded AST Spreadsheet Evaluation (No Eval), 3.2 CSV Formula Injection Neutralization, 3.3 Pure TypeScript In-Memory OpenXML Exporter, 3.4 Atomic Artifact Delta Patching with Concurrency Guard, 3.5 Zero-Migration Conversation Persistence, 3. Core Architectural & Security Invariants, 4.1 Test Suites Executed (+5 more)
+
+### Community 417 - "generatePdfArchive"
+Cohesion: 0.15
+Nodes (13): 1. Executive Summary, 2. Targeted Phase 4B Closure Audit, 3.1 Modality-Specific Convergence Table, 3.2 Dual Transport & Vercel Compatibility, 3.3 Ephemeral Presence vs. Durable Operations, 3. Collaborative Concurrency Architecture, 4.1 Test Suites Executed, 4.2 Quality Gates & Production Build (+5 more)
+
+### Community 418 - "PR #92: Direct Google & GitHub OAuth Authentication Migration Report"
+Cohesion: 0.14
+Nodes (13): 10. Git Commit & Staging Deployment, 11. Rollback Procedure, 12. Final Verdict, 1. Previous Authentication Architecture, 3. Selected Framework and Justification, 4. Database Migration Details, 5. Existing-User Identity Preservation, 6. Google Signup and Login Results (+5 more)
+
+### Community 419 - "automation/src/index.ts"
+Cohesion: 0.21
+Nodes (11): cron-parser@^5.10.1, workspaceAuthority, parseCronExpression(), STANDARD_AUTOMATION_SCOPES, cron-parser, assertAuthorizedDisposableDatabase(), collectSseEvents(), INT_HEADERS (+3 more)
+
+### Community 420 - "AIRA GenUI Phase 3.5 — Closure Certification & Containment Audit"
+Cohesion: 0.17
+Nodes (11): 1. Executive Verdict, 2. Commit Lineage Reconciliation, 3. Library Capability Classification, 4. Sandbox Egress & Isolation Verification, 5. Live Model Generation Acceptance, 6. Phase 3.5 Closure Verdict Summary, A. Network Egress Blockade, AIRA GenUI Phase 3.5 — Closure Certification & Containment Audit (+3 more)
+
+### Community 421 - "AIRA GenUI Phase 4C — Handoff & Implementation Prerequisites"
+Cohesion: 0.15
+Nodes (10): 1. Context & Baseline, 2. Phase 4C Scope & Objectives, 3. Strict Architectural & Security Invariants for Phase 4C, 4. Key Files for Phase 4C Reference, AIRA GenUI Phase 4C — Handoff & Implementation Prerequisites, 1. Context & Certified Baseline, 2. Phase 5 Scope & Core Objectives, 3. Strict Architectural & Security Invariants for Phase 5 (+2 more)
+
+### Community 422 - "MISSION 3: DATABASE RECOVERY ASSURANCE & DISPOSABLE RESTORE REHEARSAL"
+Cohesion: 0.18
+Nodes (11): 1. Live Subprocess Execution Mode (`--live`):, 2. Offline Migration & AST Schema Contract Audit Mode (`--offline` / Auto-Detect):, 3.1 Production Database Topology, 3.2 Authoritative 3-Layer Recovery Architecture, 3.3 The 10/10 Free Tier Branch Quota Wall, 3.4 Forward Migration Rehearsal & Safety Barriers (026–031), 3.5 Rehearsal Verification Results (162 Assertions Passing), 3.6 Disposable Database Restore Rehearsal Architecture (100% Genuine Dual-Mode & Zero-Facade) (+3 more)
+
+### Community 423 - "invoice-crash-recovery-postgres.test.ts"
+Cohesion: 0.18
+Nodes (5): __dirname, EngineConfig, ENGINES, __filename, workerPath
+
+### Community 424 - "capture-truthful-previews.ts"
+Cohesion: 0.33
+Nodes (10): captureAllPreviews(), createBrowserSession(), killPort(), killProcessTree(), REPO_SCREENSHOTS_DIR, saveScreenshot(), SetupOptions, sleep() (+2 more)
+
+### Community 425 - "evaluateFormulaExpression"
+Cohesion: 0.55
+Nodes (11): evaluateFormulaExpression(), evaluateFunction(), isErrorCode(), parseAdditive(), parseComparison(), parseExpression(), parseFactor(), parsePrimary() (+3 more)
+
+### Community 426 - "ssrf-protection.ts"
+Cohesion: 0.27
+Nodes (7): FORBIDDEN_METADATA_HOSTNAMES, isPrivateOrRestrictedIpv4(), isPrivateOrRestrictedIpv6(), isRestrictedIp(), McpUrlValidationOptions, normalizeIpCandidate(), RFC-1918
+
+### Community 427 - "Project: AIRA AI 2026 — Entitlements, Subscription-Management, Onboarding & Announcements"
+Cohesion: 0.20
+Nodes (9): `apps/api/src/middleware/entitlement-guard.ts` ↔ API Routes, Architecture, Code Layout, Feature Inventory, Interface Contracts, Milestones, `packages/contracts/src/announcements.ts` ↔ Announcements UI, `packages/contracts/src/featureFlags.ts` ↔ Client & Server (+1 more)
+
+### Community 428 - "4.3 15-Step Dependency-Aware Production Cutover Runbook"
+Cohesion: 0.22
+Nodes (9): 4.1 Cryptographic Dual-Evidence Release Governance, 4.2 Measurable 9-Domain Service Level Objective (SLO) Framework, 4.3 15-Step Dependency-Aware Production Cutover Runbook, MISSION 4: EXACT-SHA RELEASE GOVERNANCE & 15-STEP CUTOVER RUNBOOK, STAGE 1: PRE-CUTOVER READINESS (READ-ONLY VERIFICATION), STAGE 2: DATABASE RECOVERY CHECKPOINTS & FORWARD MIGRATION, STAGE 3: RELEASE AUTHORIZATION & PR MERGE, STAGE 4: PRODUCTION CUTOVER & WORKER ACTIVATION (+1 more)
+
+### Community 429 - "AIRA GenUI Phase 5B — Autonomous Intelligence & Swarm Collaboration Specification"
+Cohesion: 0.22
+Nodes (8): 2.1 Topology Selection: Hierarchical Orchestrator-Subagent, 2. Multi-Agent Systems Topology & Governance, 3.1 Agent CollabActor Attribution, 3.3 Durable Task Checkpoints & Fencing Tokens, 3.4 ApprovalKernel Human-in-the-Loop Gating, 3. Core Specification Contracts, 4. Acceptance Criteria & Test Scenarios (Missions A–M), AIRA GenUI Phase 5B — Autonomous Intelligence & Swarm Collaboration Specification
+
+### Community 430 - "AIRA GenUI Phase 5C — Integrated Release Certification"
+Cohesion: 0.22
+Nodes (8): 1. Executive Summary, 2. Integrated GenUI Capability & Modality Matrix, 3. Commercial Entitlement & Feature Distribution Audit, 4. PostgreSQL 18.7 Persistence Architecture, 5. Security & Threat Model Certification, 6. Performance & Reliability Metrics, 7. Gate Verdict, AIRA GenUI Phase 5C — Integrated Release Certification
+
+### Community 431 - "Global Constraints"
+Cohesion: 0.25
+Nodes (7): Fast Provider Resilience & Tail-Latency Remediation Implementation Plan, Global Constraints, Task 2: Latency-Aware Provider Selection Policy & Quality Floor, Task 3: First-Token Content Deadline & Truthful Fallback Engine, Task 4: Controlled Hedged-Request Experiment Engine, Task 5: Integration with AgentRuntime, API Telemetry, and Multi-Turn Consistency, Task 6: Preview Deployment, Multi-Batch Variance Testing, and Reporting
+
+### Community 432 - "math-rendering.ts"
+Cohesion: 0.29
+Nodes (6): marked@^18.0.14, marked, display, embedded, legacy, suspicious
+
+### Community 433 - "capture-remediated-previews.mjs"
+Cohesion: 0.48
+Nodes (6): killPort(), REPO_DIR, run(), saveScreenshot(), sleep(), waitForHttp()
+
+### Community 434 - "LibraryView.tsx"
+Cohesion: 0.29
+Nodes (6): KnowledgeEdge, KnowledgeEntity, KnowledgeSource, LibraryView(), MemoryRecord, SearchResult
+
+### Community 435 - "AIRA AI 2026 — Behavioral Intelligence Layer Engineering Handoff & Certification"
+Cohesion: 0.29
+Nodes (6): 1. Executive Summary, 2. Authoritative Verification Matrix, 3. Production & Security Compliance Boundaries, 4. Release Recommendation, 5. Evaluation Integrity Correction (2026-10-13), AIRA AI 2026 — Behavioral Intelligence Layer Engineering Handoff & Certification
+
+### Community 436 - "staging-deployment-attestation.ts"
+Cohesion: 0.29
+Nodes (5): Deployment, detail, inspectUrl, listUrl, parsed
+
+### Community 437 - "16. EXACT-SHA 5-STAGE PRODUCTION RELEASE RUNBOOK"
+Cohesion: 0.33
+Nodes (6): 16. EXACT-SHA 5-STAGE PRODUCTION RELEASE RUNBOOK, STAGE 1: Pre-Authorization Readiness (Read-Only Verification), STAGE 2: Owner-Authorized Production Preparation, STAGE 3: Release Authorization (Dual-Evidence Verification), STAGE 4: Production Cutover, STAGE 5: Post-Cutover Acceptance & Monitoring
+
+### Community 438 - "BLOCKING CONSTRAINTS — Read Before Anything Else"
+Cohesion: 0.33
+Nodes (5): BLOCKING CONSTRAINTS — Read Before Anything Else, Critical Anti-Patterns, Critical Anti-Patterns (do NOT repeat these), Infrastructure State, Required Reading (in order)
+
+### Community 439 - "AIRA GenUI Phase 4A — MCP Apps Implementation Specification"
+Cohesion: 0.33
+Nodes (5): 1. Executive Summary & Architectural Overview, 3. Descriptor Contract Schema (`aira-mcp-app/v1`), 4. Host-to-App JSON-RPC Protocol, 5. Implementation Roadmap & Verification Gates, AIRA GenUI Phase 4A — MCP Apps Implementation Specification
+
+### Community 440 - "AIRA GenUI Phase 5B — Autonomous Intelligence & Swarm Collaboration Certification"
+Cohesion: 0.33
+Nodes (5): 1. Executive Summary, 3. Mandatory Acceptance Missions Summary (`test/autonomous-swarm-acceptance.test.ts`), 4. Architectural Invariants Preserved, 5. Gate Verdict, AIRA GenUI Phase 5B — Autonomous Intelligence & Swarm Collaboration Certification
+
+### Community 441 - "AIRA GenUI — Phase 3 Continuation Handoff"
+Cohesion: 0.33
+Nodes (5): AIRA GenUI — Phase 3 Continuation Handoff, Quick Baseline & Context Retrieval, Remaining External Blockers & Phase 3 Scope, Short Phase 3 Resumption Prompt, Suggested Skills
+
+### Community 442 - "artifactRuntimeError.ts"
 Cohesion: 0.67
-Nodes (3): client, main(), rawCs
+Nodes (4): createArtifactRepairPrompt(), normalizeArtifactRuntimeError(), safePosition(), safeText()
+
+### Community 443 - "AIRA AI 2026 — Latency, Efficiency & Cost Performance Report"
+Cohesion: 0.33
+Nodes (5): 1. Executive Summary, 2. Multi-Layer Latency Accounting, 3. Token & Cost Efficiency Invariants, 4. Certification Verdict, AIRA AI 2026 — Latency, Efficiency & Cost Performance Report
+
+### Community 444 - "ADR 0001: Commercial Billing, Entitlements and Credit Ledger Architecture"
+Cohesion: 0.40
+Nodes (5): ADR 0001: Commercial Billing, Entitlements and Credit Ledger Architecture, Consequences, Context, Decisions, Status
+
+### Community 445 - "Global Constraints"
+Cohesion: 0.40
+Nodes (4): AIRA AI 2026 — First-Party BFF Session Gateway & Real Client Migration Implementation Plan, Global Constraints, Task 2: Strict Origin Verification & Cryptographic CSRF Protection, Task 4: Full Suite Certification & Reality Checker Audit
+
+### Community 446 - "5. Multimodal & Advanced Capabilities"
+Cohesion: 0.40
+Nodes (5): 5. Multimodal & Advanced Capabilities, `AiraAgents`, `AiraBuilder`, `AiraResearch`, `AiraVision`
+
+### Community 447 - "AIRA AI 2026 — Change Impact Map"
+Cohesion: 0.40
+Nodes (4): AIRA AI 2026 — Change Impact Map, Change protocol, Cross-layer paths verified by source, Potential or unverified impact (not certified)
+
+### Community 448 - "AIRA GenUI — Phase 4A Closure & Engineering Certification"
+Cohesion: 0.40
+Nodes (4): 1. Executive Summary & Verification Matrix, 2. Accurate Library Classifications, 3. Commercial & Database Boundaries Preserved, AIRA GenUI — Phase 4A Closure & Engineering Certification
+
+### Community 449 - "verify-canonical-production-edge.mjs"
+Cohesion: 0.50
+Nodes (3): seedPhase1Fixture(), createWavDataUri(), verifyCanonicalProduction()
+
+### Community 450 - "Agent skills"
+Cohesion: 0.50
+Nodes (4): Agent skills, Domain docs, Issue tracker, Triage labels
 
 ## Knowledge Gaps
 - **10 isolated node(s):** `ADR-0002`, `ADR-0002`, `RFC-3927`, `RFC-6598`, `RFC-1918` (+5 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 4401 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **35 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 4613 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **37 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Communities (411 total, 41 thin omitted)` connect `Communities (405 total, 36 thin omitted)` to `CapabilityRegistry`, `unified-intelligence-architecture.test.ts`, `Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)`, `SemanticReasoner`, `storage.ts`, `2. Subscription Plans & Pricing`?**
-  _High betweenness centrality (0.075) - this node is a cross-community bridge._
+- **Why does `Communities (415 total, 35 thin omitted)` connect `Communities (405 total, 36 thin omitted)` to `unified-intelligence-architecture.test.ts`, `CapabilityRegistry`, `Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)`, `SemanticReasoner`, `presentation-router.ts`, `2. Subscription Plans & Pricing`?**
+  _High betweenness centrality (0.058) - this node is a cross-community bridge._
 - **What connects `ADR-0002`, `ADR-0002`, `RFC-3927` to the rest of the system?**
   _10 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `approvals/src/repositories.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.037502379592613745 - nodes in this community are weakly interconnected._
-- **Why does `Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)` connect `Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)` to `agent-runtime/src/index.ts`, `Communities (405 total, 36 thin omitted)`, `Run`?**
-  _High betweenness centrality (0.030) - this node is a cross-community bridge._
+  _Cohesion score 0.038192827200745225 - nodes in this community are weakly interconnected._
+- **Why does `db` connect `db` to `approvals/src/repositories.ts`, `AutomationRun`, `PrincipalScope`, `model-router/src/index.ts`, `DirectOAuthService`, `api/src/index.ts`, `recovery.ts`, `agent-specialists.ts`, `test-oracle-staging-capabilities.ts`, `payment-gateway-service.ts`, `automation/src/index.ts`, `STAGING_NEON_PROJECT_ID`, `ToolGateway`, `ref_node_assert`, `PaymentGatewayService`, `operational-staging-acceptance-and-fault-injection.test.ts`, `retrieval/src/index.ts`, `ExecutionPrincipal`, `commercial-billing-service.ts`, `WorkflowEngine`, `browser-adapter.ts`, `bff-session.ts`, `adversarial-entitlements.test.ts`, `m2a-durable-specialist-execution.test.ts`, `capabilityDispatcher.ts`, `ref_node_crypto`, `ref_node_child_process`, `PostgresSpecialistTaskRepository`, `account-routes.ts`?**
+  _High betweenness centrality (0.031) - this node is a cross-community bridge._
 - **Should `agent-runtime/src/index.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.03808314820691844 - nodes in this community are weakly interconnected._
-- **Why does `Suggested Questions` connect `Run` to `InMemorySpecialistTaskRepository`, `agent-runtime/src/index.ts`, `PrincipalScope`, `CapabilityRegistry`, `Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)`, `AutonomousPersistenceUnavailableError`, `ToolGateway`, `storage.ts`, `DistributedPostgresCapacityStore`, `DirectOAuthService`, `PaymentGatewayService`, `classifyDatabaseUrl`, `presentation-router.ts`, `WorkflowEngine`, `PrivateBetaCapacityGuard`?**
-  _High betweenness centrality (0.029) - this node is a cross-community bridge._
-- **Should `Run` be split into smaller, more focused modules?**
-  _Cohesion score 0.060496067755595885 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.042606516290726815 - nodes in this community are weakly interconnected._
+- **Why does `PaymentGatewayService` connect `PaymentGatewayService` to `approvals/src/repositories.ts`, `adversarial-entitlements.test.ts`, `payment-gateway-service.ts`, `Graph Report - AIRA-AI-2026-GENUI  (2026-11-27)`, `ref_node_assert`, `2. Security Vector Audits & Verification`, `api/src/index.ts`, `commercial.ts`, `commercial-billing-service.ts`, `agent-specialists.ts`, `bff-session.ts`?**
+  _High betweenness centrality (0.024) - this node is a cross-community bridge._
+- **Should `db` be split into smaller, more focused modules?**
+  _Cohesion score 0.041868823000898475 - nodes in this community are weakly interconnected._
