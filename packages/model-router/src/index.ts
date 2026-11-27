@@ -1884,7 +1884,7 @@ export class ModelRouter {
 
         if (fallbackAdapter) {
           effectiveAdapter = new ResilientModelAdapter(selectedAdapter, fallbackAdapter, this.healthTracker, {
-            firstTokenTimeoutMs: 3500,
+            firstTokenTimeoutMs: typeof (policy as any)?.firstTokenTimeoutMs === 'number' ? (policy as any).firstTokenTimeoutMs : 10000,
             fallbackFirstTokenTimeoutMs,
             tertiaryAdapter
           });

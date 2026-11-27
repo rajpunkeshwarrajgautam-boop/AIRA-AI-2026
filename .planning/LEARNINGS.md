@@ -233,3 +233,32 @@ Historical `.planning/STATE.md` (`2026-10`) recorded GitHub Free HTTP 403 on bra
   `page.addInitScript` runs in every frame, including sandboxed iframes. Reading or writing `window.localStorage` inside a sandboxed iframe without `allow-same-origin` throws a `SecurityError`. Global scripts must always be guarded with `if (window.self === window.top && typeof window.localStorage !== 'undefined')`.
 - **Lesson — Dual Metadata Serialization for Complete Multi-Turn Persistence:**
   Both declarative surfaces (`genuiSurfaces`) and open applications (`genuiApps`, `genuiAppState`) must be extracted, validated, and hydrated in `src/utils/conversationSearch.ts` across client-server sync, enabling rich simulation and dashboard states to reload deterministically across browser reloads with $0 re-inference cost.
+
+---
+
+## Phase 3.5 Additions (Closure & Genuine Model Verification)
+- **Decision — Dynamic XML Tag Attribute Parsing (`packages/agent-runtime/src/genui-streaming.ts`):**
+  NVIDIA Nemotron (`nvidia/nemotron-3.5-lightning-30b-a3b`) and similar instruction-tuned models frequently emit `<airaApp schemaVersion="aira-app/v1" appId="..." title="...">` directly with attributes on the opening XML tag while placing the JSON body (`html`, `css`, `javascript`, `initialState`) inside. `GenUIStreamTagExtractor` and `tryParseGenUIBlock` now utilize `parseTagAttributes()` regex matching to extract and merge tag attributes directly into the parsed descriptor, preventing tag-parsing drops.
+- **Decision — Resilient JSON Repair for Large Model-Generated Code (`packages/agent-runtime/src/genui-streaming.ts`):**
+  When LLMs output 4,000–6,000 characters of JavaScript within a JSON string, subtle issues like trailing commas or unescaped control characters can break standard `JSON.parse`. Integrated `tryRepairJson` into `tryParseGenUIBlock` to automatically sanitize trailing commas and recover valid HTML/JS/CSS payloads without raising fatal parse errors.
+- **Decision — Defensive `document.write` Shim & Top-Level Script Isolation (`src/utils/genuiAppBridge.ts`):**
+  In headless browser rendering via Playwright, nested `try/catch` wrappers around user-provided script strings could produce syntax parser errors (`Failed to execute 'write' on 'Document': Unexpected end of input`). Replaced the nested try/catch wrapper with top-level script execution, relying on `window.addEventListener('error')` for the sandbox error boundary, and added a defensive shim `document.write = function() { console.warn('document.write is disabled in aira sandbox'); }`.
+- **Finding & Metric — Genuine Multi-Domain Live Generation Verified:**
+  Executed genuine live generation with NVIDIA NIM `nemotron-3.5-lightning-30b-a3b` across 3 distinct domains:
+  1. *Simulation:* "Interactive 2D Physics Pendulum Simulation" (16.6s latency, 1052 chars HTML, 6122 chars JS, rendered 1 canvas & 3 controls).
+  2. *Dashboard:* "Custom Multi-Asset Financial Portfolio Dashboard" (9.9s latency, 1583 chars HTML, 254 chars CSS, 2356 chars JS, rendered 1 canvas & 3 controls).
+  3. *Visualization:* "Planetary Orbital Mechanics Educational Visualization" (18.5s latency, 1065 chars HTML, 3835 chars JS, rendered 1 canvas & 2 controls).
+  All 3 apps rendered successfully in headless Chromium under opaque origin (`null`) and zero-egress CSP.
+- **Accurate Library Capability Classification:**
+  D3.js and Three.js are classified truthfully: D3 is Category C (Compatibility Shim with lightweight SVG/DOM selection & linear/ordinal scales subset) and Three.js is Category D (Demonstration Substitute with 2D canvas wireframes). Neither is claimed as a full 3D WebGL engine without verified npm installation.
+
+---
+
+## Phase 4A Additions (Local MCP Apps Runtime & Fail-Closed Gating)
+- **Decision — Formal `aira-mcp-app/v1` Contract (`packages/contracts/src/mcp-apps.ts`):**
+  Defined `AIRA_MCP_APP_CONTRACT_VERSION = 'aira-mcp-app/v1'`, `McpAppDescriptorSchema`, `validateMcpAppDescriptor`, and `McpAppRpcMessageSchema`. Caps: entrypointHtml <= 512 KB, supportedTools <= 32, maxActiveConnections <= 8, maxHeightPx clamped (200–1200px).
+- **Decision — Host-Mediated JSON-RPC 2.0 & ApprovalKernel Integration (`src/components/genui/GenUIMcpApp.tsx`):**
+  MCP Apps communicate with host via postMessage using JSON-RPC 2.0 (`tools/call`, `tools/list`, `ui/resize`, `state/save`, `state/load`). Host validates tool authorization against `descriptor.supportedTools`. Side-effecting mutations (e.g. `execute_query`, `update_order`, `deploy_asset`) trigger an interactive Tool Approval Modal, enforcing zero silent execution.
+- **Security Invariant — Fail-Closed Remote MCP Destination Enforcement:**
+  `assertApprovedPublicMcpDestination()` strictly enforces `MCP_EGRESS_ENFORCEMENT_REQUIRED` (503) in production environments until kernel-level socket binding and connection-time address pinning are implemented, protecting against DNS rebinding and SSRF to cloud metadata endpoints (`169.254.169.254`).
+

@@ -207,9 +207,64 @@ export function adaptAiraEventToAGUI(event: StreamingEvent): BaseEvent[] {
   }
 }
 
+function parseTagAttributes(rawAttrs: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!rawAttrs) return result;
+  const attrRegex = /([a-zA-Z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g;
+  let match: RegExpExecArray | null;
+  while ((match = attrRegex.exec(rawAttrs)) !== null) {
+    const key = match[1];
+    const val = match[2] ?? match[3] ?? match[4] ?? '';
+    result[key] = val;
+  }
+  return result;
+}
+
+function tryRepairJson(str: string): any {
+  // 1. Remove trailing commas before closing braces/brackets
+  let s = str.replace(/,(\s*[}\]])/g, '$1');
+  try {
+    return JSON.parse(s);
+  } catch {}
+
+  // 2. Repair missing closing braces if stream ended cleanly inside object
+  if (!s.endsWith('}')) {
+    const candidate = s.trim() + '}';
+    try {
+      return JSON.parse(candidate);
+    } catch {}
+  }
+
+  // 3. Resilient field extraction if unescaped quotes broke standard JSON.parse
+  const extractStringField = (name: string): string | undefined => {
+    const re = new RegExp(`"${name}"\\s*:\\s*"([\\s\\S]*?)(?:"\\s*,\\s*"[a-zA-Z0-9_-]+"|\\s*"\\s*})`, 'i');
+    const m = s.match(re);
+    if (m && m[1]) {
+      return m[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    }
+    return undefined;
+  };
+
+  const html = extractStringField('html');
+  const javascript = extractStringField('javascript') || extractStringField('js');
+  const css = extractStringField('css');
+  if (html || javascript) {
+    return {
+      schemaVersion: AIRA_GENUI_APP_CONTRACT_VERSION,
+      html: html || '',
+      javascript: javascript || '',
+      css: css || '',
+      textFallback: extractStringField('textFallback') || 'Interactive Application',
+    };
+  }
+
+  return null;
+}
+
 function tryParseGenUIBlock(
   rawInner: string,
-  a2uiReducer: A2UISurfaceReducer
+  a2uiReducer: A2UISurfaceReducer,
+  tagAttributes?: Record<string, string>
 ): { surfaces: GenUIBlockItem[]; deletedSurfaceIds: string[] } {
   const cleaned = rawInner
     .trim()
@@ -219,8 +274,12 @@ function tryParseGenUIBlock(
   const surfaces: GenUIBlockItem[] = [];
   const deletedSurfaceIds: string[] = [];
 
-  const handleParsed = (obj: unknown) => {
+  const handleParsed = (rawParsed: unknown) => {
+    let obj = rawParsed;
     if (obj && typeof obj === 'object') {
+      if (tagAttributes && Object.keys(tagAttributes).length > 0) {
+        obj = Object.assign({}, tagAttributes, obj);
+      }
       const o = obj as any;
       if (o.schemaVersion === AIRA_GENUI_APP_CONTRACT_VERSION || (o.html && (o.appId || o.appType))) {
         const appRes = validateGenUIApp(obj);
@@ -264,6 +323,15 @@ function tryParseGenUIBlock(
     }
     return { surfaces, deletedSurfaceIds };
   } catch (err: any) {
+    // Attempt resilient JSON repair for LLM-generated code blocks
+    const repaired = tryRepairJson(cleaned);
+    if (repaired && typeof repaired === 'object') {
+      handleParsed(repaired);
+      if (surfaces.some((s) => s.ok)) {
+        return { surfaces, deletedSurfaceIds };
+      }
+    }
+
     // Support JSONL streams of A2UI v1.0 messages (one JSON object per line)
     const lines = cleaned
       .split(/\r?\n/)
@@ -314,6 +382,7 @@ export class GenUIStreamTagExtractor {
   private buffer = '';
   private insideTag = false;
   private currentCloseTag = GENUI_CLOSE_TAG;
+  private currentTagAttributes: Record<string, string> = {};
   private tagBuffer = '';
   private readonly maxTagBytes = 768 * 1024;
   private readonly a2uiReducer = new A2UISurfaceReducer();
@@ -330,31 +399,36 @@ export class GenUIStreamTagExtractor {
 
     while (this.buffer.length > 0) {
       if (!this.insideTag) {
-        const genuiIdx = this.buffer.indexOf(GENUI_OPEN_TAG);
-        const appIdx = this.buffer.indexOf(GENUI_APP_OPEN_TAG);
+        const genuiMatch = this.buffer.match(/<airaGenUI(\s+[^>]*)?>/i);
+        const appMatch = this.buffer.match(/<airaApp(\s+[^>]*)?>/i);
 
         let openIdx = -1;
-        let openTag = '';
+        let openTagLen = 0;
         let closeTag = '';
+        let rawAttrs = '';
 
-        if (genuiIdx >= 0 && appIdx >= 0) {
-          if (genuiIdx < appIdx) {
-            openIdx = genuiIdx;
-            openTag = GENUI_OPEN_TAG;
+        if (genuiMatch && appMatch) {
+          if (genuiMatch.index! < appMatch.index!) {
+            openIdx = genuiMatch.index!;
+            openTagLen = genuiMatch[0].length;
             closeTag = GENUI_CLOSE_TAG;
+            rawAttrs = genuiMatch[1] || '';
           } else {
-            openIdx = appIdx;
-            openTag = GENUI_APP_OPEN_TAG;
+            openIdx = appMatch.index!;
+            openTagLen = appMatch[0].length;
             closeTag = GENUI_APP_CLOSE_TAG;
+            rawAttrs = appMatch[1] || '';
           }
-        } else if (genuiIdx >= 0) {
-          openIdx = genuiIdx;
-          openTag = GENUI_OPEN_TAG;
+        } else if (genuiMatch) {
+          openIdx = genuiMatch.index!;
+          openTagLen = genuiMatch[0].length;
           closeTag = GENUI_CLOSE_TAG;
-        } else if (appIdx >= 0) {
-          openIdx = appIdx;
-          openTag = GENUI_APP_OPEN_TAG;
+          rawAttrs = genuiMatch[1] || '';
+        } else if (appMatch) {
+          openIdx = appMatch.index!;
+          openTagLen = appMatch[0].length;
           closeTag = GENUI_APP_CLOSE_TAG;
+          rawAttrs = appMatch[1] || '';
         }
 
         if (openIdx >= 0) {
@@ -362,9 +436,10 @@ export class GenUIStreamTagExtractor {
           // Strip preceding markdown fence opening (e.g. ```json\n) so user prose stays clean
           preSlice = preSlice.replace(/```(?:json|jsonl)?\s*$/i, '');
           visibleText += preSlice;
-          this.buffer = this.buffer.slice(openIdx + openTag.length);
+          this.buffer = this.buffer.slice(openIdx + openTagLen);
           this.insideTag = true;
           this.currentCloseTag = closeTag;
+          this.currentTagAttributes = parseTagAttributes(rawAttrs);
           this.tagBuffer = '';
           continue;
         }
@@ -374,7 +449,7 @@ export class GenUIStreamTagExtractor {
         const maxPrefixLen = Math.max(GENUI_OPEN_TAG.length, GENUI_APP_OPEN_TAG.length);
         for (let i = Math.max(0, this.buffer.length - maxPrefixLen + 1); i < this.buffer.length; i++) {
           const slice = this.buffer.slice(i);
-          if (GENUI_OPEN_TAG.startsWith(slice) || GENUI_APP_OPEN_TAG.startsWith(slice)) {
+          if (GENUI_OPEN_TAG.startsWith(slice) || GENUI_APP_OPEN_TAG.startsWith(slice) || '<aira'.startsWith(slice)) {
             partialStart = i;
             break;
           }
@@ -407,10 +482,11 @@ export class GenUIStreamTagExtractor {
           remaining = remaining.replace(/^\s*```/i, '');
           this.buffer = remaining;
           this.insideTag = false;
-          const blockResult = tryParseGenUIBlock(this.tagBuffer, this.a2uiReducer);
+          const blockResult = tryParseGenUIBlock(this.tagBuffer, this.a2uiReducer, this.currentTagAttributes);
           surfaces.push(...blockResult.surfaces);
           deletedSurfaceIds.push(...blockResult.deletedSurfaceIds);
           this.tagBuffer = '';
+          this.currentTagAttributes = {};
           continue;
         }
 
@@ -450,17 +526,18 @@ export class GenUIStreamTagExtractor {
         .replace(/```(?:json|jsonl)?\s*/gi, '')
         .replace(/\s*```$/gi, '')
         .trim();
-      const blockResult = tryParseGenUIBlock(raw, this.a2uiReducer);
+      const blockResult = tryParseGenUIBlock(raw, this.a2uiReducer, this.currentTagAttributes);
       this.insideTag = false;
       this.tagBuffer = '';
       this.buffer = '';
+      this.currentTagAttributes = {};
       if (blockResult.surfaces.some((s) => s.ok)) {
         return { visibleText: '', surfaces: blockResult.surfaces, deletedSurfaceIds: blockResult.deletedSurfaceIds };
       }
       const result: GenUIBlockItem = {
         ok: false,
         code: 'GENUI_UNTERMINATED_BLOCK',
-        error: 'GenUI stream ended before closing </airaGenUI> tag.',
+        error: 'GenUI stream ended before closing tag.',
       };
       return { visibleText: '', surfaces: [result], deletedSurfaceIds: [] };
     }
@@ -713,16 +790,17 @@ export function buildRuntimeExecutionGenUISurface(params: {
 export function buildGenUISystemInstruction(presentationMode: string): string {
   if (presentationMode === 'sandboxed_app') {
     const example =
-      '{"schemaVersion":"aira-app/v1","appId":"app_sim","appType":"simulation_2d","title":"Physics Simulation","html":"<canvas id=\\"sim\\" width=\\"400\\" height=\\"300\\"></canvas>","css":"canvas { border: 1px solid #444; border-radius: 6px; }","js":"const canvas = document.getElementById(\\"sim\\"); const ctx = canvas.getContext(\\"2d\\"); ctx.fillStyle = \\"#3b82f6\\"; ctx.fillRect(20, 20, 100, 100);","state":{"step":1},"textFallback":"Interactive physics simulation"}';
+      '{"schemaVersion":"aira-app/v1","appId":"app_sim","appType":"simulation","title":"Physics Simulation","html":"<canvas id=\\"sim\\" width=\\"400\\" height=\\"300\\"></canvas>","css":"canvas { border: 1px solid #444; border-radius: 6px; }","javascript":"const canvas = document.getElementById(\\"sim\\"); const ctx = canvas.getContext(\\"2d\\"); ctx.fillStyle = \\"#3b82f6\\"; ctx.fillRect(20, 20, 100, 100);","initialState":{"step":1},"textFallback":"Interactive physics simulation"}';
     return [
       'Presentation guidance (sandboxed_app):',
       'After a 1-2 sentence intro, emit one <airaApp>{...}</airaApp> JSON block matching schemaVersion "aira-app/v1".',
-      'Supported appType: simulation_2d, dashboard, dynamic_chart, custom_tool, force_graph, spatial_3d, data_explorer.',
-      'Provide self-contained html, css, and js. You may use window.airaBridge to send messages and update state.',
+      'Supported appType: simulation, html_application, d3_visualization, three_scene, interactive_article.',
+      'Provide self-contained html, css, and javascript. You may use window.airaBridge to send messages and update state.',
       'FORMATTING RULES:',
       '1. Do NOT wrap <airaApp> in markdown code fences or backticks (no ```json). Emit <airaApp> directly in prose.',
       '2. You MUST close with the exact closing tag </airaApp>.',
-      '3. Do NOT include remote <script src="..."> tags, remote CSS, or network requests (fetch/XHR). Everything must be self-contained in html/css/js.',
+      '3. Do NOT include remote <script src="..."> tags, remote CSS, or network requests (fetch/XHR). Everything must be self-contained in html/css/javascript.',
+      '4. Use single quotes (\') for strings inside your javascript/css code to prevent JSON string escaping errors.',
       `<airaApp>${example}</airaApp>`,
     ].join('\n');
   }

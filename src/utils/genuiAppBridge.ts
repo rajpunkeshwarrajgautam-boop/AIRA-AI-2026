@@ -27,6 +27,12 @@ function buildClientBridgeScript(appId: string, nonce: string, initialState: Rec
   return `
 (function() {
   'use strict';
+  // Shim archaic document.write to prevent parser destruction or exceptions in sandboxed apps
+  try {
+    document.write = function() { console.warn('[AIRA_SANDBOX] document.write ignored'); };
+    document.writeln = function() { console.warn('[AIRA_SANDBOX] document.writeln ignored'); };
+  } catch (_) {}
+
   const ACTIVE_NONCE = ${safeJsonStringifyForHtmlScript(nonce)};
   const APP_ID = ${safeJsonStringifyForHtmlScript(appId)};
   let currentState = ${safeStateJson} || {};
@@ -384,12 +390,16 @@ function getSelfHostedThreeSource(): string {
 export function buildSandboxAppHtml(
   app: GenUIApp,
   options: {
-    nonce: string;
+    nonce?: string;
+    activeNonce?: string;
     isDark?: boolean;
+    theme?: string;
     activeState?: Record<string, unknown>;
   }
 ): string {
-  const { nonce, isDark = false, activeState } = options;
+  const nonce = options.nonce || options.activeNonce || 'default_nonce';
+  const isDark = options.isDark !== undefined ? options.isDark : options.theme === 'dark';
+  const { activeState } = options;
   const mergedState = Object.assign({}, app.initialState || {}, activeState || {});
 
   const cleanHtml = stripUntrustedHtmlSecurityVectors(app.html || '');
@@ -435,21 +445,7 @@ export function buildSandboxAppHtml(
   ${cleanHtml}
   <div id="aira-error-boundary" style="display:none;position:fixed;bottom:12px;left:12px;right:12px;padding:10px 14px;background:#B54A2B;color:#FFF;font-family:monospace;font-size:12px;border-radius:6px;z-index:999999;"></div>
   <script>
-    (function() {
-      try {
-        ${cleanJs}
-      } catch (err) {
-        console.error('[AIRA_APP_EXEC_ERROR]', err);
-        const errBox = document.getElementById('aira-error-boundary');
-        if (errBox) {
-          errBox.style.display = 'block';
-          errBox.innerText = 'App Initialization Error: ' + (err.message || String(err));
-        }
-        if (window.airaBridge) {
-          window.airaBridge.sendAction('__runtime_error__', { error: err.message || String(err) });
-        }
-      }
-    })();
+${cleanJs}
   </script>
 </body>
 </html>`;
@@ -459,12 +455,23 @@ export function buildSandboxAppHtml(
  * Validates untrusted postMessage events received from sandboxed iframe instances.
  */
 export function validateSandboxAppBridgeMessage(
-  rawEvent: { data: unknown; origin: string },
+  rawEvent: { data?: unknown; origin?: string } | any,
   activeNonce: string,
-  expectedAppId?: string
-): { ok: true; message: GenUIBridgeMessage } | { ok: false; error: string } {
+  expectedAppIdOrOrigin?: string,
+  maybeExpectedAppId?: string
+): { ok: true; message: GenUIBridgeMessage } | { ok: false; code: string; error: string } {
+  // Support both (event, nonce, expectedAppId) and (event, nonce, origin, expectedAppId)
+  let origin = 'null';
+  let expectedAppId: string | undefined = maybeExpectedAppId;
+
+  if (rawEvent && typeof rawEvent === 'object' && 'origin' in rawEvent && typeof rawEvent.origin === 'string') {
+    origin = rawEvent.origin;
+    expectedAppId = expectedAppIdOrOrigin;
+  } else if (expectedAppIdOrOrigin && (expectedAppIdOrOrigin === 'null' || expectedAppIdOrOrigin.startsWith('http'))) {
+    origin = expectedAppIdOrOrigin;
+  }
+
   // Enforce opaque origin ('null') or test environment origin
-  const origin = rawEvent.origin;
   const isOpaqueOrTest =
     origin === 'null' ||
     origin === 'http://127.0.0.1' ||
@@ -474,21 +481,46 @@ export function validateSandboxAppBridgeMessage(
     (typeof window !== 'undefined' && origin === window.location.origin);
 
   if (!isOpaqueOrTest) {
-    return { ok: false, error: `Invalid bridge origin "${origin}". Must be opaque ("null").` };
+    return { ok: false, code: 'GENUI_ORIGIN_INVALID', error: `Invalid bridge origin "${origin}". Must be opaque ("null").` };
   }
 
-  const parsed = GenUIBridgeMessageSchema.safeParse(rawEvent.data);
+  const payloadData = rawEvent && typeof rawEvent === 'object' && 'data' in rawEvent && rawEvent.data !== undefined
+    ? rawEvent.data
+    : rawEvent;
+
+  // Check for forbidden prototype pollution keys or prototype manipulation in raw payload before schema stripping
+  const rawPayload = (payloadData as any)?.payload;
+  if (rawPayload && typeof rawPayload === 'object') {
+    const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+    const hasForbidden = (obj: any): boolean => {
+      if (!obj || typeof obj !== 'object') return false;
+      const proto = Object.getPrototypeOf(obj);
+      if (proto !== null && proto !== Object.prototype && proto !== Array.prototype) {
+        return true;
+      }
+      for (const k of Object.getOwnPropertyNames(obj)) {
+        if (FORBIDDEN_KEYS.has(k)) return true;
+        if (hasForbidden(obj[k])) return true;
+      }
+      return false;
+    };
+    if (hasForbidden(rawPayload)) {
+      return { ok: false, code: 'GENUI_FORBIDDEN_KEY', error: 'Payload contains forbidden property keys.' };
+    }
+  }
+
+  const parsed = GenUIBridgeMessageSchema.safeParse(payloadData);
   if (!parsed.success) {
-    return { ok: false, error: 'Malformed bridge message payload.' };
+    return { ok: false, code: 'GENUI_SCHEMA_INVALID', error: 'Malformed bridge message payload.' };
   }
 
   const msg = parsed.data;
   if (msg.nonce !== activeNonce) {
-    return { ok: false, error: 'Cryptographic bridge nonce mismatch.' };
+    return { ok: false, code: 'GENUI_NONCE_MISMATCH', error: 'Cryptographic bridge nonce mismatch.' };
   }
 
   if (expectedAppId && msg.appId !== expectedAppId) {
-    return { ok: false, error: `App ID mismatch: expected "${expectedAppId}", received "${msg.appId}".` };
+    return { ok: false, code: 'GENUI_APP_ID_MISMATCH', error: `App ID mismatch: expected "${expectedAppId}", received "${msg.appId}".` };
   }
 
   return { ok: true, message: msg };

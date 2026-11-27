@@ -1041,4 +1041,5 @@ export * from './genui.js';
 export * from './genui-calculators.js';
 export * from './genui-reactive.js';
 export * from './a2ui.js';
+export * from './mcp-apps.js';
 
