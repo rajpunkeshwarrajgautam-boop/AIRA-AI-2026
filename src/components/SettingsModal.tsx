@@ -268,6 +268,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     activeSubscription: ActiveSubscriptionSummary | null;
     pendingSubscription: PendingSubscriptionSummary | null;
     subscriptionLifecycle: SubscriptionLifecycleSummary | null;
+    supplierIdentity?: {
+      legalName?: string;
+      tradeName?: string;
+      stateCode?: string;
+      stateName?: string;
+      supportEmail?: string;
+    };
   }
 
   const isGuestUser = userTier === 'guest' || !currentUser;
@@ -338,7 +345,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         billingStatus: serverBillingStatus,
         activeSubscription: summary?.activeSubscription || null,
         pendingSubscription: summary?.pendingSubscription || null,
-        subscriptionLifecycle: summary?.subscriptionLifecycle || null
+        subscriptionLifecycle: summary?.subscriptionLifecycle || null,
+        supplierIdentity: summary?.supplierIdentity
       });
     } catch (err) {
       console.warn('[SettingsModal] fetchUsage error:', err);
@@ -350,6 +358,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [isGuestUser, onEntitlementsUpdated, userTier]);
 
   const [invoices, setInvoices] = useState<any[]>([]);
+  const [creditNotes, setCreditNotes] = useState<any[]>([]);
   const [isLoadingInvoices, setIsLoadingInvoices] = useState(false);
   const [invoicesError, setInvoicesError] = useState<string | null>(null);
   const [isCancellingSub, setIsCancellingSub] = useState(false);
@@ -358,6 +367,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isCancellingPending, setIsCancellingPending] = useState(false);
   const [reconcileMessage, setReconcileMessage] = useState<string | null>(null);
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
+  const [downloadingCnNum, setDownloadingCnNum] = useState<string | null>(null);
+  const [taxJurisdictions, setTaxJurisdictions] = useState<Array<{ code: string; name: string }>>([]);
+  const [taxStateCode, setTaxStateCode] = useState<string>('');
+  const [taxLegalName, setTaxLegalName] = useState<string>('');
+  const [taxGstin, setTaxGstin] = useState<string>('');
+  const [taxAddress, setTaxAddress] = useState<string>('');
+  const [taxProfileSaving, setTaxProfileSaving] = useState<boolean>(false);
+  const [taxProfileMsg, setTaxProfileMsg] = useState<string | null>(null);
+  const [taxProfileError, setTaxProfileError] = useState<string | null>(null);
   const returnReconciledSubRef = useRef<string | null>(null);
 
   const fetchInvoices = useCallback(async () => {
@@ -365,13 +383,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsLoadingInvoices(true);
     setInvoicesError(null);
     try {
-      const res = await authenticatedApiFetch('/api/billing/invoices');
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({} as Record<string, any>));
+      const [invRes, cnRes] = await Promise.all([
+        authenticatedApiFetch('/api/billing/invoices'),
+        authenticatedApiFetch('/api/billing/credit-notes').catch(() => null)
+      ]);
+      if (!invRes.ok) {
+        const errData = await invRes.json().catch(() => ({} as Record<string, any>));
         throw new Error(errData?.error || 'Unable to load billing history right now.');
       }
-      const data = await res.json();
-      setInvoices(Array.isArray(data?.invoices) ? data.invoices : []);
+      const invData = await invRes.json();
+      setInvoices(Array.isArray(invData?.invoices) ? invData.invoices : []);
+      if (cnRes && cnRes.ok) {
+        const cnData = await cnRes.json().catch(() => ({} as Record<string, any>));
+        setCreditNotes(Array.isArray(cnData?.creditNotes) ? cnData.creditNotes : []);
+      }
     } catch (err: any) {
       setInvoices([]);
       setInvoicesError(err?.message || 'Unable to load billing history right now.');
@@ -379,6 +404,91 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setIsLoadingInvoices(false);
     }
   }, [isGuestUser]);
+
+  const fetchTaxProfile = useCallback(async () => {
+    if (isGuestUser) {
+      setTaxStateCode('');
+      setTaxLegalName('');
+      setTaxGstin('');
+      setTaxAddress('');
+      return;
+    }
+    try {
+      const res = await authenticatedApiFetch('/api/billing/tax-profile');
+      if (!res.ok) {
+        setTaxStateCode('');
+        setTaxLegalName('');
+        setTaxGstin('');
+        setTaxAddress('');
+        return;
+      }
+      const data = await res.json().catch(() => ({} as Record<string, any>));
+      if (Array.isArray(data?.jurisdictions)) {
+        setTaxJurisdictions(data.jurisdictions);
+      }
+      if (data?.profile) {
+        setTaxStateCode(String(data.profile.stateCode || ''));
+        setTaxLegalName(String(data.profile.legalName || ''));
+        setTaxGstin(String(data.profile.customerGstin || ''));
+        setTaxAddress(String(data.profile.addressLine1 || ''));
+      } else {
+        setTaxStateCode('');
+        setTaxLegalName('');
+        setTaxGstin('');
+        setTaxAddress('');
+      }
+    } catch {
+      setTaxStateCode('');
+      setTaxLegalName('');
+      setTaxGstin('');
+      setTaxAddress('');
+    }
+  }, [isGuestUser]);
+
+  const handleSaveTaxProfile = async () => {
+    setTaxProfileSaving(true);
+    setTaxProfileMsg(null);
+    setTaxProfileError(null);
+
+    const trimmedGstin = taxGstin.trim().toUpperCase();
+    if (trimmedGstin) {
+      if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(trimmedGstin) || trimmedGstin.startsWith('25')) {
+        setTaxProfileError('Enter a valid 15-character Indian GSTIN (or clear the field).');
+        setTaxProfileSaving(false);
+        return;
+      }
+      if (taxStateCode && trimmedGstin.slice(0, 2) !== taxStateCode) {
+        setTaxProfileError(`GSTIN state prefix (${trimmedGstin.slice(0, 2)}) must match selected State (${taxStateCode}).`);
+        setTaxProfileSaving(false);
+        return;
+      }
+    }
+
+    try {
+      const res = await authenticatedApiFetch('/api/billing/tax-profile', {
+        method: 'PUT',
+        body: JSON.stringify({
+          stateCode: taxStateCode || undefined,
+          country: 'IN',
+          legalName: taxLegalName.trim() || undefined,
+          customerGstin: trimmedGstin || undefined,
+          addressLine1: taxAddress.trim() || undefined
+        })
+      });
+      const data = await res.json().catch(() => ({} as Record<string, any>));
+      if (!res.ok) {
+        setTaxProfileError(data?.message || data?.error || 'Failed to save GST billing profile.');
+        return;
+      }
+      if (data?.profile?.stateCode) setTaxStateCode(String(data.profile.stateCode));
+      if (data?.profile?.customerGstin !== undefined) setTaxGstin(String(data.profile.customerGstin || ''));
+      setTaxProfileMsg('GST billing profile saved.');
+    } catch (err: any) {
+      setTaxProfileError(err?.message || 'Unable to save GST billing profile.');
+    } finally {
+      setTaxProfileSaving(false);
+    }
+  };
 
   const handleReconcilePending = useCallback(async (subscriptionId: string) => {
     setIsReconcilingPending(true);
@@ -427,7 +537,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invoiceNumber)}/download`);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({} as any));
-        alert(errData.error || 'Failed to download invoice.');
+        alert(errData.error || 'Failed to load A4 invoice.');
         return;
       }
       const html = await res.text();
@@ -435,15 +545,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `AIRA-GST-Invoice-${invoiceNumber}.html`;
+      a.download = `AIRA-GST-Invoice-${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(err?.message || 'Unable to download invoice.');
+      alert(err?.message || 'Unable to open A4 invoice.');
     } finally {
       setDownloadingInvoiceNum(null);
+    }
+  };
+
+  const handleDownloadCreditNote = async (creditNoteNumber: string) => {
+    setDownloadingCnNum(creditNoteNumber);
+    try {
+      const res = await authenticatedApiFetch(`/api/billing/credit-notes/${encodeURIComponent(creditNoteNumber)}/download`);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({} as any));
+        alert(errData.error || 'Failed to load A4 credit note.');
+        return;
+      }
+      const html = await res.text();
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `AIRA-GST-Credit-Note-${creditNoteNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert(err?.message || 'Unable to open A4 credit note.');
+    } finally {
+      setDownloadingCnNum(null);
     }
   };
 
@@ -477,6 +613,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (isOpen) {
       void fetchUsage();
       void fetchInvoices();
+      void fetchTaxProfile();
       if (!isGuestUser) {
         try {
           if (typeof sessionStorage !== 'undefined') {
@@ -1014,11 +1151,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           Billing: <span className="text-claude-text-light dark:text-white font-medium">
                             {activePlanId === 'guest'
                               ? 'Guest Trial (No Billing Active)'
-                              : (!usageData?.billingStatus || usageData.billingStatus === 'sandbox_rehearsal')
+                              : (!usageData?.billingStatus || usageData.billingStatus === 'sandbox_rehearsal' || usageData.billingStatus === 'sandbox')
                                 ? 'Sandbox Mode (Isolated)'
-                                : usageData.billingStatus === 'live'
-                                  ? 'Live Billing Active'
-                                  : usageData.billingStatus.replace(/^Billing:\s*/i, '')}
+                                : (usageData.billingStatus === 'checkout_disabled')
+                                  ? 'Checkout Unavailable'
+                                  : (usageData.billingStatus === 'active' || usageData.billingStatus === 'live')
+                                    ? 'Live Billing Active'
+                                    : usageData.billingStatus.replace(/^Billing:\s*/i, '')}
                           </span>
                         </span>
                       </div>
@@ -1452,15 +1591,118 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     );
                   })()}
 
-                  {/* Tax-Compliant Invoices & Billing History */}
+                  {/* Billing & GST Tax Profile */}
+                  {!isGuestUser && (
+                    <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/20 space-y-3 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <h4 className="font-semibold text-claude-text-light dark:text-white">
+                            Billing &amp; Indian GST Tax Profile
+                          </h4>
+                          <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
+                            Determines Place of Supply (CGST/SGST vs IGST) and optional B2B GSTIN on future invoices.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveTaxProfile()}
+                          disabled={taxProfileSaving}
+                          className="px-3 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-semibold transition-colors disabled:opacity-50 shrink-0"
+                        >
+                          {taxProfileSaving ? 'Saving…' : 'Save Tax Profile'}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="settings-gst-state" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                            State / Union Territory *
+                          </label>
+                          <select
+                            id="settings-gst-state"
+                            value={taxStateCode}
+                            onChange={(e) => {
+                              setTaxStateCode(e.target.value);
+                              setTaxProfileError(null);
+                              setTaxProfileMsg(null);
+                            }}
+                            className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
+                          >
+                            <option value="">Select State / UT…</option>
+                            {taxJurisdictions.map((j) => (
+                              <option key={j.code} value={j.code}>
+                                {j.code} - {j.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="settings-gst-gstin" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                            B2B Recipient GSTIN (Optional)
+                          </label>
+                          <input
+                            id="settings-gst-gstin"
+                            type="text"
+                            maxLength={15}
+                            placeholder="e.g. 09AAMCV4678C1ZV"
+                            value={taxGstin}
+                            onChange={(e) => {
+                              const val = e.target.value.toUpperCase();
+                              setTaxGstin(val);
+                              setTaxProfileError(null);
+                              setTaxProfileMsg(null);
+                              if (val.length >= 2 && /^[0-9]{2}/.test(val) && val.slice(0, 2) !== '25') {
+                                const match = taxJurisdictions.find((j) => j.code === val.slice(0, 2));
+                                if (match) setTaxStateCode(match.code);
+                              }
+                            }}
+                            className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs font-mono text-claude-text-light dark:text-white"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="settings-gst-legal-name" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                            Legal / Business Name (Optional)
+                          </label>
+                          <input
+                            id="settings-gst-legal-name"
+                            type="text"
+                            placeholder="Subscriber or registered business name"
+                            value={taxLegalName}
+                            onChange={(e) => setTaxLegalName(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="settings-gst-address" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                            Billing Address (Optional)
+                          </label>
+                          <input
+                            id="settings-gst-address"
+                            type="text"
+                            placeholder="Street, City, PIN"
+                            value={taxAddress}
+                            onChange={(e) => setTaxAddress(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
+                          />
+                        </div>
+                      </div>
+                      {taxProfileError && (
+                        <p className="text-[11px] text-red-600 dark:text-red-400 font-medium">{taxProfileError}</p>
+                      )}
+                      {taxProfileMsg && (
+                        <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">{taxProfileMsg}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tax-Compliant Invoices, Credit Notes & Billing History */}
                   {!isGuestUser && (
                     <div className="space-y-3 pt-2">
                       <div className="flex items-center justify-between">
                         <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
-                          Billing History & GST Invoices
+                          Billing History &amp; Printable A4 GST Documents
                         </h4>
                         <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
-                          SAC 998431 · 18% GST Compliant
+                          SAC 998315 (Provisional) · Uttar Pradesh (09)
                         </span>
                       </div>
 
@@ -1480,10 +1722,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             Retry
                           </button>
                         </div>
-                      ) : invoices.length === 0 ? (
+                      ) : (invoices.length === 0 && creditNotes.length === 0) ? (
                         <div className="p-4 rounded-xl border border-dashed border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark text-center space-y-1">
                           <p className="font-medium">No billing history or invoices yet.</p>
-                          <p className="text-[10px]">When you purchase a subscription or credits, tax-compliant invoices will appear here.</p>
+                          <p className="text-[10px]">When you purchase a subscription or credits, GST invoices will appear here.</p>
                         </div>
                       ) : (
                         <div className="space-y-2">
@@ -1493,14 +1735,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               className="p-3 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/30 flex items-center justify-between gap-3 text-xs"
                             >
                               <div className="space-y-0.5 min-w-0">
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                   <span className="font-mono font-bold text-claude-text-light dark:text-white">{inv.invoiceNumber}</span>
                                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-medium">
                                     {inv.status}
                                   </span>
+                                  {inv.isSandbox && (
+                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-medium">
+                                      Sandbox
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
-                                  {inv.plan} · {inv.date} · SAC {inv.sacCode}
+                                  {inv.plan} · {inv.date} · SAC {inv.sacCode} · PoS {inv.placeOfSupply || 'UNKNOWN'}
                                 </div>
                               </div>
                               <div className="flex items-center gap-3 shrink-0">
@@ -1517,19 +1764,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                     type="button"
                                     onClick={() => void handleDownloadInvoice(inv.invoiceNumber)}
                                     disabled={downloadingInvoiceNum === inv.invoiceNumber}
-                                    aria-label={`Download GST Invoice ${inv.invoiceNumber}`}
+                                    aria-label={`View or Print A4 Invoice ${inv.invoiceNumber}`}
                                     className="px-2.5 py-1.5 rounded-lg border border-claude-border-light dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/10 text-[11px] font-semibold text-claude-text-light dark:text-white inline-flex items-center gap-1 transition-colors disabled:opacity-50"
                                   >
                                     <Download className="w-3.5 h-3.5" />
-                                    <span>{downloadingInvoiceNum === inv.invoiceNumber ? 'Saving…' : 'Invoice'}</span>
+                                    <span>{downloadingInvoiceNum === inv.invoiceNumber ? 'Opening…' : 'View / Print A4'}</span>
                                   </button>
                                 )}
                               </div>
                             </div>
                           ))}
-                          <p className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark text-right">
-                            Supplier: Virexa AI Ventures Private Limited
-                          </p>
+
+                          {creditNotes.map((cn: any, idx: number) => (
+                            <div
+                              key={cn.creditNoteNumber || idx}
+                              className="p-3 rounded-xl border border-amber-500/25 bg-amber-500/5 flex items-center justify-between gap-3 text-xs"
+                            >
+                              <div className="space-y-0.5 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-mono font-bold text-claude-text-light dark:text-white">{cn.creditNoteNumber}</span>
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 font-medium">
+                                    Credit Note · {cn.status}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
+                                  Against {cn.originalInvoiceNumber} · {cn.date}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3 shrink-0">
+                                <div className="text-right font-mono font-bold text-claude-text-light dark:text-white">
+                                  -{cn.currency === 'INR' ? '₹' : '$'}{Number(cn.refundAmount || 0).toFixed(2)}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDownloadCreditNote(cn.creditNoteNumber)}
+                                  disabled={downloadingCnNum === cn.creditNoteNumber}
+                                  aria-label={`View or Print A4 Credit Note ${cn.creditNoteNumber}`}
+                                  className="px-2.5 py-1.5 rounded-lg border border-claude-border-light dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/10 text-[11px] font-semibold text-claude-text-light dark:text-white inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                  <span>{downloadingCnNum === cn.creditNoteNumber ? 'Opening…' : 'View / Print A4'}</span>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+
+                          <div className="pt-2 border-t border-claude-border-light/40 dark:border-white/5 flex flex-col sm:flex-row sm:items-center justify-between text-[10px] text-claude-muted-light dark:text-claude-muted-dark gap-1">
+                            <span>
+                              Computer-generated electronic document issued under CGST Rules (Rule 46 / Rule 53). Informational record; subject to formal electronic authentication sign-off (U2).
+                            </span>
+                            <span>
+                              Supplier: {usageData?.supplierIdentity?.legalName || 'VIREXA AI VENTURES PRIVATE LIMITED'} · Uttar Pradesh ({usageData?.supplierIdentity?.stateCode || '09'}) · {usageData?.supplierIdentity?.supportEmail || 'virexaiventures@gmail.com'}
+                            </span>
+                          </div>
                         </div>
                       )}
                     </div>

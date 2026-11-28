@@ -466,9 +466,9 @@ describe('F1 — Plus/Pro Billing Integration and Subscription Readiness', () =>
         assert.ok(gateIds.includes('GATE_04_GATEWAY_KEYS_PROTECTION'));
         assert.ok(gateIds.includes('GATE_05_WEBHOOK_VERIFICATION'));
         assert.ok(gateIds.includes('GATE_06_BUSINESS_IDENTITY'));
-        assert.ok(gateIds.includes('GATE_08_GST_TAX_COMPLIANCE'));
+        assert.ok(gateIds.includes('GATE_08_GST_COMPLIANCE'));
         assert.ok(gateIds.includes('GATE_09_INVOICE_COMPLIANCE'));
-        assert.ok(gateIds.includes('GATE_14_EMERGENCY_KILL_SWITCH'));
+        assert.ok(gateIds.includes('GATE_14_EMERGENCY_ROLLBACK'));
       } finally {
         if (originalRazorpay !== undefined) process.env.RAZORPAY_WEBHOOK_SECRET = originalRazorpay;
         else delete process.env.RAZORPAY_WEBHOOK_SECRET;

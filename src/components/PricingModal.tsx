@@ -356,9 +356,32 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     currentPeriodEnd: number | null;
   } | null>(null);
   const [checkoutAvailable, setCheckoutAvailable] = useState<boolean>(false);
+  const [internationalUsdEnabled, setInternationalUsdEnabled] = useState<boolean>(false);
   const [_billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [gstJurisdictions, setGstJurisdictions] = useState<Array<{ code: string; name: string }>>([
+    { code: '09', name: 'Uttar Pradesh' },
+    { code: '07', name: 'Delhi' },
+    { code: '27', name: 'Maharashtra' },
+    { code: '29', name: 'Karnataka' },
+    { code: '33', name: 'Tamil Nadu' },
+    { code: '36', name: 'Telangana' },
+    { code: '24', name: 'Gujarat' },
+    { code: '19', name: 'West Bengal' }
+  ]);
+  const [taxConfigSummary, setTaxConfigSummary] = useState<{
+    supplierLegalName?: string;
+    sacCode?: string;
+    isProvisionalFixture?: boolean;
+  } | null>(null);
+  const [billingStateCode, setBillingStateCode] = useState<string>('');
+  const [billingStateError, setBillingStateError] = useState<string | null>(null);
+  const [showB2bGstFields, setShowB2bGstFields] = useState<boolean>(false);
+  const [billingLegalName, setBillingLegalName] = useState<string>('');
+  const [billingGstin, setBillingGstin] = useState<string>('');
+  const [billingGstinError, setBillingGstinError] = useState<string | null>(null);
+  const [billingAddress, setBillingAddress] = useState<string>('');
   const [watchdogRecoveryUrl, setWatchdogRecoveryUrl] = useState<string | null>(null);
 
   // Synchronous submission lock to prevent rapid same-tick double-clicks
@@ -475,6 +498,18 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         if (typeof data.checkoutAvailable === 'boolean') {
           setCheckoutAvailable(data.checkoutAvailable);
         }
+        if (typeof data.internationalUsdEnabled === 'boolean') {
+          setInternationalUsdEnabled(data.internationalUsdEnabled);
+          if (!data.internationalUsdEnabled) {
+            setCurrency('INR');
+          }
+        }
+        if (Array.isArray(data.gstJurisdictions) && data.gstJurisdictions.length > 0) {
+          setGstJurisdictions(data.gstJurisdictions);
+        }
+        if (data.taxConfigSummary) {
+          setTaxConfigSummary(data.taxConfigSummary);
+        }
         if (data.billingStatus) {
           setBillingStatus(data.billingStatus);
         }
@@ -482,6 +517,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
       .catch(() => {
         if (!active) return;
         setCheckoutAvailable(false);
+        setInternationalUsdEnabled(false);
+        setCurrency('INR');
       });
 
     authenticatedApiFetch('/api/billing/summary')
@@ -506,6 +543,22 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         } else {
           activePendingSubIdRef.current = null;
           setPendingCheckout(null);
+        }
+        if (summary?.taxProfile) {
+          const tp = summary.taxProfile;
+          if (tp.stateCode) setBillingStateCode(String(tp.stateCode));
+          if (tp.legalName) setBillingLegalName(String(tp.legalName));
+          if (tp.customerGstin) {
+            setBillingGstin(String(tp.customerGstin));
+            setShowB2bGstFields(true);
+          }
+          if (tp.addressLine1) setBillingAddress(String(tp.addressLine1));
+        } else {
+          setBillingStateCode('');
+          setBillingLegalName('');
+          setBillingGstin('');
+          setBillingAddress('');
+          setShowB2bGstFields(false);
         }
       })
       .catch(() => {});
@@ -658,6 +711,43 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     cleanupTimers();
 
     const targetGateway = currency === 'USD' ? 'razorpay' : gateway;
+    setBillingStateError(null);
+    setBillingGstinError(null);
+
+    if (currency === 'INR' && !onSelectPlan) {
+      if (!billingStateCode) {
+        const msg = 'Please select your Billing State / Union Territory for Indian GST Place of Supply determination.';
+        setBillingStateError(msg);
+        setCheckoutNotice(msg);
+        isSubmittingRef.current = false;
+        setCheckoutState('IDLE');
+        setActivePlanTier(null);
+        return;
+      }
+      if (showB2bGstFields) {
+        const trimmedGstin = billingGstin.trim().toUpperCase();
+        if (trimmedGstin) {
+          if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(trimmedGstin) || trimmedGstin.startsWith('25')) {
+            const msg = 'Enter a valid 15-character Indian GSTIN (or clear the field for B2C billing).';
+            setBillingGstinError(msg);
+            setCheckoutNotice(msg);
+            isSubmittingRef.current = false;
+            setCheckoutState('IDLE');
+            setActivePlanTier(null);
+            return;
+          }
+          if (billingStateCode && trimmedGstin.slice(0, 2) !== billingStateCode) {
+            const msg = `GSTIN state prefix (${trimmedGstin.slice(0, 2)}) must match selected Billing State (${billingStateCode}).`;
+            setBillingGstinError(msg);
+            setCheckoutNotice(msg);
+            isSubmittingRef.current = false;
+            setCheckoutState('IDLE');
+            setActivePlanTier(null);
+            return;
+          }
+        }
+      }
+    }
 
     // 2. Client-side phone number validation for Cashfree e-mandate
     if (targetGateway === 'cashfree') {
@@ -672,7 +762,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         setPhoneError(errorMsg);
         setCheckoutNotice(errorMsg);
         isSubmittingRef.current = false;
-        setCheckoutState('DEFINITIVE_FAILURE');
+        setCheckoutState('IDLE');
         setActivePlanTier(null);
         return;
       }
@@ -706,6 +796,21 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             currency,
             gateway: targetGateway,
             customerPhone: customerPhone.trim() || undefined,
+            ...(currency === 'INR' && billingStateCode
+              ? {
+                  billingProfile: {
+                    stateCode: billingStateCode,
+                    country: 'IN',
+                    ...(showB2bGstFields
+                      ? {
+                          legalName: billingLegalName.trim() || undefined,
+                          customerGstin: billingGstin.trim().toUpperCase() || undefined,
+                          addressLine1: billingAddress.trim() || undefined
+                        }
+                      : {})
+                  }
+                }
+              : {}),
             idempotencyKey: clientOpId
           })
         });
@@ -728,8 +833,15 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         setActivePlanTier(null);
 
         if (res.status === 400 && data.error === 'VALIDATION_ERROR') {
-          setPhoneError(data.message || 'A valid 10-digit mobile number is required.');
-          setCheckoutNotice(data.message || 'Validation error: please check your mobile phone number.');
+          const msg = data.message || 'Validation error: please check your submission details.';
+          if (msg.toLowerCase().includes('gstin')) {
+            setBillingGstinError(msg);
+          } else if (msg.toLowerCase().includes('state') || msg.toLowerCase().includes('place of supply')) {
+            setBillingStateError(msg);
+          } else {
+            setPhoneError(msg);
+          }
+          setCheckoutNotice(msg);
         } else if (res.status === 401) {
           setCheckoutNotice('Authentication required. Please sign in to upgrade.');
         } else if (res.status === 403) {
@@ -1133,18 +1245,21 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               >
                 ₹ INR (India)
               </button>
-              <button
-                type="button"
-                disabled={isCheckoutBusy}
-                onClick={() => setCurrency('USD')}
-                aria-pressed={currency === 'USD'}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                $ USD (Global)
-              </button>
+              {internationalUsdEnabled && (
+                <button
+                  type="button"
+                  disabled={isCheckoutBusy}
+                  onClick={() => setCurrency('USD')}
+                  aria-pressed={currency === 'USD'}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  $ USD (Global)
+                </button>
+              )}
             </div>
 
             <button
+              type="button"
               onClick={handleModalClose}
               className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-white/5 transition-colors"
               aria-label="Close modal"
@@ -1177,21 +1292,27 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   disabled={downloadingInvoiceNum === activatedSummary.invoiceNumber}
                   onClick={async () => {
                     const invNum = activatedSummary.invoiceNumber!;
+                    const safeFilename = `AIRA-GST-Invoice-${invNum.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
                     setDownloadingInvoiceNum(invNum);
                     try {
                       const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invNum)}/download`);
-                      if (res.ok) {
-                        const html = await res.text();
-                        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = `AIRA-GST-Invoice-${invNum}.html`;
-                        document.body.appendChild(a);
-                        a.click();
-                        a.remove();
-                        URL.revokeObjectURL(url);
+                      if (!res.ok) {
+                        const errData = await res.json().catch(() => ({}));
+                        alert(errData.error || 'Failed to load A4 invoice.');
+                        return;
                       }
+                      const html = await res.text();
+                      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = safeFilename;
+                      document.body.appendChild(a);
+                      a.click();
+                      a.remove();
+                      URL.revokeObjectURL(url);
+                    } catch (err: any) {
+                      alert(err?.message || 'Unable to open A4 invoice.');
                     } finally {
                       setDownloadingInvoiceNum(null);
                     }
@@ -1199,8 +1320,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/40 text-white font-semibold text-[11px] whitespace-nowrap transition-colors disabled:opacity-50"
                 >
                   {downloadingInvoiceNum === activatedSummary.invoiceNumber
-                    ? 'Downloading…'
-                    : `Download GST Invoice (${activatedSummary.invoiceNumber})`}
+                    ? 'Opening…'
+                    : `View / Print A4 Invoice (${activatedSummary.invoiceNumber})`}
                 </button>
               )}
               <button
@@ -1296,6 +1417,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   type="button"
                   disabled={isCheckoutBusy}
                   onClick={() => setGateway('razorpay')}
+                  aria-pressed={gateway === 'razorpay'}
                   className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${gateway === 'razorpay' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   Razorpay
@@ -1304,6 +1426,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   type="button"
                   disabled={isCheckoutBusy}
                   onClick={() => setGateway('cashfree')}
+                  aria-pressed={gateway === 'cashfree'}
                   className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${gateway === 'cashfree' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   Cashfree
@@ -1345,6 +1468,117 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             <p id="cashfree-phone-error" className="text-[11px] text-red-400 font-medium">
               {phoneError}
             </p>
+          </div>
+        )}
+
+        {/* Indian GST Place of Supply & Optional B2B GSTIN */}
+        {currency === 'INR' && (
+          <div className="px-6 md:px-8 pt-3 space-y-2 text-xs">
+            <div className="rounded-xl border border-white/10 bg-stone-950/60 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-1">
+                <label htmlFor="gst-billing-state" className="text-stone-300 font-medium whitespace-nowrap">
+                  Billing State / UT * (Place of Supply):
+                </label>
+                <select
+                  id="gst-billing-state"
+                  disabled={isCheckoutBusy}
+                  value={billingStateCode}
+                  onChange={(e) => {
+                    setBillingStateCode(e.target.value);
+                    if (billingStateError) setBillingStateError(null);
+                    if (checkoutState === 'DEFINITIVE_FAILURE') {
+                      setCheckoutState('IDLE');
+                      setCheckoutNotice(null);
+                    }
+                  }}
+                  aria-required="true"
+                  aria-invalid={!!billingStateError}
+                  aria-describedby={billingStateError ? 'gst-billing-state-error' : undefined}
+                  className={`w-full sm:w-64 bg-stone-900 border rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-claude-terracotta ${billingStateError ? 'border-red-500/60' : 'border-white/15'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <option value="">Select State / Union Territory…</option>
+                  {gstJurisdictions.map((j) => (
+                    <option key={j.code} value={j.code}>
+                      {j.code} - {j.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowB2bGstFields((v) => !v)}
+                className="text-[11px] font-semibold text-orange-300 hover:text-orange-200 underline text-left sm:text-right whitespace-nowrap"
+              >
+                {showB2bGstFields ? 'Hide B2B GSTIN Details' : 'Purchasing for a business? Add GSTIN (optional)'}
+              </button>
+            </div>
+
+            {billingStateError && (
+              <p id="gst-billing-state-error" className="text-[11px] text-red-400 font-medium">
+                {billingStateError}
+              </p>
+            )}
+
+            {showB2bGstFields && (
+              <div className="rounded-xl border border-white/10 bg-stone-950/60 p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div>
+                  <label htmlFor="gst-b2b-name" className="block text-[11px] text-stone-400 mb-1">
+                    Business / Legal Name
+                  </label>
+                  <input
+                    id="gst-b2b-name"
+                    type="text"
+                    disabled={isCheckoutBusy}
+                    placeholder="Registered company or full name"
+                    value={billingLegalName}
+                    onChange={(e) => setBillingLegalName(e.target.value)}
+                    className="w-full bg-stone-900 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="gst-b2b-gstin" className="block text-[11px] text-stone-400 mb-1">
+                    15-Char Recipient GSTIN (Optional)
+                  </label>
+                  <input
+                    id="gst-b2b-gstin"
+                    type="text"
+                    maxLength={15}
+                    disabled={isCheckoutBusy}
+                    placeholder="e.g. 09AAMCV4678C1ZV"
+                    value={billingGstin}
+                    aria-invalid={!!billingGstinError}
+                    aria-describedby={billingGstinError ? 'gst-b2b-gstin-error' : undefined}
+                    onChange={(e) => {
+                      const val = e.target.value.toUpperCase();
+                      setBillingGstin(val);
+                      if (billingGstinError) setBillingGstinError(null);
+                      if (val.length >= 2 && /^[0-9]{2}/.test(val) && val.slice(0, 2) !== '25') {
+                        const match = gstJurisdictions.find((j) => j.code === val.slice(0, 2));
+                        if (match) setBillingStateCode(match.code);
+                      }
+                    }}
+                    className={`w-full bg-stone-900 border rounded-lg px-2.5 py-1.5 text-xs font-mono text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta ${billingGstinError ? 'border-red-500/60' : 'border-white/15'}`}
+                  />
+                  {billingGstinError && (
+                    <p id="gst-b2b-gstin-error" className="text-[10px] text-red-400 mt-1">{billingGstinError}</p>
+                  )}
+                </div>
+                <div>
+                  <label htmlFor="gst-b2b-address" className="block text-[11px] text-stone-400 mb-1">
+                    Billing Address (Optional)
+                  </label>
+                  <input
+                    id="gst-b2b-address"
+                    type="text"
+                    disabled={isCheckoutBusy}
+                    placeholder="Street, City, PIN"
+                    value={billingAddress}
+                    onChange={(e) => setBillingAddress(e.target.value)}
+                    className="w-full bg-stone-900 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1417,6 +1651,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             </div>
 
             <button
+              type="button"
               disabled
               className="mt-8 w-full py-2.5 px-4 rounded-xl bg-stone-800 text-stone-400 text-xs font-semibold cursor-not-allowed"
             >
@@ -1458,6 +1693,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
             {currentPlan === 'plus' ? (
               <button
+                type="button"
                 disabled
                 className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
               >
@@ -1466,6 +1702,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             ) : !checkoutAvailable ? (
               <div className="mt-8 space-y-1.5">
                 <button
+                  type="button"
                   disabled
                   className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
                 >
@@ -1520,6 +1757,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
             {currentPlan === 'pro' ? (
               <button
+                type="button"
                 disabled
                 className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
               >
@@ -1528,6 +1766,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             ) : !checkoutAvailable ? (
               <div className="mt-8 space-y-1.5">
                 <button
+                  type="button"
                   disabled
                   className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
                 >
@@ -1556,7 +1795,10 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             <Shield className="w-4 h-4 text-emerald-400" />
             <span>Secure payment gateway encryption. Cancel anytime at period end with zero penalty.</span>
           </div>
-          <div>Virexa AI Ventures Private Limited · SAC 998431 Tax Compliant</div>
+          <div>
+            {taxConfigSummary?.supplierLegalName || 'VIREXA AI VENTURES PRIVATE LIMITED'} · Uttar Pradesh (09) · SAC {taxConfigSummary?.sacCode || '998315'}
+            {taxConfigSummary?.isProvisionalFixture === false ? ' · GST Compliant' : ' · GST Provisional Fixture'}
+          </div>
         </div>
       </motion.div>
     </div>

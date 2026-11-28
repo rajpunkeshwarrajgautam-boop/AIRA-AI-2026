@@ -1128,7 +1128,10 @@ describe('Immediate First-Payment Subscription Activation Suite (20 Scenarios, R
     assert.ok(pricingSrc.includes('Immediate Activation'), 'PricingModal must disclose immediate Cycle 1 activation');
     assert.ok(pricingSrc.includes('cashfree.subscriptionsCheckout('), 'Cashfree SDK subscriptionsCheckout must remain intact');
     assert.ok(pricingSrc.includes("redirectTarget: '_self'"), 'Cashfree redirectTarget _self must remain intact');
-    assert.ok(pricingSrc.includes('Download GST Invoice'), 'PricingModal confirmation banner must provide GST invoice download CTA');
+    assert.ok(
+      pricingSrc.includes('View / Print A4 Invoice') || pricingSrc.includes('Download GST Invoice'),
+      'PricingModal confirmation banner must provide printable A4 GST invoice CTA'
+    );
     assert.ok(appSrc.includes('aira_cashfree_return_sub'), 'App must persist returned sub_id before stripping URL params');
     assert.ok(settingsSrc.includes('aira_cashfree_return_sub'), 'SettingsModal must auto-reconcile returned sub_id on open');
 

@@ -97,11 +97,12 @@ export const EXPECTED_MIGRATIONS = Object.freeze([
   '032_reconcile_workflow_run_artifacts.ts',
   '033_billing_invoice_sequences.ts',
   '034_unique_active_subscription_per_customer.ts',
-  '035_subscription_cancellation_and_invoice_outbox.ts'
+  '035_subscription_cancellation_and_invoice_outbox.ts',
+  '036_gst_invoice_compliance_snapshots.ts'
 ]);
 
 // ============================================================================
-// 2. Authoritative Table Catalog (52 Total Tables: 50 Application + 2 Knex)
+// 2. Authoritative Table Catalog (53 Total Tables: 51 Application + 2 Knex)
 // ============================================================================
 export const EXPECTED_TABLES = Object.freeze([
   'agents',
@@ -152,6 +153,7 @@ export const EXPECTED_TABLES = Object.freeze([
   'durable_browser_sessions',
   'billing_invoices',
   'billing_credit_notes',
+  'billing_document_sequences',
   'subscription_cancellation_outbox',
   'billing_invoice_reconciliation_outbox',
   'knex_migrations',
@@ -170,7 +172,10 @@ export const REQUIRED_CORE_TABLES = Object.freeze([
   'conversation_messages',
   'conversation_search_documents',
   'capacity_permits',
-  'capacity_rate_log'
+  'capacity_rate_log',
+  'billing_invoices',
+  'billing_credit_notes',
+  'billing_document_sequences'
 ]);
 
 // Core tool_calls columns required by packages/db/src/scripts/verify-deploy.ts
@@ -858,7 +863,7 @@ export async function runDisposableRestoreRehearsal(
   console.log(`  - Tables Audited:      ${report.totalTablesAudited} / ${EXPECTED_TABLES.length} (PASS)`);
   console.log(`  - Foreign Key Parity:  PASS (${report.foreignKeysVerified} definitions in AST)`);
   console.log(`  - Index Parity:        PASS (${report.indexesVerified} definitions in AST)`);
-  console.log(`  - Deploy Verification: PASS (Core Tables: 11/11, Tool Call Columns: 11/11)`);
+  console.log(`  - Deploy Verification: PASS (Core Tables: ${REQUIRED_CORE_TABLES.length}/${REQUIRED_CORE_TABLES.length}, Tool Call Columns: 11/11)`);
   console.log(`  - AES-256-GCM AEAD:    PASS (PBKDF2 100k, 16B Salt, 12B IV, 16B Tag Verified)`);
   console.log(`  - Live Rehearsal Env:  PostgreSQL 16 CI Container (.github/workflows/postgres-certification.yml)`);
   console.log(`  - Fabricated Metrics:  NONE (0 synthetic buffers, 0 simulated row counts)`);

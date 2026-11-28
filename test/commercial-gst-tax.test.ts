@@ -1,87 +1,262 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  taxDeterminationService,
+  validateGstin,
+  getIndianFinancialYear,
+  calculateProportionalRefundTax,
+  INDIAN_GST_JURISDICTIONS,
+  DEFAULT_SUPPLIER_LEGAL_NAME,
+  DEFAULT_SUPPLIER_STATE_CODE,
+  DEFAULT_PROVISIONAL_SAC_CODE
+} from '../apps/api/src/billing/tax-determination.js';
 
-export interface GstTaxCalculation {
-  totalAmountPaise: number;
-  totalAmountRupees: number;
-  taxableBasePaise: number;
-  taxableBaseRupees: number;
-  gstAmountPaise: number;
-  gstAmountRupees: number;
-  cgstPaise: number;
-  sgstPaise: number;
-  igstPaise: number;
-  gstRatePercent: number;
-}
-
-export function calculateGstInclusive(totalAmountRupees: number, isInterstate = false, gstRatePercent = 18): GstTaxCalculation {
-  const totalAmountPaise = Math.round(totalAmountRupees * 100);
-  const rateFactor = 1 + (gstRatePercent / 100);
-  
-  // Taxable base in paise (rounded to nearest integer)
-  const taxableBasePaise = Math.round(totalAmountPaise / rateFactor);
-  const gstAmountPaise = totalAmountPaise - taxableBasePaise;
-  
-  let cgstPaise = 0;
-  let sgstPaise = 0;
-  let igstPaise = 0;
-
-  if (isInterstate) {
-    igstPaise = gstAmountPaise;
-  } else {
-    cgstPaise = Math.round(gstAmountPaise / 2);
-    sgstPaise = gstAmountPaise - cgstPaise;
-  }
-
-  return {
-    totalAmountPaise,
-    totalAmountRupees: Number((totalAmountPaise / 100).toFixed(2)),
-    taxableBasePaise,
-    taxableBaseRupees: Number((taxableBasePaise / 100).toFixed(2)),
-    gstAmountPaise,
-    gstAmountRupees: Number((gstAmountPaise / 100).toFixed(2)),
-    cgstPaise,
-    sgstPaise,
-    igstPaise,
-    gstRatePercent
-  };
-}
-
-describe('Commercial GST Tax Calculations', () => {
-  it('calculates AIRA Plus INR 399 GST-inclusive split correctly', () => {
-    const calc = calculateGstInclusive(399, false, 18);
-    // 399 / 1.18 = 338.1355... -> 338.14
-    assert.equal(calc.totalAmountRupees, 399.00);
-    assert.equal(calc.taxableBaseRupees, 338.14);
-    assert.equal(calc.gstAmountRupees, 60.86);
-    assert.equal(calc.totalAmountPaise, 39900);
-    assert.equal(calc.taxableBasePaise, 33814);
-    assert.equal(calc.gstAmountPaise, 6086);
-    assert.equal(calc.cgstPaise + calc.sgstPaise, 6086);
+describe('Commercial GST Tax Calculations & Statutory Engine (SPEC-GST-BILLING-2026-01)', () => {
+  it('defaults supplier identity to VIREXA AI VENTURES PRIVATE LIMITED in Uttar Pradesh (09), never Delhi (07)', () => {
+    const cfg = taxDeterminationService.getSupplierTaxConfig();
+    assert.equal(DEFAULT_SUPPLIER_LEGAL_NAME, 'VIREXA AI VENTURES PRIVATE LIMITED');
+    assert.equal(DEFAULT_SUPPLIER_STATE_CODE, '09');
+    assert.equal(DEFAULT_PROVISIONAL_SAC_CODE, '998315');
+    assert.equal(cfg.stateCode, '09');
+    assert.equal(cfg.stateName, 'Uttar Pradesh');
+    assert.equal(cfg.sacCode, '998315');
   });
 
-  it('calculates AIRA Pro INR 999 GST-inclusive split correctly', () => {
-    const calc = calculateGstInclusive(999, false, 18);
-    // 999 / 1.18 = 846.6101... -> 846.61
-    assert.equal(calc.totalAmountRupees, 999.00);
-    assert.equal(calc.taxableBaseRupees, 846.61);
-    assert.equal(calc.gstAmountRupees, 152.39);
-    assert.equal(calc.totalAmountPaise, 99900);
-    assert.equal(calc.taxableBasePaise, 84661);
-    assert.equal(calc.gstAmountPaise, 15239);
+  it('calculates AIRA Plus ₹399 intra-UP (09 -> 09) GST-inclusive split as CGST 9% + SGST 9%', () => {
+    const res = taxDeterminationService.determineTax({
+      amountMinorUnits: 39900,
+      currency: 'INR',
+      customerState: '09',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true,
+      sacApproved: true,
+      financeTaxSignOff: true
+    });
+
+    assert.equal(res.totalAmount, 399.00);
+    assert.equal(res.taxableBase, 338.14);
+    assert.equal(res.gstAmount, 60.86);
+    assert.equal(res.cgstAmount, 30.43);
+    assert.equal(res.sgstAmount, 30.43);
+    assert.equal(res.utgstAmount, undefined);
+    assert.equal(res.igstAmount, undefined);
+    assert.equal(res.placeOfSupply, '09');
+    assert.equal(res.posBasis, 'RECIPIENT_ADDRESS');
+    assert.equal(res.taxComplianceStatus, 'COMPLIANT');
   });
 
-  it('handles interstate IGST allocation properly', () => {
-    const calc = calculateGstInclusive(399, true, 18);
-    assert.equal(calc.igstPaise, 6086);
-    assert.equal(calc.cgstPaise, 0);
-    assert.equal(calc.sgstPaise, 0);
+  it('calculates AIRA Pro ₹999 intra-UP (09 -> 09) with deterministic minor-unit reconciliation for both rounding policies', () => {
+    const floorRem = taxDeterminationService.determineTax({
+      amountMinorUnits: 99900,
+      currency: 'INR',
+      customerState: 'UP',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true,
+      roundingPolicy: 'FLOOR_REMAINDER'
+    });
+    assert.equal(floorRem.taxableBaseMinorUnits, 84661);
+    assert.equal(floorRem.gstAmountMinorUnits, 15239);
+    assert.equal(floorRem.cgstAmountMinorUnits, 7619);
+    assert.equal(floorRem.sgstAmountMinorUnits, 7620);
+    assert.equal(
+      (floorRem.cgstAmountMinorUnits || 0) + (floorRem.sgstAmountMinorUnits || 0) + floorRem.taxableBaseMinorUnits,
+      99900
+    );
+
+    const parity = taxDeterminationService.determineTax({
+      amountMinorUnits: 99900,
+      currency: 'INR',
+      customerState: 'UP',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true,
+      roundingPolicy: 'PARITY_HALF_EVEN'
+    });
+    assert.equal(parity.taxableBaseMinorUnits, 84660);
+    assert.equal(parity.gstAmountMinorUnits, 15240);
+    assert.equal(parity.cgstAmountMinorUnits, 7620);
+    assert.equal(parity.sgstAmountMinorUnits, 7620);
+    assert.equal(
+      (parity.cgstAmountMinorUnits || 0) + (parity.sgstAmountMinorUnits || 0) + parity.taxableBaseMinorUnits,
+      99900
+    );
   });
 
-  it('supports configurable tax rates without hardcoding 18%', () => {
-    const calc12 = calculateGstInclusive(100, false, 12);
-    // 100 / 1.12 = 89.2857 -> 89.29
-    assert.equal(calc12.taxableBaseRupees, 89.29);
-    assert.equal(calc12.gstAmountRupees, 10.71);
+  it('calculates inter-state IGST (18%) from UP (09) to Delhi (07) and Maharashtra (27)', () => {
+    const delhiRes = taxDeterminationService.determineTax({
+      amountMinorUnits: 39900,
+      currency: 'INR',
+      customerState: 'Delhi',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true
+    });
+    assert.equal(delhiRes.placeOfSupply, '07');
+    assert.equal(delhiRes.igstAmount, 60.86);
+    assert.equal(delhiRes.cgstAmount, undefined);
+    assert.equal(delhiRes.sgstAmount, undefined);
+
+    const mhRes = taxDeterminationService.determineTax({
+      amountMinorUnits: 99900,
+      currency: 'INR',
+      customerState: 'MH',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true
+    });
+    assert.equal(mhRes.placeOfSupply, '27');
+    assert.equal(mhRes.igstAmount, 152.39);
+  });
+
+  it('supports UTGST for Union Territories without legislature (04, 26, 31, 35, 38) when supplier is in same UT', () => {
+    for (const utCode of ['04', '26', '31', '35', '38']) {
+      const res = taxDeterminationService.determineTax({
+        amountMinorUnits: 39900,
+        currency: 'INR',
+        customerState: utCode,
+        supplierState: utCode
+      });
+      assert.equal(res.cgstAmount, 30.43, `UT ${utCode} expects CGST`);
+      assert.equal(res.utgstAmount, 30.43, `UT ${utCode} expects UTGST`);
+      assert.equal(res.sgstAmount, undefined, `UT ${utCode} must not emit SGST`);
+      assert.equal(res.igstAmount, undefined);
+    }
+  });
+
+  it('maps all 37 active Indian GST jurisdictions and rejects legacy merged code 25', () => {
+    assert.equal(INDIAN_GST_JURISDICTIONS.length, 37);
+    for (const j of INDIAN_GST_JURISDICTIONS) {
+      assert.equal(taxDeterminationService.normalizePlaceOfSupply(j.code), j.code);
+      assert.equal(taxDeterminationService.normalizePlaceOfSupply(j.name), j.code);
+      assert.equal(taxDeterminationService.normalizePlaceOfSupply(j.shortCode), j.code);
+    }
+    assert.equal(taxDeterminationService.normalizePlaceOfSupply('25'), 'UNKNOWN');
+    assert.equal(taxDeterminationService.normalizePlaceOfSupply('Daman and Diu'), 'UNKNOWN');
+  });
+
+  it('validates GSTIN structure, Mod-36 checksum, state prefix, PAN slice, and B2B POS precedence (Sec 12(2)(a))', () => {
+    const valid = validateGstin('09AAMCV4678C1ZV', { expectedStateCode: '09', expectedPan: 'AAMCV4678C' });
+    assert.equal(valid.valid, true);
+    assert.equal(valid.stateCode, '09');
+    assert.equal(valid.panSlice, 'AAMCV4678C');
+
+    // Invalid checksum char
+    const badCheck = validateGstin('09AAMCV4678C1ZW');
+    assert.equal(badCheck.valid, false);
+
+    // Merged code 25
+    const bad25 = validateGstin('25AAMCV4678C1Z1');
+    assert.equal(bad25.valid, false);
+
+    // B2B GSTIN overrides mismatched B2C customerState per IGST Sec 12(2)(a)
+    const b2bRes = taxDeterminationService.determineTax({
+      amountMinorUnits: 99900,
+      currency: 'INR',
+      customerState: '09',
+      customerGstin: '09AAMCV4678C1ZV',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true
+    });
+    assert.equal(b2bRes.isB2b, true);
+    assert.equal(b2bRes.posBasis, 'RECIPIENT_GSTIN');
+    assert.equal(b2bRes.placeOfSupply, '09');
+  });
+
+  it('never silently defaults UNKNOWN place of supply to IGST, and supports explicit Sec 12(2)(b)(ii) opt-in', () => {
+    const unresolved = taxDeterminationService.determineTax({
+      amountMinorUnits: 39900,
+      currency: 'INR',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true
+    });
+    assert.equal(unresolved.placeOfSupply, 'UNKNOWN');
+    assert.equal(unresolved.posBasis, 'UNRESOLVED');
+    assert.equal(unresolved.igstAmount, undefined);
+    assert.equal(unresolved.cgstAmount, undefined);
+    assert.equal(unresolved.sgstAmount, undefined);
+    assert.equal(unresolved.taxComplianceStatus, 'PROVISIONAL_PENDING_PLACE_OF_SUPPLY');
+
+    const sec12Fallback = taxDeterminationService.determineTax({
+      amountMinorUnits: 39900,
+      currency: 'INR',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true,
+      allowSupplierFallbackSec12_2_b_ii: true
+    });
+    assert.equal(sec12Fallback.placeOfSupply, '09');
+    assert.equal(sec12Fallback.posBasis, 'SUPPLIER_LOCATION_SEC12_2_B_II');
+    assert.equal(sec12Fallback.cgstAmount, 30.43);
+    assert.equal(sec12Fallback.sgstAmount, 30.43);
+  });
+
+  it('fails closed in production when SAC approval or Finance tax sign-off is missing', () => {
+    const unapproved = taxDeterminationService.determineTax({
+      amountMinorUnits: 39900,
+      currency: 'INR',
+      customerState: '09',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true,
+      sacApproved: false,
+      financeTaxSignOff: false
+    });
+    assert.equal(unapproved.isProvisionalFixture, true);
+    assert.equal(unapproved.taxComplianceStatus, 'PROVISIONAL_PENDING_TAX_APPROVAL');
+  });
+
+  it('calculates Indian Financial Year accurately across IST April 1 rollover boundary', () => {
+    const beforeRollover = new Date('2027-03-31T23:59:59.000+05:30').getTime();
+    const afterRollover = new Date('2027-04-01T00:00:00.000+05:30').getTime();
+
+    const fyBefore = getIndianFinancialYear(beforeRollover);
+    assert.equal(fyBefore.financialYear, '2026-27');
+    assert.equal(fyBefore.compactFy, '26-27');
+    assert.equal(fyBefore.gstr1CreditNoteCutoff, '2027-11-30');
+    assert.equal(fyBefore.issueDateIst, '2027-03-31');
+
+    const fyAfter = getIndianFinancialYear(afterRollover);
+    assert.equal(fyAfter.financialYear, '2027-28');
+    assert.equal(fyAfter.compactFy, '27-28');
+    assert.equal(fyAfter.gstr1CreditNoteCutoff, '2028-11-30');
+    assert.equal(fyAfter.issueDateIst, '2027-04-01');
+  });
+
+  it('reconciles multi-step partial refunds proportionally back to original invoice paise without drift', () => {
+    const step1 = calculateProportionalRefundTax({
+      originalTotalMinorUnits: 99900,
+      originalTaxableMinorUnits: 84661,
+      originalGstMinorUnits: 15239,
+      originalCgstMinorUnits: 7619,
+      originalSgstMinorUnits: 7620,
+      originalUtgstMinorUnits: 0,
+      originalIgstMinorUnits: 0,
+      alreadyRefundedTotalMinorUnits: 0,
+      alreadyRefundedTaxableMinorUnits: 0,
+      alreadyRefundedGstMinorUnits: 0,
+      alreadyRefundedCgstMinorUnits: 0,
+      alreadyRefundedSgstMinorUnits: 0,
+      alreadyRefundedUtgstMinorUnits: 0,
+      alreadyRefundedIgstMinorUnits: 0,
+      refundMinorUnits: 33300
+    });
+
+    const step2 = calculateProportionalRefundTax({
+      originalTotalMinorUnits: 99900,
+      originalTaxableMinorUnits: 84661,
+      originalGstMinorUnits: 15239,
+      originalCgstMinorUnits: 7619,
+      originalSgstMinorUnits: 7620,
+      originalUtgstMinorUnits: 0,
+      originalIgstMinorUnits: 0,
+      alreadyRefundedTotalMinorUnits: step1.refundMinorUnits,
+      alreadyRefundedTaxableMinorUnits: step1.taxableBaseMinorUnits,
+      alreadyRefundedGstMinorUnits: step1.gstAmountMinorUnits,
+      alreadyRefundedCgstMinorUnits: step1.cgstMinorUnits,
+      alreadyRefundedSgstMinorUnits: step1.sgstMinorUnits,
+      alreadyRefundedUtgstMinorUnits: 0,
+      alreadyRefundedIgstMinorUnits: 0,
+      refundMinorUnits: 66600
+    });
+
+    assert.equal(step1.taxableBaseMinorUnits + step2.taxableBaseMinorUnits, 84661);
+    assert.equal(step1.cgstMinorUnits + step2.cgstMinorUnits, 7619);
+    assert.equal(step1.sgstMinorUnits + step2.sgstMinorUnits, 7620);
+    assert.equal(step1.gstAmountMinorUnits + step2.gstAmountMinorUnits, 15239);
   });
 });

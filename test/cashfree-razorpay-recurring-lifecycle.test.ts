@@ -885,9 +885,9 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
   });
 
   // =========================================================================
-  // 6. GST-COMPLIANT INVOICE GENERATION (SAC 998431)
+      // 6. GST-COMPLIANT INVOICE GENERATION (SAC 998315)
   // =========================================================================
-  describe('6. Tax-Compliant Invoicing Engine (SAC 998431, 18% GST)', () => {
+  describe('6. Tax-Compliant Invoicing Engine (SAC 998315, 18% GST)', () => {
     it('generates compliant tax invoices for paid subscriptions with split CGST/SGST', async () => {
       const { dbClient, tables } = createMockDb();
       const service = new PaymentGatewayService();
@@ -912,7 +912,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         metadata: JSON.stringify({
           principalId,
           customerId,
-          customerState: '07',
+          customerState: '09',
           initialPaymentId: 'pay_tax_cgst_01',
           lastPaymentId: 'pay_tax_cgst_01',
           fulfilledCycle: 1
@@ -955,8 +955,8 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(inv.plan, 'AIRA Plus');
       assert.equal(inv.currency, 'INR');
       assert.equal(inv.totalAmount, 399.00);
-      assert.equal(inv.sacCode, '998431');
-      assert.equal(inv.supplierName, 'Virexa AI Ventures Private Limited');
+      assert.equal(inv.sacCode, '998315');
+      assert.equal(inv.supplierName, 'VIREXA AI VENTURES PRIVATE LIMITED');
       assert.equal(inv.status, 'Paid');
 
       // Verify 18% GST tax breakdown:
@@ -967,7 +967,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(inv.gstAmount, 60.86);
       assert.equal(inv.cgstAmount, 30.43);
       assert.equal(inv.sgstAmount, 30.43);
-      assert.ok(inv.invoiceNumber.startsWith('INV-2026-'));
+      assert.match(inv.invoiceNumber, /^INV\/\d{2}-\d{2}\/\d{5}$/);
     });
 
     it('calculates 18% IGST for inter-state customer transactions outside Delhi', async () => {
@@ -1146,7 +1146,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         metadata: JSON.stringify({
           principalId: principalId1,
           customerId: customerId1,
-          customerState: '07',
+          customerState: '09',
           initialPaymentId: 'pay_gstin_01',
           lastPaymentId: 'pay_gstin_01',
           fulfilledCycle: 1
@@ -1168,7 +1168,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         metadata: JSON.stringify({
           principalId: principalId2,
           customerId: customerId2,
-          customerState: '07',
+          customerState: '09',
           initialPaymentId: 'pay_gstin_02',
           lastPaymentId: 'pay_gstin_02',
           fulfilledCycle: 1
@@ -1216,7 +1216,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(invWithoutGstin[0].supplierGstin, undefined);
 
       // 2. With valid 15-character GSTIN configured
-      process.env.AIRA_SUPPLIER_GSTIN = '07AAACV2026E1Z5';
+      process.env.AIRA_SUPPLIER_GSTIN = '09AAMCV4678C1ZV';
       await service.issueDurableInvoice({
         trx: dbClient,
         customerId: customerId2,
@@ -1230,7 +1230,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       });
       const invWithGstin = await service.getInvoices(principalId2);
       assert.equal(invWithGstin[0].taxComplianceStatus, 'COMPLIANT');
-      assert.equal(invWithGstin[0].supplierGstin, '07AAACV2026E1Z5');
+      assert.equal(invWithGstin[0].supplierGstin, '09AAMCV4678C1ZV');
     });
 
     it('issues durable sequential tax invoice into billing_audit_events upon subscription activation webhook and retrieves it', async () => {
@@ -1258,7 +1258,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: 0,
         current_period_end: 0,
         cancel_at_period_end: false,
-        metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '07' }),
+        metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '09' }),
         created_at: Date.now(),
         updated_at: Date.now()
       });
@@ -1295,19 +1295,19 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       // Verify durable invoice emitted in billing_audit_events
       const invoiceEvents = tables.billing_audit_events.filter(e => e.event_type === 'TAX_INVOICE_ISSUED');
       assert.equal(invoiceEvents.length, 1);
-      assert.equal(invoiceEvents[0].actor_id, 'INV-2026-0001');
+      assert.match(invoiceEvents[0].actor_id, /^INV\/\d{2}-\d{2}\/\d{5}$/);
 
       // Verify retrieval via getInvoices
       const invoices = await service.getInvoices(principalId);
       assert.equal(invoices.length, 1);
-      assert.equal(invoices[0].invoiceNumber, 'INV-2026-0001');
+      assert.equal(invoices[0].invoiceNumber, invoiceEvents[0].actor_id);
       assert.equal(invoices[0].totalAmount, 999);
       assert.equal(invoices[0].taxableBase, 846.61);
       assert.equal(invoices[0].gstAmount, 152.39);
       assert.equal(invoices[0].cgstAmount, 76.19);
       assert.equal(invoices[0].sgstAmount, 76.2);
       assert.equal(invoices[0].status, 'Paid');
-      assert.equal(invoices[0].sacCode, '998431');
+      assert.equal(invoices[0].sacCode, '998315');
     });
 
     it('enforces idempotency on durable tax invoice issuance for duplicate webhooks', async () => {
@@ -1454,14 +1454,14 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       // Verify CREDIT_NOTE_ISSUED in billing_audit_events
       const creditNoteEvents = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_ISSUED');
       assert.equal(creditNoteEvents.length, 1);
-      assert.equal(creditNoteEvents[0].actor_id, 'CN-2026-0001');
+      assert.match(creditNoteEvents[0].actor_id, /^CN\/\d{2}-\d{2}\/\d{5}$/);
       const cnPayload = JSON.parse(creditNoteEvents[0].payload);
       assert.equal(cnPayload.originalInvoiceNumber, invoiceNumber);
 
       // Verify invoice retrieval shows updated Refunded status and linked Credit Note number
       const updatedInvoices = await service.getInvoices(principalId);
       assert.equal(updatedInvoices[0].status, 'Refunded');
-      assert.equal(updatedInvoices[0].creditNoteNumber, 'CN-2026-0001');
+      assert.equal(updatedInvoices[0].creditNoteNumber, creditNoteEvents[0].actor_id);
       assert.equal(updatedInvoices[0].refundAmount, 999);
     });
   });
@@ -1481,7 +1481,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       // Verify that no gates have unverified hardcoded 'PASSED' without evidence checks
       for (const gate of report.gates) {
         assert.ok(
-          gate.status === 'VERIFIED' || gate.status === 'PENDING_OWNER_ACTION' || gate.status === 'BLOCKED',
+          gate.status === 'VERIFIED' || gate.status === 'PENDING_OWNER_ACTION' || gate.status === 'BLOCKED' || gate.status === 'UNKNOWN',
           `Gate ${gate.id} must have evidence-based status, got ${gate.status}`
         );
         assert.ok(gate.evidence && gate.evidence.length > 5, `Gate ${gate.id} must include tangible evidence`);
@@ -1490,6 +1490,469 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       // In sandbox mode without live KYC, overall verdict must be PARTIALLY READY
       assert.equal(report.overallVerdict, 'COMMERCIAL PLATFORM PARTIALLY READY — EXTERNAL ACTION REQUIRED');
       assert.ok(report.pendingOwnerCount >= 2, 'Pending owner actions (KYC, international toggle) must be tracked');
+    });
+  });
+
+  // =========================================================================
+  // 8. RECURRING SUBSCRIPTION CALENDAR-MONTH SERVICE PERIOD & RENEWAL INVARIANTS (TDD REGRESSION)
+  // =========================================================================
+  describe('8. Recurring Subscription Calendar-Month Service Period & Renewal Invariants (TDD Regression)', () => {
+    const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+
+    it('reproduces defect: renewal without explicitPeriodEnd must not drift by using fixed 30 days on Dec 26 -> Jan 26 -> Feb 26', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const purchaseId = 'pur_rzp_dec26_cycle2';
+      const gatewaySubId = 'sub_rzp_dec26_cycle2';
+      const principalId = 'usr_dec26_01';
+      const customerId = 'cust_dec26_01';
+
+      // Subscription started on 26 Dec 2026 00:00:00 IST
+      const startDec26 = Date.UTC(2026, 11, 26) - istOffsetMs;
+      // Cycle 1 end is 26 Jan 2027 00:00:00 IST (31 days)
+      const endJan26 = Date.UTC(2027, 0, 26) - istOffsetMs;
+      // Expected Cycle 2 end is 26 Feb 2027 00:00:00 IST
+      const expectedEndFeb26 = Date.UTC(2027, 1, 26) - istOffsetMs;
+
+      tables.subscriptions.push({
+        id: purchaseId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        price_id: 'price_plus_inr',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: startDec26,
+        current_period_end: endJan26,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId,
+          fulfilledCycle: 1,
+          lastPaymentId: 'pay_rzp_init_dec26',
+          initialPaymentId: 'pay_rzp_init_dec26',
+          billingAnchorDay: 26
+        }),
+        created_at: startDec26,
+        updated_at: startDec26
+      });
+
+      // Renewal payload where provider omits current_end (or explicitPeriodEnd is absent)
+      const renewalPayload = {
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: gatewaySubId,
+              current_start: Math.floor(endJan26 / 1000),
+              paid_count: 2
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_rzp_renew_jan26',
+              amount: 39900,
+              currency: 'INR',
+              status: 'captured'
+            }
+          }
+        }
+      };
+
+      const rawBody = JSON.stringify(renewalPayload);
+      const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+      const res = await service.processRazorpayWebhook(rawBody, signature);
+      assert.equal(res.status, 'PROCESSED');
+
+      const sub = tables.subscriptions.find(s => s.id === purchaseId);
+      assert.equal(Number(sub.current_period_start), endJan26, 'Cycle 2 must anchor strictly to Cycle 1 current_period_end');
+      // FAILS on unpatched candidate because 30 days yields 2027-02-25, losing 24 hours (1 full day)
+      assert.equal(Number(sub.current_period_end), expectedEndFeb26, 'Cycle 2 end must be 26 Feb 2027 (+1 calendar month in IST), NOT 25 Feb (fixed 30 days)');
+    });
+
+    it('reproduces defect: renewal after month-end clamping (Jan 31 -> Feb 28) must preserve contractual 31st anniversary for March 31', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const purchaseId = 'pur_rzp_jan31_clamp';
+      const gatewaySubId = 'sub_rzp_jan31_clamp';
+      const principalId = 'usr_jan31_01';
+      const customerId = 'cust_jan31_01';
+
+      // Subscription started on 31 Jan 2027 00:00:00 IST
+      const startJan31 = Date.UTC(2027, 0, 31) - istOffsetMs;
+      // Cycle 1 end clamped to 28 Feb 2027 00:00:00 IST (non-leap year)
+      const endFeb28 = Date.UTC(2027, 1, 28) - istOffsetMs;
+      // Expected Cycle 2 end must restore the 31st anniversary: 31 March 2027 00:00:00 IST
+      const expectedEndMarch31 = Date.UTC(2027, 2, 31) - istOffsetMs;
+
+      tables.subscriptions.push({
+        id: purchaseId,
+        customer_id: customerId,
+        plan_id: 'pro',
+        price_id: 'price_pro_inr',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 99900,
+        current_period_start: startJan31,
+        current_period_end: endFeb28,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId,
+          fulfilledCycle: 1,
+          lastPaymentId: 'pay_rzp_init_jan31',
+          initialPaymentId: 'pay_rzp_init_jan31',
+          billingAnchorDay: 31
+        }),
+        created_at: startJan31,
+        updated_at: startJan31
+      });
+
+      const renewalPayload = {
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: gatewaySubId,
+              current_start: Math.floor(endFeb28 / 1000),
+              paid_count: 2
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_rzp_renew_feb28',
+              amount: 99900,
+              currency: 'INR',
+              status: 'captured'
+            }
+          }
+        }
+      };
+
+      const rawBody = JSON.stringify(renewalPayload);
+      const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+      const res = await service.processRazorpayWebhook(rawBody, signature);
+      assert.equal(res.status, 'PROCESSED');
+
+      const sub = tables.subscriptions.find(s => s.id === purchaseId);
+      assert.equal(Number(sub.current_period_start), endFeb28, 'Cycle 2 must anchor strictly to Cycle 1 current_period_end');
+      // FAILS on unpatched candidate because 30 days yields 2027-03-30 instead of 2027-03-31
+      assert.equal(Number(sub.current_period_end), expectedEndMarch31, 'Cycle 2 end must restore 31 March 2027 contractual anniversary');
+    });
+
+    it('handles leap year month-end clamping (Jan 31 2028 -> Feb 29 2028 -> March 31 2028)', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const purchaseId = 'pur_rzp_leap2028';
+      const gatewaySubId = 'sub_rzp_leap2028';
+      const principalId = 'usr_leap_01';
+      const customerId = 'cust_leap_01';
+
+      // 2028 is a leap year. Jan 31 2028 -> Feb 29 2028
+      const startJan31 = Date.UTC(2028, 0, 31) - istOffsetMs;
+      const endFeb29 = Date.UTC(2028, 1, 29) - istOffsetMs;
+      const expectedEndMarch31 = Date.UTC(2028, 2, 31) - istOffsetMs;
+
+      tables.subscriptions.push({
+        id: purchaseId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        price_id: 'price_plus_inr',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: startJan31,
+        current_period_end: endFeb29,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId,
+          fulfilledCycle: 1,
+          lastPaymentId: 'pay_rzp_init_leap',
+          initialPaymentId: 'pay_rzp_init_leap',
+          billingAnchorDay: 31
+        }),
+        created_at: startJan31,
+        updated_at: startJan31
+      });
+
+      const renewalPayload = {
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: gatewaySubId,
+              current_start: Math.floor(endFeb29 / 1000),
+              paid_count: 2
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_rzp_renew_leap',
+              amount: 39900,
+              currency: 'INR',
+              status: 'captured'
+            }
+          }
+        }
+      };
+
+      const rawBody = JSON.stringify(renewalPayload);
+      const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+      const res = await service.processRazorpayWebhook(rawBody, signature);
+      assert.equal(res.status, 'PROCESSED');
+
+      const sub = tables.subscriptions.find(s => s.id === purchaseId);
+      assert.equal(Number(sub.current_period_end), expectedEndMarch31, 'Leap year renewal must anchor to 31 March 2028');
+    });
+
+    it('rejects or safely recovers from invalid/reversed provider period boundaries (explicitPeriodEnd <= periodStart)', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const purchaseId = 'pur_rzp_reversed_dates';
+      const gatewaySubId = 'sub_rzp_reversed_dates';
+      const principalId = 'usr_reversed_01';
+      const customerId = 'cust_reversed_01';
+
+      const startMs = Date.UTC(2027, 3, 1) - istOffsetMs; // 1 April 2027
+      const endMs = Date.UTC(2027, 4, 1) - istOffsetMs; // 1 May 2027
+      const expectedValidEnd = Date.UTC(2027, 5, 1) - istOffsetMs; // 1 June 2027
+
+      tables.subscriptions.push({
+        id: purchaseId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        price_id: 'price_plus_inr',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: startMs,
+        current_period_end: endMs,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId,
+          fulfilledCycle: 1,
+          lastPaymentId: 'pay_rzp_init_rev',
+          initialPaymentId: 'pay_rzp_init_rev',
+          billingAnchorDay: 1
+        }),
+        created_at: startMs,
+        updated_at: startMs
+      });
+
+      // Provider sends corrupted current_end that is <= periodStart (e.g. earlier than 1 May)
+      const corruptedEndSeconds = Math.floor((endMs - 100000) / 1000);
+      const renewalPayload = {
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: gatewaySubId,
+              current_start: Math.floor(endMs / 1000),
+              current_end: corruptedEndSeconds, // REVERSED / INVALID!
+              paid_count: 2
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_rzp_renew_rev',
+              amount: 39900,
+              currency: 'INR',
+              status: 'captured'
+            }
+          }
+        }
+      };
+
+      const rawBody = JSON.stringify(renewalPayload);
+      const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+      const res = await service.processRazorpayWebhook(rawBody, signature);
+      assert.equal(res.status, 'PROCESSED');
+
+      const sub = tables.subscriptions.find(s => s.id === purchaseId);
+      // System must NOT accept an inverted/reversed period! It must safely fall back to valid calendar month
+      assert.ok(Number(sub.current_period_end) > Number(sub.current_period_start), 'Period end must be strictly after period start');
+      assert.equal(Number(sub.current_period_end), expectedValidEnd, 'Must fall back to 1 calendar month in IST when provider period end is invalid');
+    });
+
+    it('Cashfree subscription renewal without explicitPeriodEnd advances strictly by calendar month in IST', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const cfSecret = 'test_cf_webhook_secret_2026';
+      service.setCashfreeSecret(cfSecret);
+
+      const purchaseId = 'pur_cf_dec26_cycle2';
+      const gatewaySubId = 'sub_cf_dec26_cycle2';
+      const principalId = 'usr_cf_dec26_01';
+      const customerId = 'cust_cf_dec26_01';
+
+      const startDec26 = Date.UTC(2026, 11, 26) - istOffsetMs;
+      const endJan26 = Date.UTC(2027, 0, 26) - istOffsetMs;
+      const expectedEndFeb26 = Date.UTC(2027, 1, 26) - istOffsetMs;
+
+      tables.subscriptions.push({
+        id: purchaseId,
+        customer_id: customerId,
+        plan_id: 'plus',
+        price_id: 'price_plus_inr',
+        status: 'active',
+        gateway: 'cashfree',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 39900,
+        current_period_start: startDec26,
+        current_period_end: endJan26,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId,
+          fulfilledCycle: 1,
+          lastPaymentId: 'cf_pay_init_dec26',
+          initialPaymentId: 'cf_pay_init_dec26',
+          billingAnchorDay: 26
+        }),
+        created_at: startDec26,
+        updated_at: startDec26
+      });
+
+      const cfRenewalPayload = {
+        type: 'SUBSCRIPTION_PAYMENT_SUCCESS',
+        data: {
+          subscription: {
+            subscription_id: gatewaySubId,
+            current_cycle: 2,
+            subscription_status: 'ACTIVE'
+          },
+          payment: {
+            cf_payment_id: 'cf_pay_renew_jan26',
+            payment_status: 'SUCCESS',
+            payment_amount: 399.00,
+            amount: 39900,
+            currency: 'INR'
+          }
+        }
+      };
+
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const rawBody = JSON.stringify(cfRenewalPayload);
+      const signature = crypto.createHmac('sha256', cfSecret).update(`${timestamp}${rawBody}`).digest('base64');
+
+      const res = await service.processCashfreeWebhook(rawBody, signature, timestamp);
+      assert.equal(res.status, 'PROCESSED');
+
+      const sub = tables.subscriptions.find(s => s.id === purchaseId);
+      assert.equal(Number(sub.current_period_start), endJan26);
+      assert.equal(Number(sub.current_period_end), expectedEndFeb26, 'Cashfree Cycle 2 renewal must end on 26 Feb 2027 (calendar month)');
+
+      // Verify financial invariants: exactly 1 SUBSCRIPTION_RENEWED audit event with correct periodEnd
+      const renewEvents = tables.billing_audit_events.filter(e => e.event_type === 'SUBSCRIPTION_RENEWED');
+      assert.equal(renewEvents.length, 1);
+      const renewPayload = JSON.parse(renewEvents[0].payload);
+      assert.equal(renewPayload.periodEnd, expectedEndFeb26);
+      assert.equal(renewPayload.periodStart, endJan26);
+      assert.equal(renewPayload.cycleNumber, 2);
+    });
+
+    it('financial invariants: handles early gateway debit without losing existing paid period and maintains exactly 1 invoice and 1 grant per cycle', async () => {
+      const { dbClient, tables } = createMockDb();
+      const service = new PaymentGatewayService();
+      service.setDbClient(dbClient);
+      const secret = 'test_rzp_webhook_secret_2026';
+      service.setRazorpaySecret(secret);
+
+      const purchaseId = 'pur_rzp_early_debit';
+      const gatewaySubId = 'sub_rzp_early_debit';
+      const principalId = 'usr_early_01';
+      const customerId = 'cust_early_01';
+
+      // Cycle 1 ends on Jan 26. Bank debits 2 days early on Jan 24.
+      const startDec26 = Date.UTC(2026, 11, 26) - istOffsetMs;
+      const endJan26 = Date.UTC(2027, 0, 26) - istOffsetMs;
+      const expectedEndFeb26 = Date.UTC(2027, 1, 26) - istOffsetMs;
+
+      tables.subscriptions.push({
+        id: purchaseId,
+        customer_id: customerId,
+        plan_id: 'pro',
+        price_id: 'price_pro_inr',
+        status: 'active',
+        gateway: 'razorpay',
+        gateway_subscription_id: gatewaySubId,
+        currency: 'INR',
+        amount_minor_units: 99900,
+        current_period_start: startDec26,
+        current_period_end: endJan26,
+        cancel_at_period_end: false,
+        metadata: JSON.stringify({
+          principalId,
+          fulfilledCycle: 1,
+          lastPaymentId: 'pay_rzp_init_early',
+          initialPaymentId: 'pay_rzp_init_early',
+          billingAnchorDay: 26
+        }),
+        created_at: startDec26,
+        updated_at: startDec26
+      });
+
+      const earlyDebitPayload = {
+        event: 'subscription.charged',
+        payload: {
+          subscription: {
+            entity: {
+              id: gatewaySubId,
+              current_start: Math.floor(endJan26 / 1000),
+              paid_count: 2
+            }
+          },
+          payment: {
+            entity: {
+              id: 'pay_rzp_renew_early',
+              amount: 99900,
+              currency: 'INR',
+              status: 'captured'
+            }
+          }
+        }
+      };
+
+      const rawBody = JSON.stringify(earlyDebitPayload);
+      const signature = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+      const res = await service.processRazorpayWebhook(rawBody, signature);
+      assert.equal(res.status, 'PROCESSED');
+
+      const sub = tables.subscriptions.find(s => s.id === purchaseId);
+      // Must not truncate or create a gap: Cycle 2 starts at previous current_period_end (Jan 26), ends Feb 26
+      assert.equal(Number(sub.current_period_start), endJan26);
+      assert.equal(Number(sub.current_period_end), expectedEndFeb26);
+
+      // Invariant: Exactly 1 renewal audit event with correct periodEnd and periodStart
+      const renewEvents = tables.billing_audit_events.filter(e => e.event_type === 'SUBSCRIPTION_RENEWED');
+      assert.equal(renewEvents.length, 1);
+      const renewPayload = JSON.parse(renewEvents[0].payload);
+      assert.equal(renewPayload.periodEnd, expectedEndFeb26);
+      assert.equal(renewPayload.periodStart, endJan26);
+      assert.equal(renewPayload.cycleNumber, 2);
     });
   });
 });

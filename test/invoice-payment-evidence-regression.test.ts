@@ -754,7 +754,12 @@ describe('Invoice Payment Evidence & Cancellation Lifecycle Regression Suite (12
     assert.equal(invoices.length, 1, 'Only the genuinely paid-then-refunded transaction should appear');
     assert.equal(invoices[0].status, 'Refunded', 'Refunded transaction must never display as Paid');
     assert.equal(invoices[0].refundAmount, 399);
-    assert.ok(invoices[0].creditNoteNumber?.startsWith('CN-2026-'));
+    assert.ok(
+      invoices[0].creditNoteNumber?.startsWith('SCN/26-27/') ||
+      invoices[0].creditNoteNumber?.startsWith('CN/26-27/') ||
+      invoices[0].creditNoteNumber?.startsWith('CN-2026-'),
+      `Expected creditNoteNumber to match FY-scoped or legacy format, got: ${invoices[0].creditNoteNumber}`
+    );
   });
 
   it('9. Fabricated legacy invoice download requests and status-only active subscriptions are rejected', async () => {

@@ -54,7 +54,7 @@ jobs:
           fi
 
           PAYLOAD=$(printf '{"batchSize":%d,"budgetMs":9000}' "$BATCH_SIZE")
-          HTTP_STATUS=$(curl -s -o worker-response.json -w "%{http_code}" \
+          HTTP_STATUS=$(curl -sS --max-time 25 --retry 1 --retry-delay 2 -o worker-response.json -w "%{http_code}" \
             -X POST "${PRODUCTION_URL}/api/billing/worker/process-outbox" \
             -H "Content-Type: application/json" \
             -H "x-internal-worker-key: ${WORKER_KEY}" \
@@ -69,3 +69,18 @@ jobs:
             echo "Production worker execution failed with HTTP ${HTTP_STATUS}"
             exit 1
           fi
+
+          node -e '
+            const fs = require("fs");
+            const data = JSON.parse(fs.readFileSync("worker-response.json", "utf8"));
+            if (!data || data.ok !== true) {
+              console.error("Production worker did not report ok=true:", data);
+              process.exit(1);
+            }
+            const cancelFailed = Number(data.cancellations?.failed || 0);
+            const invFailed = Number(data.invoices?.failed || 0);
+            if (cancelFailed > 0 || invFailed > 0) {
+              console.error(`Outbox worker reported task failures: cancellations.failed=${cancelFailed}, invoices.failed=${invFailed}`);
+              process.exit(1);
+            }
+          '

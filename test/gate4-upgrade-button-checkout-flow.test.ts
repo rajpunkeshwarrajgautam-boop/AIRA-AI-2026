@@ -196,7 +196,8 @@ describe('Gate 4 Upgrade Button & Recurring Subscription Security', () => {
         'plus',
         'INR',
         'cashfree',
-        { userId: 'usr_synth_plus_2026' }
+        { userId: 'usr_synth_plus_2026' },
+        { phone: '9876543210' }
       );
 
       assert.strictEqual(checkout.gateway, 'cashfree');

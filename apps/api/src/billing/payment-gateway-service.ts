@@ -4,14 +4,21 @@ import { db } from '../../../../packages/db/src/index.js';
 import {
   COMMERCIAL_PLANS,
   PlanTier,
-  CurrencyCode
+  CurrencyCode,
+  isGuestPrincipal
 } from '../../../../packages/contracts/src/commercial.js';
 import {
   commercialBillingService,
   hasPaidPeriodEntitlement,
-  hasPaidSubscriptionEvidence
+  hasPaidSubscriptionEvidence,
+  BillingTaxProfileInput
 } from './commercial-billing-service.js';
-import { taxDeterminationService, TaxDeterminationResult } from './tax-determination.js';
+import {
+  taxDeterminationService,
+  getIndianFinancialYear,
+  calculateProportionalRefundTax,
+  validateGstin
+} from './tax-determination.js';
 import {
   isStagingSandboxRehearsalActive,
   assertStagingSandboxRehearsalAllowed,
@@ -75,6 +82,11 @@ export interface SubscriptionRow {
 export interface InvoiceRecord {
   invoiceNumber: string;
   date: string;
+  financialYear?: string;
+  documentKind?: string;
+  documentStatus?: 'ISSUED' | 'VOIDED' | string;
+  voidedAt?: number;
+  voidReason?: string;
   plan: string;
   currency: string;
   totalAmount: number;
@@ -82,15 +94,34 @@ export interface InvoiceRecord {
   gstAmount: number;
   cgstAmount?: number;
   sgstAmount?: number;
+  utgstAmount?: number;
   igstAmount?: number;
   taxRate?: number;
   cgstRate?: number;
   sgstRate?: number;
+  utgstRate?: number;
   igstRate?: number;
   taxRateVersion?: string;
+  roundingPolicy?: string;
   sacCode: string;
+  sacDescription?: string;
   supplierName: string;
+  supplierTradeName?: string;
   supplierGstin?: string;
+  supplierStateCode?: string;
+  supplierStateName?: string;
+  supplierAddress?: string;
+  supplierPan?: string;
+  supplierCin?: string;
+  supplierEmail?: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerAddress?: string;
+  customerStateCode?: string;
+  customerStateName?: string;
+  customerGstin?: string;
+  isB2b?: boolean;
+  reverseCharge?: boolean;
   taxComplianceStatus?:
     | 'COMPLIANT'
     | 'COMPLIANT_ZERO_RATED_EXPORT'
@@ -98,13 +129,86 @@ export interface InvoiceRecord {
     | 'PROVISIONAL_PENDING_PLACE_OF_SUPPLY'
     | 'PROVISIONAL_PENDING_GSTIN_VERIFICATION'
     | 'PROVISIONAL_PENDING_GSTIN_AND_POS'
-    | 'PROVISIONAL_PENDING_RECONCILIATION';
+    | 'PROVISIONAL_PENDING_RECONCILIATION'
+    | 'SANDBOX_REHEARSAL';
   placeOfSupply?: string;
+  placeOfSupplyName?: string;
+  posBasis?: string;
+  billingPeriodStart?: number;
+  billingPeriodEnd?: number;
+  invoiceTimingBasis?: string;
   status: string;
+  isSandbox?: boolean;
+  gateway?: string;
+  paymentMethod?: string;
+  gatewayOrderId?: string;
+  gatewayPaymentId?: string;
+  irn?: string;
+  irnAckNo?: string;
+  irnAckDate?: string;
+  signedQrCode?: string;
   pdfDownloadAvailable?: boolean;
+  printableDocumentAvailable?: boolean;
   creditNoteNumber?: string;
   refundAmount?: number;
   refundAmountMinorUnits?: number;
+}
+
+export interface CreditNoteRecord {
+  creditNoteNumber: string;
+  originalInvoiceNumber: string;
+  originalInvoiceDate?: string;
+  date: string;
+  financialYear?: string;
+  documentStatus?: 'ISSUED' | 'VOIDED' | string;
+  voidedAt?: number;
+  voidReason?: string;
+  reason?: string;
+  currency: string;
+  refundAmount: number;
+  refundAmountMinorUnits?: number;
+  taxableBase?: number;
+  gstAmount?: number;
+  cgstAmount?: number;
+  sgstAmount?: number;
+  utgstAmount?: number;
+  igstAmount?: number;
+  taxRate?: number;
+  cgstRate?: number;
+  sgstRate?: number;
+  utgstRate?: number;
+  igstRate?: number;
+  sacCode?: string;
+  sacDescription?: string;
+  placeOfSupply?: string;
+  placeOfSupplyName?: string;
+  posBasis?: string;
+  supplierName: string;
+  supplierTradeName?: string;
+  supplierGstin?: string;
+  supplierStateCode?: string;
+  supplierAddress?: string;
+  supplierPan?: string;
+  supplierCin?: string;
+  supplierEmail?: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerAddress?: string;
+  customerStateCode?: string;
+  customerGstin?: string;
+  isB2b?: boolean;
+  statutoryGstr1Cutoff?: string;
+  isPartialRefund: boolean;
+  isSandbox?: boolean;
+  status: string;
+  gateway?: string;
+  refundId?: string;
+  irn?: string;
+  irnAckNo?: string;
+  irnAckDate?: string;
+  signedQrCode?: string;
+  pdfDownloadAvailable?: boolean;
+  printableDocumentAvailable?: boolean;
 }
 
 export interface NormalizedRefundInfo {
@@ -324,7 +428,14 @@ export const CANDIDATE_PRICE_CATALOG: Record<PlanTier, Record<CurrencyCode, { id
   }
 };
 
+export function isInternationalUsdBillingEnabled(): boolean {
+  return process.env.AIRA_INTERNATIONAL_USD_BILLING_ENABLED === 'true';
+}
+
 export function isPriceApprovedForProduction(tier: PlanTier, currency: CurrencyCode): boolean {
+  if (currency === 'USD' && !isInternationalUsdBillingEnabled()) {
+    return false;
+  }
   const plan = COMMERCIAL_PLANS[tier];
   if (!plan || !plan.prices || plan.prices.length === 0) {
     return false;
@@ -339,10 +450,36 @@ export class TerminalRejectionError extends Error {
   }
 }
 
+export interface LateCapturedPaymentRecoveryInfo {
+  purchaseId: string;
+  customerId: string;
+  principalId: string;
+  planTier: string;
+  gateway: string;
+  gatewayOrderId: string;
+  currency: string;
+  amountMinorUnits: number;
+  actualPaymentId: string;
+  subscriptionStatus: string;
+  eventType: string;
+  detectedAt: number;
+}
+
+export class LateCapturedPaymentRejectionError extends TerminalRejectionError {
+  constructor(
+    message: string,
+    public readonly recoveryInfo: LateCapturedPaymentRecoveryInfo
+  ) {
+    super(message);
+    this.name = 'TerminalRejectionError';
+  }
+}
+
 export function isTerminalError(err: any): boolean {
   return (
     err instanceof TerminalRejectionError ||
     err?.name === 'TerminalRejectionError' ||
+    err?.name === 'LateCapturedPaymentRejectionError' ||
     err?.message?.startsWith('FRAUD_CHECK_FAILED') ||
     err?.message?.startsWith('FORBIDDEN_WEBHOOK') ||
     err?.message?.startsWith('INVALID_STATE_TRANSITION')
@@ -414,7 +551,11 @@ export function assertCommercialFulfillmentAllowed(eventType: string, gateway: s
     throw new TerminalRejectionError(`BILLING_RECONCILIATION_FAILED: Unsupported or unverified webhook event class '${eventType}'. Refusing fulfillment.`);
   }
 
-  // 3. Centralized fail-closed check
+  // 3. Centralized fail-closed emergency & commercial gating
+  if (process.env.AIRA_BILLING_EMERGENCY_DISABLE === 'true') {
+    throw new Error('BILLING_UNAVAILABLE: Commercial billing emergency kill-switch is active. Paid entitlements cannot be granted.');
+  }
+
   const isProduction = isProductionRuntime();
   const isStaging = process.env.VERCEL_ENV === 'preview' || process.env.AIRA_ENVIRONMENT === 'staging';
   const isIsolatedTest = (process.env.NODE_ENV === 'test' || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true') && !isProduction && !isStaging;
@@ -614,67 +755,136 @@ export class PaymentGatewayService {
   }
 
   /**
-   * Allocates sequential, collision-free invoice number.
-   * Utilizes native PostgreSQL sequence `billing_invoice_number_seq` (created via Migration 033).
-   * Outside isolated tests, fails closed if native PostgreSQL sequence is unavailable.
+   * Allocates sequential, collision-free FY-partitioned document serial numbers
+   * (`INV/26-27/00001`, `SBX/26-27/00001`, `CN/26-27/00001`, `SCN/26-27/00001`).
+   * Uses atomic PostgreSQL UPSERT on `billing_document_sequences` (Migration 036),
+   * falling back to Migration 033 native sequences if 036 table is absent in legacy harnesses.
    */
-  async allocateInvoiceNumber(trx?: any, year: number = 2026): Promise<string> {
+  private async allocateDocumentSerial(params: {
+    trx?: any;
+    kind: 'invoice' | 'credit_note';
+    now?: number;
+    isSandbox?: boolean;
+  }): Promise<string> {
+    const nowMs = params.now || Date.now();
+    const fy = getIndianFinancialYear(nowMs);
+    const isSandbox = Boolean(params.isSandbox);
+    const scope =
+      params.kind === 'invoice'
+        ? (isSandbox ? 'sandbox_invoice' : 'commercial_invoice')
+        : (isSandbox ? 'sandbox_credit_note' : 'commercial_credit_note');
+    const prefix =
+      params.kind === 'invoice'
+        ? (isSandbox ? 'SBX' : 'INV')
+        : (isSandbox ? 'SCN' : 'CN');
+
+    const trx = params.trx;
     const isPg = trx && typeof trx.raw === 'function' && (trx.client?.config?.client === 'pg' || typeof trx.client === 'object');
+    const inTransaction = isPg && (Boolean(trx.isTransaction) || typeof trx.commit === 'function');
+
     if (isPg) {
+      let hasDocSeqTable = false;
       try {
-        const res = await trx.raw("SELECT nextval('billing_invoice_number_seq') AS seq");
+        hasDocSeqTable = typeof trx.schema?.hasTable === 'function'
+          ? await trx.schema.hasTable('billing_document_sequences')
+          : false;
+      } catch {
+        hasDocSeqTable = false;
+      }
+
+      if (hasDocSeqTable) {
+        const spName = params.kind === 'invoice' ? 'sp_alloc_inv_fy_seq' : 'sp_alloc_cn_fy_seq';
+        if (inTransaction) {
+          try { await trx.raw(`SAVEPOINT ${spName}`); } catch {}
+        }
+        try {
+          const res = await trx.raw(
+            `INSERT INTO billing_document_sequences (document_scope, financial_year, last_number, updated_at)
+             VALUES (?, ?, 1, ?)
+             ON CONFLICT (document_scope, financial_year)
+             DO UPDATE SET last_number = billing_document_sequences.last_number + 1, updated_at = EXCLUDED.updated_at
+             RETURNING last_number`,
+            [scope, fy.financialYear, nowMs]
+          );
+          if (inTransaction) {
+            try { await trx.raw(`RELEASE SAVEPOINT ${spName}`); } catch {}
+          }
+          const rawSeq = res?.rows?.[0]?.last_number ?? res?.[0]?.last_number;
+          if (rawSeq !== undefined && rawSeq !== null) {
+            const seq = Number(rawSeq);
+            return `${prefix}/${fy.compactFy}/${String(seq).padStart(5, '0')}`;
+          }
+        } catch (err: any) {
+          if (inTransaction) {
+            try { await trx.raw(`ROLLBACK TO SAVEPOINT ${spName}`); } catch {}
+          }
+          const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
+          if (!isTestEnv) {
+            throw new Error(`DOCUMENT_SEQUENCE_UNAVAILABLE: Atomic FY sequence failed for ${scope}/${fy.financialYear}: ${err?.message || err}`);
+          }
+        }
+      }
+
+      // Legacy Migration 033 sequence fallback only if 036 table is absent
+      const seqName = params.kind === 'invoice' ? 'billing_invoice_number_seq' : 'billing_credit_note_number_seq';
+      try {
+        const res = await trx.raw(`SELECT nextval('${seqName}') AS seq`);
         const rawSeq = res?.rows?.[0]?.seq ?? res?.[0]?.seq;
         if (rawSeq !== undefined && rawSeq !== null) {
           const seq = Number(rawSeq);
-          return `INV-${year}-${String(seq).padStart(4, '0')}`;
+          return `${prefix}/${fy.compactFy}/${String(seq).padStart(5, '0')}`;
         }
       } catch (err: any) {
         const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
         if (!isTestEnv) {
-          throw new Error(`INVOICE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_invoice_number_seq sequence failed: ${err?.message || err}`);
+          throw new Error(`DOCUMENT_SEQUENCE_UNAVAILABLE: PostgreSQL ${seqName} sequence failed: ${err?.message || err}`);
         }
       }
     }
 
     const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
     if (!isTestEnv) {
-      throw new Error('INVOICE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_invoice_number_seq sequence required outside isolated tests');
+      throw new Error(`DOCUMENT_SEQUENCE_UNAVAILABLE: PostgreSQL sequence required for ${scope} outside isolated tests`);
     }
 
-    this.memoryInvoiceCounter++;
-    return `INV-${year}-${String(this.memoryInvoiceCounter).padStart(4, '0')}`;
+    const seq = params.kind === 'invoice' ? (++this.memoryInvoiceCounter) : (++this.memoryCreditNoteCounter);
+    return `${prefix}/${fy.compactFy}/${String(seq).padStart(5, '0')}`;
   }
 
   /**
-   * Allocates sequential, collision-free credit note number.
-   * Utilizes native PostgreSQL sequence `billing_credit_note_number_seq` (created via Migration 033).
-   * Outside isolated tests, fails closed if native PostgreSQL sequence is unavailable.
+   * Allocates sequential, collision-free FY-scoped invoice number (`INV/26-27/00001` or `SBX/26-27/00001`).
    */
-  async allocateCreditNoteNumber(trx?: any, year: number = 2026): Promise<string> {
-    const isPg = trx && typeof trx.raw === 'function' && (trx.client?.config?.client === 'pg' || typeof trx.client === 'object');
-    if (isPg) {
-      try {
-        const res = await trx.raw("SELECT nextval('billing_credit_note_number_seq') AS seq");
-        const rawSeq = res?.rows?.[0]?.seq ?? res?.[0]?.seq;
-        if (rawSeq !== undefined && rawSeq !== null) {
-          const seq = Number(rawSeq);
-          return `CN-${year}-${String(seq).padStart(4, '0')}`;
-        }
-      } catch (err: any) {
-        const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
-        if (!isTestEnv) {
-          throw new Error(`CREDIT_NOTE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_credit_note_number_seq sequence failed: ${err?.message || err}`);
-        }
-      }
-    }
+  async allocateInvoiceNumber(
+    trx?: any,
+    yearOrOptions: number | { now?: number; isSandbox?: boolean } = Date.now()
+  ): Promise<string> {
+    const opts = typeof yearOrOptions === 'object' && yearOrOptions !== null
+      ? yearOrOptions
+      : { now: yearOrOptions > 10000 ? yearOrOptions : Date.now(), isSandbox: false };
+    return await this.allocateDocumentSerial({
+      trx,
+      kind: 'invoice',
+      now: opts.now,
+      isSandbox: opts.isSandbox
+    });
+  }
 
-    const isTestEnv = (process.env.NODE_ENV === 'test' || Boolean(process.env.VITEST)) && process.env.AIRA_ENVIRONMENT !== 'production';
-    if (!isTestEnv) {
-      throw new Error('CREDIT_NOTE_SEQUENCE_UNAVAILABLE: Native PostgreSQL billing_credit_note_number_seq sequence required outside isolated tests');
-    }
-
-    this.memoryCreditNoteCounter++;
-    return `CN-${year}-${String(this.memoryCreditNoteCounter).padStart(4, '0')}`;
+  /**
+   * Allocates sequential, collision-free FY-scoped credit note number (`CN/26-27/00001` or `SCN/26-27/00001`).
+   */
+  async allocateCreditNoteNumber(
+    trx?: any,
+    yearOrOptions: number | { now?: number; isSandbox?: boolean } = Date.now()
+  ): Promise<string> {
+    const opts = typeof yearOrOptions === 'object' && yearOrOptions !== null
+      ? yearOrOptions
+      : { now: yearOrOptions > 10000 ? yearOrOptions : Date.now(), isSandbox: false };
+    return await this.allocateDocumentSerial({
+      trx,
+      kind: 'credit_note',
+      now: opts.now,
+      isSandbox: opts.isSandbox
+    });
   }
 
   /**
@@ -1238,8 +1448,14 @@ export class PaymentGatewayService {
       fulfillmentError = err;
     }
 
-    // 4. Update durable lifecycle state OUTSIDE the rolled-back business transaction
+    // 4. Update durable lifecycle state OUTSIDE the rolled-back business transaction.
+    // Persist late-payment recovery evidence BEFORE latching TERMINAL_FAILURE so a transient
+    // persistence error does not permanently suppress gateway retries with an unrecorded charge.
     if (fulfillmentError) {
+      if (fulfillmentError instanceof LateCapturedPaymentRejectionError) {
+        await this.persistLateCapturedPaymentRecoveryOutOfBand(knex, fulfillmentError.recoveryInfo);
+      }
+
       const isTerminal = isTerminalError(fulfillmentError);
       currentPayload._lifecycle.state = isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE';
       currentPayload._lifecycle.terminalReason = isTerminal ? fulfillmentError.message : undefined;
@@ -1332,7 +1548,83 @@ export class PaymentGatewayService {
         error: `${isTerminal ? 'TERMINAL_FAILURE' : 'RETRYABLE_FAILURE'}: ${err.message}`,
         payload: JSON.stringify(currentPayload)
       });
+      if (err instanceof LateCapturedPaymentRejectionError) {
+        await this.persistLateCapturedPaymentRecoveryOutOfBand(dbClient, err.recoveryInfo);
+      }
       throw err;
+    }
+  }
+
+  /**
+   * Persists out-of-band late captured payment evidence AFTER the rejected fulfillment transaction
+   * has rolled back and released its row locks, preserving refund triage trail without granting entitlements.
+   */
+  private async persistLateCapturedPaymentRecoveryOutOfBand(
+    dbClient: Knex | any,
+    info: LateCapturedPaymentRecoveryInfo
+  ): Promise<void> {
+    const runPersist = async (client: any) => {
+      let subQ = client('subscriptions').where({ id: info.purchaseId });
+      if (typeof subQ.forUpdate === 'function') subQ = subQ.forUpdate();
+      const subRow = await subQ.first();
+      if (subRow) {
+        const subMeta = this.parseJsonRecordSafe(subRow.metadata);
+        const recoveryEntry = {
+          status: 'PENDING_RECOVERY_REFUND',
+          paymentId: info.actualPaymentId,
+          gatewayOrderId: info.gatewayOrderId,
+          amountMinorUnits: info.amountMinorUnits,
+          currency: info.currency,
+          gateway: info.gateway,
+          subscriptionStatus: info.subscriptionStatus,
+          eventType: info.eventType,
+          detectedAt: info.detectedAt
+        };
+        const existingRecoveries = Array.isArray(subMeta.latePaymentRecoveries) ? subMeta.latePaymentRecoveries : [];
+        if (!existingRecoveries.some((e: any) => e?.paymentId === info.actualPaymentId)) {
+          existingRecoveries.push(recoveryEntry);
+        }
+        subMeta.latePaymentRecovery = recoveryEntry;
+        subMeta.latePaymentRecoveries = existingRecoveries;
+        await client('subscriptions').where({ id: info.purchaseId }).update({
+          metadata: JSON.stringify(subMeta),
+          updated_at: info.detectedAt
+        });
+      }
+
+      await client('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: info.customerId,
+        event_type: 'LATE_PAYMENT_ON_CANCELLED_SUBSCRIPTION',
+        actor_type: 'gateway_webhook',
+        actor_id: info.gatewayOrderId,
+        payload: JSON.stringify({
+          purchaseId: info.purchaseId,
+          principalId: info.principalId,
+          planTier: info.planTier,
+          gateway: info.gateway,
+          currency: info.currency,
+          amountMinorUnits: info.amountMinorUnits,
+          actualPaymentId: info.actualPaymentId,
+          subscriptionStatus: info.subscriptionStatus,
+          eventType: info.eventType,
+          recoveryStatus: 'PENDING_RECOVERY_REFUND'
+        }),
+        created_at: info.detectedAt
+      });
+    };
+
+    try {
+      if (typeof dbClient.transaction === 'function') {
+        await dbClient.transaction(async (outTrx: any) => {
+          await runPersist(outTrx);
+        });
+      } else {
+        await runPersist(dbClient);
+      }
+    } catch (err: any) {
+      console.error(`[PaymentGateway] Failed to persist out-of-band late payment recovery for ${info.purchaseId}:`, err?.message);
+      throw new Error(`FAILURE_EVIDENCE_PERSISTENCE_FAILED: Unable to persist out-of-band late payment recovery (${err?.message || 'unknown'})`);
     }
   }
 
@@ -1616,9 +1908,37 @@ export class PaymentGatewayService {
 
       const gatewayOrderId = purchaseRecord.gateway_subscription_id || purchaseRecord.id;
 
-      // Validate state transition: never reactivate a cancelled/canceled/refunded subscription without a new checkout order
-      if (purchaseRecord.status === 'cancelled' || purchaseRecord.status === 'canceled' || purchaseRecord.status === 'refunded') {
-        throw new TerminalRejectionError(`INVALID_STATE_TRANSITION: Cannot activate or renew ${purchaseRecord.status} subscription ${purchaseRecord.id}.`);
+      // Validate state transition: never reactivate a cancelled/canceled/refunded/expired subscription without a new checkout order
+      if (
+        purchaseRecord.status === 'cancelled' ||
+        purchaseRecord.status === 'canceled' ||
+        purchaseRecord.status === 'refunded' ||
+        purchaseRecord.status === 'expired'
+      ) {
+        const cancelledMeta = this.parseJsonRecordSafe(purchaseRecord.metadata);
+        const isDistinctLatePayment = Boolean(
+          actualPaymentId &&
+          actualPaymentId !== cancelledMeta.initialPaymentId &&
+          actualPaymentId !== cancelledMeta.lastPaymentId
+        );
+        const msg = `INVALID_STATE_TRANSITION: Cannot activate or renew ${purchaseRecord.status} subscription ${purchaseRecord.id}.`;
+        if (isDistinctLatePayment) {
+          throw new LateCapturedPaymentRejectionError(msg, {
+            purchaseId: purchaseRecord.id,
+            customerId: purchaseRecord.customer_id,
+            principalId: cancelledMeta.principalId || '',
+            planTier: purchaseRecord.plan_id || 'plus',
+            gateway,
+            gatewayOrderId,
+            currency: purchaseRecord.currency || 'INR',
+            amountMinorUnits: Number(purchaseRecord.amount_minor_units || 0),
+            actualPaymentId: String(actualPaymentId),
+            subscriptionStatus: purchaseRecord.status,
+            eventType,
+            detectedAt: now
+          });
+        }
+        throw new TerminalRejectionError(msg);
       }
 
       const cashfreePaymentType = String(
@@ -1932,9 +2252,24 @@ export class PaymentGatewayService {
             (cycleNumber !== undefined && cycleNumber > (meta.fulfilledCycle || 1))
           )
         ) {
-          throw new TerminalRejectionError(
-            `INVALID_STATE_TRANSITION: Cannot process recurring renewal charge for subscription ${purchaseRecord.id} with cancelled automatic renewal.`
-          );
+          const msg = `INVALID_STATE_TRANSITION: Cannot process recurring renewal charge for subscription ${purchaseRecord.id} with cancelled automatic renewal.`;
+          if (isDistinctPayment && actualPaymentId) {
+            throw new LateCapturedPaymentRejectionError(msg, {
+              purchaseId: purchaseRecord.id,
+              customerId,
+              principalId,
+              planTier,
+              gateway,
+              gatewayOrderId,
+              currency: purchaseRecord.currency || 'INR',
+              amountMinorUnits: expectedAmount,
+              actualPaymentId: String(actualPaymentId),
+              subscriptionStatus: purchaseRecord.status,
+              eventType,
+              detectedAt: now
+            });
+          }
+          throw new TerminalRejectionError(msg);
         }
 
         // Duplicate Cycle 1 Payment Protection BEFORE cycleNumber companion check:
@@ -2030,16 +2365,19 @@ export class PaymentGatewayService {
           return;
         }
 
-        // Fast duplicate check against previously recorded billing period end
-        if (explicitPeriodEnd !== undefined && explicitPeriodEnd <= Number(purchaseRecord.current_period_end)) {
+        // Fast duplicate check against previously recorded billing period end (only when no new payment or cycle evidence)
+        const hasAuthoritativePaymentEvidence = Boolean(
+          (actualPaymentId && actualPaymentId !== meta.lastPaymentId && actualPaymentId !== meta.initialPaymentId) ||
+          (cycleNumber !== undefined && cycleNumber > (meta.fulfilledCycle || 1))
+        );
+        if (explicitPeriodEnd !== undefined && explicitPeriodEnd <= Number(purchaseRecord.current_period_end) && !hasAuthoritativePaymentEvidence) {
           return;
         }
 
         // Authoritative renewal evidence verification
         const hasRenewalEvidence = Boolean(
           (explicitPeriodEnd && explicitPeriodEnd > Number(purchaseRecord.current_period_end)) ||
-          (cycleNumber !== undefined && cycleNumber > (meta.fulfilledCycle || 1)) ||
-          (actualPaymentId && actualPaymentId !== meta.lastPaymentId && actualPaymentId !== meta.initialPaymentId)
+          hasAuthoritativePaymentEvidence
         );
 
         if (!hasRenewalEvidence) {
@@ -2050,9 +2388,24 @@ export class PaymentGatewayService {
           return;
         }
 
+        const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+        const anchorDay = (typeof meta.billingAnchorDay === 'number' && meta.billingAnchorDay >= 1 && meta.billingAnchorDay <= 31)
+          ? meta.billingAnchorDay
+          : (purchaseRecord.created_at
+              ? new Date(Number(purchaseRecord.created_at) + istOffsetMs).getUTCDate()
+              : new Date(Number(purchaseRecord.current_period_start) + istOffsetMs).getUTCDate());
+        meta.billingAnchorDay = anchorDay;
+
         // Legitimate Renewal: anchor period strictly to previous current_period_end (never Date.now() + 30 days)
         const periodStart = explicitPeriodStart || Number(purchaseRecord.current_period_end);
-        const periodEnd = explicitPeriodEnd || (Number(purchaseRecord.current_period_end) + 30 * 24 * 60 * 60 * 1000);
+        const isExplicitPeriodEndValid = Boolean(
+          explicitPeriodEnd !== undefined &&
+          Number.isFinite(explicitPeriodEnd) &&
+          explicitPeriodEnd > periodStart
+        );
+        const periodEnd = isExplicitPeriodEndValid
+          ? explicitPeriodEnd!
+          : this.addOneMonthEpochMs(periodStart, anchorDay);
 
         const newFulfilledCycle = cycleNumber !== undefined ? cycleNumber : ((meta.fulfilledCycle || 1) + 1);
         meta.fulfilledCycle = newFulfilledCycle;
@@ -2141,7 +2494,9 @@ export class PaymentGatewayService {
             principalId,
             purchaseRecord: {
               ...purchaseRecord,
-              amount_minor_units: expectedAmount
+              amount_minor_units: expectedAmount,
+              current_period_start: periodStart,
+              current_period_end: periodEnd
             },
             planTier,
             gateway,
@@ -2199,7 +2554,7 @@ export class PaymentGatewayService {
                 gateway,
                 plan_tier: planTier,
                 amount_minor_units: expectedAmount,
-                currency: 'INR',
+                currency: (purchaseRecord.currency || 'INR').toUpperCase(),
                 actual_payment_id: actualPaymentId || null,
                 gateway_order_id: gatewayOrderId || null,
                 correlation_id: correlationId,
@@ -2210,7 +2565,10 @@ export class PaymentGatewayService {
                 payload: JSON.stringify({
                   errorCode: 'INVOICE_GENERATION_FAILED',
                   errorMessage: sanitizedError,
-                  planTier
+                  planTier,
+                  isSandbox: Boolean(purchaseRecord.is_sandbox),
+                  billingPeriodStart: periodStart,
+                  billingPeriodEnd: periodEnd
                 }),
                 created_at: now,
                 updated_at: now
@@ -2696,11 +3054,38 @@ export class PaymentGatewayService {
     requestedGateway?: 'razorpay' | 'cashfree',
     principalContext?: { userId: string; email?: string; isSynthetic?: boolean },
     contactDetails?: ContactDetails,
-    clientOpKey?: string
+    clientOpKey?: string,
+    billingProfile?: BillingTaxProfileInput
   ): Promise<CheckoutSessionResult> {
+    if (isGuestPrincipal(principalId)) {
+      throw new Error('SECURITY_VIOLATION: Guest principals cannot initiate commercial subscription checkout. Please sign in.');
+    }
+
     const plan = COMMERCIAL_PLANS[planTier];
     if (!plan || planTier === 'free' || planTier === 'guest') {
       throw new Error(`Invalid plan tier for subscription checkout: ${planTier}`);
+    }
+
+    // Validate explicit GST billing profile or GSTIN before creating gateway sessions
+    if (billingProfile) {
+      if (billingProfile.stateCode) {
+        const normState = taxDeterminationService.normalizePlaceOfSupply(billingProfile.stateCode);
+        if (normState === 'UNKNOWN') {
+          throw new Error(`VALIDATION_ERROR: Unsupported Indian GST State/UT code '${billingProfile.stateCode}'.`);
+        }
+      }
+      if (billingProfile.customerGstin && billingProfile.customerGstin.trim()) {
+        const gstCheck = validateGstin(billingProfile.customerGstin);
+        if (!gstCheck.valid) {
+          throw new Error(`VALIDATION_ERROR: Invalid customer GSTIN '${billingProfile.customerGstin}': ${gstCheck.reason || 'verification failed'}.`);
+        }
+        if (billingProfile.stateCode) {
+          const normState = taxDeterminationService.normalizePlaceOfSupply(billingProfile.stateCode);
+          if (normState !== 'UNKNOWN' && gstCheck.stateCode && normState !== gstCheck.stateCode) {
+            throw new Error(`VALIDATION_ERROR: GSTIN state prefix '${gstCheck.stateCode}' does not match selected billing state '${normState}'.`);
+          }
+        }
+      }
     }
 
     let normalizedPhone: string | undefined;
@@ -2710,6 +3095,10 @@ export class PaymentGatewayService {
         throw new Error(`VALIDATION_ERROR: ${phoneValidation.error || 'A valid 10-digit mobile phone number is required.'}`);
       }
       normalizedPhone = phoneValidation.phone;
+    }
+
+    if (process.env.AIRA_BILLING_EMERGENCY_DISABLE === 'true') {
+      throw new Error('BILLING_UNAVAILABLE: Commercial billing emergency kill-switch is active.');
     }
 
     const isRehearsal = isStagingSandboxRehearsalActive();
@@ -2728,7 +3117,8 @@ export class PaymentGatewayService {
       }
     }
 
-    const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    const isProduction = isProductionRuntime();
+    const isSandbox = isRehearsal || (!isProduction && (process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test'));
     let price: { id: string; amountMinorUnits: number; currency: CurrencyCode } | undefined;
 
     if (!isSandbox) {
@@ -2787,7 +3177,60 @@ export class PaymentGatewayService {
       }
     }
     const customerEmail = authoritativeEmail || contactDetails?.email || `${principalId}@aira.internal`;
-    const customerName = (principalContext as any)?.name || (existingCustRecord as any)?.name || contactDetails?.name || 'AIRA Subscriber';
+    const customerName =
+      billingProfile?.legalName?.trim() ||
+      (existingCustRecord as any)?.billing_legal_name ||
+      (principalContext as any)?.name ||
+      (existingCustRecord as any)?.name ||
+      contactDetails?.name ||
+      'AIRA Subscriber';
+
+    // Persist or resolve customer GST billing profile for Place of Supply snapshot
+    let resolvedTaxProfile = (!this.customDbClient)
+      ? await commercialBillingService.getBillingTaxProfile(principalId).catch(() => null)
+      : null;
+    if (billingProfile && (billingProfile.stateCode || billingProfile.customerGstin || billingProfile.legalName)) {
+      if (!this.customDbClient) {
+        resolvedTaxProfile = await commercialBillingService.upsertBillingTaxProfile(principalId, {
+          ...billingProfile,
+          legalName: billingProfile.legalName || customerName
+        });
+      }
+    }
+    const resolvedStateCode =
+      (billingProfile?.stateCode ? taxDeterminationService.normalizePlaceOfSupply(billingProfile.stateCode) : null) ||
+      (billingProfile?.customerGstin ? validateGstin(billingProfile.customerGstin).stateCode || null : null) ||
+      resolvedTaxProfile?.stateCode ||
+      null;
+    const resolvedCustomerGstin =
+      (billingProfile?.customerGstin?.trim().toUpperCase() || null) ||
+      resolvedTaxProfile?.customerGstin ||
+      null;
+    const resolvedCustomerAddress = [
+      billingProfile?.addressLine1 ?? resolvedTaxProfile?.addressLine1,
+      billingProfile?.addressLine2 ?? resolvedTaxProfile?.addressLine2,
+      billingProfile?.city ?? resolvedTaxProfile?.city,
+      billingProfile?.postalCode ?? resolvedTaxProfile?.postalCode
+    ].filter(Boolean).join(', ') || null;
+
+    const hasLiveGatewayConfigured = Boolean(this.customGatewayTransport) || (
+      gateway === 'razorpay'
+        ? Boolean(process.env.RAZORPAY_KEY_SECRET && process.env.RAZORPAY_KEY_ID && !process.env.RAZORPAY_KEY_ID.startsWith('rzp_test_mock'))
+        : Boolean(process.env.CASHFREE_SECRET_KEY && process.env.CASHFREE_APP_ID)
+    );
+
+    if (!isSandbox && isProductionRuntime() && currency === 'INR' && hasLiveGatewayConfigured) {
+      const supplierTaxCfg = taxDeterminationService.getSupplierTaxConfig();
+      if (!supplierTaxCfg.sacApproved || !supplierTaxCfg.financeTaxSignOff) {
+        throw new Error('BILLING_UNAVAILABLE: TAX_CONFIG_UNAPPROVED — Provisional SAC / Tax sign-off must be approved before live commercial checkout.');
+      }
+      if (!resolvedStateCode || resolvedStateCode === 'UNKNOWN') {
+        throw new Error('VALIDATION_ERROR: Billing State / Union Territory is required for Indian GST checkout.');
+      }
+      if (resolvedCustomerGstin && process.env.AIRA_EINVOICE_IRN_REQUIRED === 'true') {
+        throw new Error('BILLING_UNAVAILABLE: B2B GSTIN checkout is blocked until NIC e-Invoice IRP integration is provisioned.');
+      }
+    }
 
     const purchaseId = `pur_${crypto.randomUUID().replace(/-/g, '')}`;
 
@@ -3052,6 +3495,7 @@ export class PaymentGatewayService {
             reconciliationStatus: 'INITIATING',
             isSandbox,
             rehearsal: isRehearsal,
+            billingAnchorDay: new Date(now + (5 * 60 + 30) * 60 * 1000).getUTCDate(),
             createdAt: now
           }),
           created_at: now,
@@ -3391,9 +3835,10 @@ export class PaymentGatewayService {
 
     const persistCheckoutRecords = async (clientOrTrx: any) => {
       // Stale Worker Fencing: Ensure lease is still owned by this operation
-      const currentLease = await clientOrTrx('idempotent_operations')
-        .where({ key: leaseKey })
-        .first();
+      const idempTbl = clientOrTrx('idempotent_operations');
+      const currentLease = (typeof idempTbl?.where === 'function')
+        ? await idempTbl.where({ key: leaseKey }).first()
+        : null;
       if (currentLease && currentLease.operation_id && currentLease.operation_id !== leaseOpId && currentLease.operation_id !== clientKey) {
         throw new Error(`STALE_WORKER_FENCED: Execution lease was reassigned to operation '${currentLease.operation_id}'. Current worker execution fenced.`);
       }
@@ -3416,6 +3861,12 @@ export class PaymentGatewayService {
         currency,
         customerPhone: normalizedPhone,
         customerEmail: customerEmail,
+        customerName,
+        customerState: resolvedStateCode || undefined,
+        customerGstin: resolvedCustomerGstin || undefined,
+        customerAddress: resolvedCustomerAddress || undefined,
+        customerCountry: (billingProfile?.country || resolvedTaxProfile?.country || (currency === 'INR' ? 'IN' : undefined)),
+        isB2b: Boolean(resolvedCustomerGstin),
         amount: price.amountMinorUnits,
         priceId: price.id,
         reconciliationStatus: 'AWAITING_PAYMENT',
@@ -3439,9 +3890,15 @@ export class PaymentGatewayService {
 
       // Authoritative purchase record binding in database:
       // Binds authenticated principal, customer ID, gateway order, plan, price, amount, and currency
-      const existingSub = await clientOrTrx('subscriptions').where({ id: purchaseId }).first();
-      if (existingSub) {
-        await clientOrTrx('subscriptions').where({ id: purchaseId }).update({
+      const subTbl = clientOrTrx('subscriptions');
+      const existingSub = (typeof subTbl?.where === 'function')
+        ? await subTbl.where({ id: purchaseId }).first()
+        : null;
+      const updateBuilder = existingSub && typeof subTbl?.where === 'function'
+        ? subTbl.where({ id: purchaseId })
+        : null;
+      if (existingSub && updateBuilder && typeof updateBuilder.update === 'function') {
+        await updateBuilder.update({
           status: 'pending',
           gateway_subscription_id: gatewayOrderId,
           metadata: JSON.stringify(checkoutMetadata),
@@ -3668,11 +4125,12 @@ export class PaymentGatewayService {
    * Computes the next monthly cycle boundary anchored to +1 calendar month in IST (+05:30),
    * clamping month-end dates (e.g., Jan 31 -> Feb 28/29) so immediate Cycle 1 activation aligns
    * cleanly with Cashfree subscription_first_charge_time and Razorpay billing cycles.
+   * Preserves contractual billing anniversary day (1-31) across subsequent renewals after month-end clamping.
    */
-  private addOneMonthEpochMs(startMs: number): number {
+  private addOneMonthEpochMs(startMs: number, anchorDay?: number): number {
     const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
     const d = new Date(startMs + istOffsetMs);
-    const origDay = d.getUTCDate();
+    const origDay = (typeof anchorDay === 'number' && anchorDay >= 1 && anchorDay <= 31) ? anchorDay : d.getUTCDate();
     const targetMonth = d.getUTCMonth() + 1;
     d.setUTCDate(1);
     d.setUTCMonth(targetMonth);
@@ -3887,10 +4345,21 @@ export class PaymentGatewayService {
     }
 
     const initialPeriodStart = explicitPeriodStart || now;
+    const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+    const initialAnchorDay = (typeof meta.billingAnchorDay === 'number' && meta.billingAnchorDay >= 1 && meta.billingAnchorDay <= 31)
+      ? meta.billingAnchorDay
+      : new Date(initialPeriodStart + istOffsetMs).getUTCDate();
+    meta.billingAnchorDay = initialAnchorDay;
+
     const expectedRenewalMs = Number(meta.expectedNextRenewalAt || 0);
-    const initialPeriodEnd =
-      explicitPeriodEnd ||
-      (expectedRenewalMs > initialPeriodStart ? expectedRenewalMs : this.addOneMonthEpochMs(initialPeriodStart));
+    const isExplicitInitialEndValid = Boolean(
+      explicitPeriodEnd !== undefined &&
+      Number.isFinite(explicitPeriodEnd) &&
+      explicitPeriodEnd > initialPeriodStart
+    );
+    const initialPeriodEnd = isExplicitInitialEndValid
+      ? explicitPeriodEnd!
+      : (expectedRenewalMs > initialPeriodStart ? expectedRenewalMs : this.addOneMonthEpochMs(initialPeriodStart, initialAnchorDay));
 
     meta.fulfilledCycle = cycleNumber || 1;
     meta.activatedAt = meta.activatedAt || now;
@@ -4091,7 +4560,7 @@ export class PaymentGatewayService {
             gateway,
             plan_tier: planTier,
             amount_minor_units: purchaseRecord.amount_minor_units || 0,
-            currency: 'INR',
+            currency: (purchaseRecord.currency || 'INR').toUpperCase(),
             actual_payment_id: actualPaymentId || null,
             gateway_order_id: gatewayOrderId || null,
             correlation_id: correlationId,
@@ -4102,7 +4571,10 @@ export class PaymentGatewayService {
             payload: JSON.stringify({
               errorCode: 'INVOICE_GENERATION_FAILED',
               errorMessage: sanitizedError,
-              planTier
+              planTier,
+              isSandbox: Boolean(purchaseRecord.is_sandbox),
+              billingPeriodStart: meta.billingPeriodStart || purchaseRecord.current_period_start,
+              billingPeriodEnd: meta.billingPeriodEnd || purchaseRecord.current_period_end
             }),
             created_at: now,
             updated_at: now
@@ -5562,8 +6034,10 @@ export class PaymentGatewayService {
       if (opts.deadlineEpochMs && Date.now() + 5000 >= opts.deadlineEpochMs) {
         break;
       }
+      const currentFencingToken = Number(task.fencing_token || 0);
+      const nextFencingToken = currentFencingToken + 1;
       const claimedCount = await db('subscription_cancellation_outbox')
-        .where({ id: task.id })
+        .where({ id: task.id, fencing_token: currentFencingToken })
         .andWhere(function (this: any) {
           this.where('state', 'PENDING')
             .orWhere(function (this: any) {
@@ -5574,7 +6048,7 @@ export class PaymentGatewayService {
           state: 'CLAIMED',
           claimed_by: workerId,
           lease_until: now + leaseDuration,
-          fencing_token: Number(task.fencing_token || 0) + 1,
+          fencing_token: nextFencingToken,
           updated_at: now
         });
 
@@ -5650,12 +6124,18 @@ export class PaymentGatewayService {
 
       const updateNow = Date.now();
       if (taskSuccess) {
-        await db('subscription_cancellation_outbox').where({ id: task.id }).update({
-          state: 'COMPLETED',
-          attempts: nextAttempts,
-          completed_at: updateNow,
-          updated_at: updateNow
-        });
+        const completedCount = await db('subscription_cancellation_outbox')
+          .where({ id: task.id, claimed_by: workerId, fencing_token: nextFencingToken })
+          .update({
+            state: 'COMPLETED',
+            attempts: nextAttempts,
+            completed_at: updateNow,
+            updated_at: updateNow
+          });
+        if (completedCount !== 1) {
+          results.push({ id: task.id, status: 'STALE_LEASE_LOST' });
+          continue;
+        }
         try {
           await db('billing_audit_events').insert({
             id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -5678,13 +6158,19 @@ export class PaymentGatewayService {
       } else {
         const terminalFailure = nextAttempts >= Number(task.max_attempts || 5);
         const backoffMs = Math.pow(2, nextAttempts) * 1000;
-        await db('subscription_cancellation_outbox').where({ id: task.id }).update({
-          state: terminalFailure ? 'FAILED' : 'PENDING',
-          attempts: nextAttempts,
-          next_attempt_at: terminalFailure ? null : updateNow + backoffMs,
-          last_error: errorMsg.slice(0, 500),
-          updated_at: updateNow
-        });
+        const rescheduledCount = await db('subscription_cancellation_outbox')
+          .where({ id: task.id, claimed_by: workerId, fencing_token: nextFencingToken })
+          .update({
+            state: terminalFailure ? 'FAILED' : 'PENDING',
+            attempts: nextAttempts,
+            next_attempt_at: terminalFailure ? null : updateNow + backoffMs,
+            last_error: errorMsg.slice(0, 500),
+            updated_at: updateNow
+          });
+        if (rescheduledCount !== 1) {
+          results.push({ id: task.id, status: 'STALE_LEASE_LOST', error: errorMsg });
+          continue;
+        }
         try {
           await db('billing_audit_events').insert({
             id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
@@ -5769,8 +6255,10 @@ export class PaymentGatewayService {
       if (opts.deadlineEpochMs && Date.now() + 5000 >= opts.deadlineEpochMs) {
         break;
       }
+      const currentFencingToken = Number(task.fencing_token || 0);
+      const nextFencingToken = currentFencingToken + 1;
       const claimedCount = await db('billing_invoice_reconciliation_outbox')
-        .where({ id: task.id })
+        .where({ id: task.id, fencing_token: currentFencingToken })
         .andWhere(function (this: any) {
           this.where('state', 'PENDING')
             .orWhere(function (this: any) {
@@ -5781,7 +6269,7 @@ export class PaymentGatewayService {
           state: 'CLAIMED',
           claimed_by: workerId,
           lease_until: now + leaseDuration,
-          fencing_token: Number(task.fencing_token || 0) + 1,
+          fencing_token: nextFencingToken,
           updated_at: now
         });
 
@@ -5794,47 +6282,76 @@ export class PaymentGatewayService {
       let errorMsg = '';
 
       try {
-        invoiceRecord = await this.issueDurableInvoice({
-          trx: db,
-          customerId: task.customer_id,
-          principalId: task.principal_id,
-          purchaseRecord: {
-            id: task.subscription_id,
-            amount_minor_units: task.amount_minor_units,
-            currency: task.currency
-          },
-          planTier: task.plan_tier as PlanTier,
-          gateway: task.gateway,
-          actualPaymentId: task.actual_payment_id || undefined,
-          gatewayOrderId: task.gateway_order_id || undefined,
-          cycleNumber: task.cycle_number,
-          now: Date.now(),
-          workerToken: workerId
-        });
+        const outboxPayload = this.parseJsonRecordSafe(task.payload);
+        const executeTaskInvoice = async (invTrx: any) => {
+          const subRow = await invTrx('subscriptions').where({ id: task.subscription_id }).first().catch(() => null);
+          const purchaseRecordForInvoice = subRow
+            ? subRow
+            : {
+                id: task.subscription_id,
+                amount_minor_units: task.amount_minor_units,
+                currency: task.currency,
+                is_sandbox: Boolean(outboxPayload.isSandbox),
+                current_period_start: outboxPayload.billingPeriodStart,
+                current_period_end: outboxPayload.billingPeriodEnd,
+                metadata: '{}'
+              };
+          return await this.issueDurableInvoice({
+            trx: invTrx,
+            customerId: task.customer_id,
+            principalId: task.principal_id,
+            purchaseRecord: purchaseRecordForInvoice,
+            planTier: task.plan_tier as PlanTier,
+            gateway: task.gateway,
+            actualPaymentId: task.actual_payment_id || undefined,
+            gatewayOrderId: task.gateway_order_id || undefined,
+            cycleNumber: task.cycle_number,
+            now: Date.now(),
+            workerToken: workerId
+          });
+        };
+
+        if (typeof db.transaction === 'function') {
+          invoiceRecord = await db.transaction(async (invTrx: any) => executeTaskInvoice(invTrx));
+        } else {
+          invoiceRecord = await executeTaskInvoice(db);
+        }
       } catch (invErr: any) {
         errorMsg = invErr?.message || 'INVOICE_RECONCILIATION_ATTEMPT_FAILED';
       }
 
       const updateNow = Date.now();
       if (invoiceRecord) {
-        await db('billing_invoice_reconciliation_outbox').where({ id: task.id }).update({
-          state: 'COMPLETED',
-          attempts: nextAttempts,
-          completed_at: updateNow,
-          updated_at: updateNow
-        });
+        const completedCount = await db('billing_invoice_reconciliation_outbox')
+          .where({ id: task.id, claimed_by: workerId, fencing_token: nextFencingToken })
+          .update({
+            state: 'COMPLETED',
+            attempts: nextAttempts,
+            completed_at: updateNow,
+            updated_at: updateNow
+          });
+        if (completedCount !== 1) {
+          results.push({ id: task.id, status: 'STALE_LEASE_LOST' });
+          continue;
+        }
         succeeded++;
         results.push({ id: task.id, status: 'COMPLETED', invoiceNumber: invoiceRecord.invoiceNumber });
       } else {
         const terminalFailure = nextAttempts >= Number(task.max_attempts || 5);
         const backoffMs = Math.pow(2, nextAttempts) * 1000;
-        await db('billing_invoice_reconciliation_outbox').where({ id: task.id }).update({
-          state: terminalFailure ? 'FAILED' : 'PENDING',
-          attempts: nextAttempts,
-          next_attempt_at: terminalFailure ? null : updateNow + backoffMs,
-          last_error: errorMsg.slice(0, 500),
-          updated_at: updateNow
-        });
+        const rescheduledCount = await db('billing_invoice_reconciliation_outbox')
+          .where({ id: task.id, claimed_by: workerId, fencing_token: nextFencingToken })
+          .update({
+            state: terminalFailure ? 'FAILED' : 'PENDING',
+            attempts: nextAttempts,
+            next_attempt_at: terminalFailure ? null : updateNow + backoffMs,
+            last_error: errorMsg.slice(0, 500),
+            updated_at: updateNow
+          });
+        if (rescheduledCount !== 1) {
+          results.push({ id: task.id, status: 'STALE_LEASE_LOST', error: errorMsg });
+          continue;
+        }
         failed++;
         results.push({ id: task.id, status: terminalFailure ? 'FAILED' : 'RETRY_SCHEDULED', error: errorMsg });
       }
@@ -6714,17 +7231,76 @@ export class PaymentGatewayService {
           : (params.purchaseRecord.metadata || {});
       } catch {}
 
+      let customerRow: any = null;
+      try {
+        customerRow = await params.trx('billing_customers').where({ id: params.customerId }).first();
+      } catch {}
+      const customerTaxInfo = this.parseJsonRecordSafe(customerRow?.tax_info);
+
+      const isSandboxDoc = Boolean(
+        params.purchaseRecord?.is_sandbox === true ||
+        meta?.is_sandbox === true ||
+        meta?.isSandbox === true ||
+        meta?.rehearsal === true ||
+        isStagingSandboxRehearsalActive()
+      );
+
+      const resolvedCustomerName =
+        meta.customerName ||
+        customerRow?.billing_legal_name ||
+        customerRow?.name ||
+        customerTaxInfo.legalName ||
+        'AIRA Subscriber';
+      const resolvedCustomerEmail = meta.customerEmail || customerRow?.email || undefined;
+      const resolvedCustomerAddress =
+        meta.customerAddress ||
+        [
+          customerRow?.billing_address_line1 || customerTaxInfo.addressLine1,
+          customerRow?.billing_address_line2 || customerTaxInfo.addressLine2,
+          customerRow?.billing_city || customerTaxInfo.city,
+          customerRow?.billing_postal_code || customerTaxInfo.postalCode
+        ].filter(Boolean).join(', ') ||
+        undefined;
+      const resolvedCustomerState =
+        meta.customerState ||
+        meta.billingState ||
+        meta.state ||
+        customerRow?.billing_state_code ||
+        customerTaxInfo.stateCode ||
+        undefined;
+      const resolvedCustomerGstin =
+        meta.customerGstin ||
+        customerRow?.customer_gstin ||
+        customerTaxInfo.gstin ||
+        undefined;
+
+      const supplierCfg = taxDeterminationService.getSupplierTaxConfig();
+      if (isProductionRuntime() && !isSandboxDoc) {
+        if (!supplierCfg.sacApproved || !supplierCfg.financeTaxSignOff) {
+          throw new Error(
+            'TAX_CONFIG_UNAPPROVED: Live commercial invoicing requires approved SAC/GST classification (AIRA_SUPPLIER_SAC_APPROVED=true) and written finance sign-off (AIRA_FINANCE_TAX_SIGNOFF=true).'
+          );
+        }
+      }
+
       const taxResult = taxDeterminationService.determineTax({
         amountMinorUnits: Number(params.purchaseRecord.amount_minor_units) || 0,
         currency: params.purchaseRecord.currency,
-        customerCountry: meta.customerCountry || meta.country,
-        customerState: meta.customerState || meta.billingState || meta.state,
+        customerCountry: meta.customerCountry || meta.country || customerRow?.billing_country || customerRow?.country_code,
+        customerState: resolvedCustomerState,
+        customerGstin: resolvedCustomerGstin,
         placeOfSupply: meta.placeOfSupply,
         lutNumber: meta.lutNumber || process.env.AIRA_LUT_NUMBER,
         lutAvailable: meta.lutAvailable !== undefined ? meta.lutAvailable : (process.env.AIRA_LUT_AVAILABLE ? process.env.AIRA_LUT_AVAILABLE === 'true' : undefined),
         supplierGstin: process.env.AIRA_SUPPLIER_GSTIN,
         supplierGstinVerified: process.env.AIRA_SUPPLIER_GSTIN_VERIFIED ? process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true' : undefined
       });
+
+      if (isProductionRuntime() && !isSandboxDoc && taxResult.isB2b && process.env.AIRA_EINVOICE_IRN_REQUIRED === 'true') {
+        throw new Error(
+          'EINVOICE_IRN_REQUIRED_UNPROVISIONED: Live B2B invoice issuance requires NIC e-Invoice IRP provisioning.'
+        );
+      }
 
       // Crash-recovery check: Did the crashed worker already persist an invoice in billing_invoices or audit events?
       let preExistingInvoice: InvoiceRecord | null = null;
@@ -6777,11 +7353,14 @@ export class PaymentGatewayService {
         return preExistingInvoice;
       }
 
-      // 5. Allocate invoice sequence number and claim database-level uniqueness
+      // 5. Allocate FY-scoped sequence number and claim database-level uniqueness
       let invoiceNumber = '';
       let claimed = false;
       for (let attempt = 0; attempt < 5; attempt++) {
-        invoiceNumber = await this.allocateInvoiceNumber(params.trx, 2026);
+        invoiceNumber = await this.allocateInvoiceNumber(params.trx, {
+          now: params.now,
+          isSandbox: isSandboxDoc
+        });
         const claimKey = `inv_num:${invoiceNumber}`;
         if (inTransaction) {
           await params.trx.raw('SAVEPOINT sp_inv_claim');
@@ -6836,12 +7415,23 @@ export class PaymentGatewayService {
         throw new Error(`FAILED_TO_CLAIM_UNIQUE_INVOICE_NUMBER: Exceeded allocation retries for cycle ${cycle}`);
       }
 
-      const dateStr = new Date(params.now).toISOString().split('T')[0];
+      const fyInfo = getIndianFinancialYear(params.now);
+      const dateStr = fyInfo.issueDateIst;
       const planName = COMMERCIAL_PLANS[params.planTier]?.name || (params.planTier === 'pro' ? 'AIRA Pro' : 'AIRA Plus');
+      const billingPeriodStart = params.purchaseRecord.current_period_start
+        ? Number(params.purchaseRecord.current_period_start)
+        : undefined;
+      const billingPeriodEnd = params.purchaseRecord.current_period_end
+        ? Number(params.purchaseRecord.current_period_end)
+        : undefined;
+      const customerJurisdiction = taxDeterminationService.getJurisdiction(resolvedCustomerState);
 
       const invoiceRecord: InvoiceRecord = {
         invoiceNumber,
         date: dateStr,
+        financialYear: fyInfo.financialYear,
+        documentKind: isSandboxDoc ? 'SANDBOX_TAX_INVOICE' : 'TAX_INVOICE',
+        documentStatus: 'ISSUED',
         plan: planName,
         currency: (params.purchaseRecord.currency || 'INR').toUpperCase(),
         totalAmount: taxResult.totalAmount,
@@ -6849,19 +7439,48 @@ export class PaymentGatewayService {
         gstAmount: taxResult.gstAmount,
         cgstAmount: taxResult.cgstAmount,
         sgstAmount: taxResult.sgstAmount,
+        utgstAmount: taxResult.utgstAmount,
         igstAmount: taxResult.igstAmount,
         taxRate: taxResult.taxRate,
         cgstRate: taxResult.cgstRate,
         sgstRate: taxResult.sgstRate,
+        utgstRate: taxResult.utgstRate,
         igstRate: taxResult.igstRate,
         taxRateVersion: taxResult.taxRateVersion,
+        roundingPolicy: taxResult.roundingPolicy,
         sacCode: taxResult.sacCode,
+        sacDescription: taxResult.sacDescription,
         supplierName: taxResult.supplierName,
+        supplierTradeName: taxResult.supplierTradeName,
         supplierGstin: taxResult.supplierGstin,
-        taxComplianceStatus: taxResult.taxComplianceStatus as any,
+        supplierStateCode: taxResult.supplierState,
+        supplierStateName: taxResult.supplierStateName,
+        supplierAddress: taxResult.supplierAddress,
+        supplierPan: taxResult.supplierPan,
+        supplierCin: taxResult.supplierCin,
+        supplierEmail: taxResult.supplierEmail,
+        customerName: resolvedCustomerName,
+        customerEmail: resolvedCustomerEmail,
+        customerAddress: resolvedCustomerAddress,
+        customerStateCode: customerJurisdiction?.code || (resolvedCustomerState ? taxDeterminationService.normalizePlaceOfSupply(resolvedCustomerState) : undefined),
+        customerStateName: customerJurisdiction?.name,
+        customerGstin: taxResult.customerGstin,
+        isB2b: taxResult.isB2b,
+        reverseCharge: false,
+        taxComplianceStatus: isSandboxDoc ? 'SANDBOX_REHEARSAL' : (taxResult.taxComplianceStatus as any),
         placeOfSupply: taxResult.placeOfSupply,
+        placeOfSupplyName: taxResult.placeOfSupplyName,
+        posBasis: taxResult.posBasis,
+        billingPeriodStart,
+        billingPeriodEnd,
+        invoiceTimingBasis: cycle > 1 ? 'CONTINUOUS_SUPPLY_RENEWAL_SETTLEMENT' : 'IMMEDIATE_PAYMENT_SETTLEMENT',
         status: 'Paid',
-        pdfDownloadAvailable: false
+        isSandbox: isSandboxDoc,
+        gateway: params.gateway,
+        gatewayOrderId: params.gatewayOrderId,
+        gatewayPaymentId: params.actualPaymentId,
+        pdfDownloadAvailable: false,
+        printableDocumentAvailable: true
       };
 
       // Persist in relational billing_invoices table if table exists (enforces database-level uniqueness)
@@ -6873,7 +7492,10 @@ export class PaymentGatewayService {
             await params.trx.raw('SAVEPOINT sp_invoice_insert');
           }
           try {
-            await params.trx('billing_invoices').insert({
+            const hasExtendedCols = typeof params.trx.schema?.hasColumn === 'function'
+              ? await params.trx.schema.hasColumn('billing_invoices', 'issuance_snapshot')
+              : false;
+            const insertPayload: Record<string, any> = {
               id: `inv_${crypto.randomUUID().replace(/-/g, '')}`,
               invoice_number: invoiceNumber,
               customer_id: params.customerId,
@@ -6891,22 +7513,65 @@ export class PaymentGatewayService {
               sac_code: invoiceRecord.sacCode,
               supplier_name: invoiceRecord.supplierName,
               supplier_gstin: invoiceRecord.supplierGstin ?? null,
-              tax_compliance_status: isStagingSandboxRehearsalActive() ? 'SANDBOX_REHEARSAL' : invoiceRecord.taxComplianceStatus,
+              tax_compliance_status: invoiceRecord.taxComplianceStatus,
               place_of_supply: invoiceRecord.placeOfSupply,
               status: invoiceRecord.status,
               gateway: params.gateway,
-              pdf_download_available: invoiceRecord.pdfDownloadAvailable,
+              pdf_download_available: false,
               metadata: JSON.stringify({
                 taxRate: taxResult.taxRate,
                 cgstRate: taxResult.cgstRate,
                 sgstRate: taxResult.sgstRate,
+                utgstRate: taxResult.utgstRate,
                 igstRate: taxResult.igstRate,
                 taxRateVersion: taxResult.taxRateVersion,
-                ...(isStagingSandboxRehearsalActive() ? { is_sandbox: true, rehearsal: true } : {})
+                billingPeriodStart: billingPeriodStart ?? null,
+                billingPeriodEnd: billingPeriodEnd ?? null,
+                ...(isSandboxDoc ? { is_sandbox: true, rehearsal: true } : {})
               }),
               created_at: params.now,
               updated_at: params.now
-            });
+            };
+
+            if (hasExtendedCols) {
+              Object.assign(insertPayload, {
+                financial_year: invoiceRecord.financialYear,
+                document_kind: invoiceRecord.documentKind,
+                document_status: 'ISSUED',
+                invoice_timing_basis: invoiceRecord.invoiceTimingBasis,
+                is_sandbox: isSandboxDoc,
+                billing_period_start: billingPeriodStart ?? null,
+                billing_period_end: billingPeriodEnd ?? null,
+                tax_rate_percent: taxResult.taxRate * 100,
+                cgst_rate: taxResult.cgstRate !== undefined ? taxResult.cgstRate * 100 : null,
+                sgst_rate: taxResult.sgstRate !== undefined ? taxResult.sgstRate * 100 : null,
+                utgst_amount: invoiceRecord.utgstAmount ?? null,
+                utgst_rate: taxResult.utgstRate !== undefined ? taxResult.utgstRate * 100 : null,
+                igst_rate: taxResult.igstRate !== undefined ? taxResult.igstRate * 100 : null,
+                tax_rate_version: taxResult.taxRateVersion,
+                rounding_policy: taxResult.roundingPolicy,
+                supplier_trade_name: invoiceRecord.supplierTradeName,
+                supplier_address: invoiceRecord.supplierAddress,
+                supplier_state_code: invoiceRecord.supplierStateCode,
+                supplier_pan: invoiceRecord.supplierPan,
+                supplier_cin: invoiceRecord.supplierCin,
+                supplier_email: invoiceRecord.supplierEmail,
+                customer_name: invoiceRecord.customerName,
+                customer_email: invoiceRecord.customerEmail ?? null,
+                customer_address: invoiceRecord.customerAddress ?? null,
+                customer_state_code: invoiceRecord.customerStateCode ?? null,
+                customer_gstin: invoiceRecord.customerGstin ?? null,
+                is_b2b: Boolean(invoiceRecord.isB2b),
+                reverse_charge: false,
+                pos_basis: invoiceRecord.posBasis,
+                sac_description: invoiceRecord.sacDescription,
+                gateway_order_id: invoiceRecord.gatewayOrderId ?? null,
+                gateway_payment_id: invoiceRecord.gatewayPaymentId ?? null,
+                issuance_snapshot: JSON.stringify(invoiceRecord)
+              });
+            }
+
+            await params.trx('billing_invoices').insert(insertPayload);
             if (inTransaction) {
               await params.trx.raw('RELEASE SAVEPOINT sp_invoice_insert');
             }
@@ -7073,13 +7738,164 @@ export class PaymentGatewayService {
       }
     } catch {}
 
-    // 2. Allocate credit note sequence number
+    const subMeta = this.parseJsonRecordSafe(params.subRecord.metadata);
+    let originalInvoiceRow: any = null;
+    try {
+      if (!isUnresolved && params.trx) {
+        const hasInvTbl = typeof params.trx.schema?.hasTable === 'function'
+          ? await params.trx.schema.hasTable('billing_invoices')
+          : false;
+        if (hasInvTbl) {
+          originalInvoiceRow = await params.trx('billing_invoices')
+            .where({ invoice_number: originalInvoiceNumber })
+            .first();
+        }
+      }
+    } catch {}
+
+    const originalSnapshot: InvoiceRecord | null = originalInvoiceRow
+      ? this.mapBillingInvoiceRow(originalInvoiceRow)
+      : null;
+
+    const isSandboxDoc = Boolean(
+      originalSnapshot?.isSandbox ||
+      originalInvoiceRow?.is_sandbox === true ||
+      params.subRecord?.is_sandbox === true ||
+      subMeta?.is_sandbox === true ||
+      subMeta?.rehearsal === true ||
+      isStagingSandboxRehearsalActive()
+    );
+
+    const fyInfo = getIndianFinancialYear(params.now);
+    const refundMinor = Math.max(
+      0,
+      Math.round(
+        params.refundAmountMinorUnits !== undefined
+          ? params.refundAmountMinorUnits
+          : Number(params.refundAmount || 0) * 100
+      )
+    );
+
+    // Derive cumulative prior refunds against this invoice for zero-drift proportional CGST/SGST/UTGST/IGST split
+    let alreadyRefundedTotalMinor = 0;
+    let alreadyRefundedTaxableMinor = 0;
+    let alreadyRefundedGstMinor = 0;
+    let alreadyRefundedCgstMinor = 0;
+    let alreadyRefundedSgstMinor = 0;
+    let alreadyRefundedUtgstMinor = 0;
+    let alreadyRefundedIgstMinor = 0;
+
+    if (hasCreditNotesTable) {
+      try {
+        const priorCns: any[] = await params.trx('billing_credit_notes')
+          .where({ subscription_id: params.subRecord.id })
+          .select('*');
+        for (const pcn of priorCns || []) {
+          if (pcn.document_status === 'VOIDED') continue;
+          if (!isUnresolved && pcn.original_invoice_number && pcn.original_invoice_number !== originalInvoiceNumber) {
+            continue;
+          }
+          const pm = this.parseJsonRecordSafe(pcn.metadata);
+          const pSplit = pm.taxSplit && typeof pm.taxSplit === 'object' ? pm.taxSplit : {};
+          const pTot = pm.refundAmountMinorUnits !== undefined
+            ? Number(pm.refundAmountMinorUnits)
+            : (pSplit.refundMinorUnits !== undefined
+                ? Number(pSplit.refundMinorUnits)
+                : Math.round(Number(pcn.refund_amount || 0) * 100));
+          const pTaxable = pcn.taxable_base !== undefined && pcn.taxable_base !== null
+            ? Math.round(Number(pcn.taxable_base) * 100)
+            : (pSplit.taxableBaseMinorUnits !== undefined
+                ? Number(pSplit.taxableBaseMinorUnits)
+                : Math.round(Number(pcn.refund_amount || 0) * 100));
+          const pGst = pcn.gst_amount !== undefined && pcn.gst_amount !== null
+            ? Math.round(Number(pcn.gst_amount) * 100)
+            : Number(pSplit.gstAmountMinorUnits || 0);
+          const pCgst = pcn.cgst_amount !== undefined && pcn.cgst_amount !== null
+            ? Math.round(Number(pcn.cgst_amount) * 100)
+            : Number(pSplit.cgstMinorUnits || 0);
+          const pSgst = pcn.sgst_amount !== undefined && pcn.sgst_amount !== null
+            ? Math.round(Number(pcn.sgst_amount) * 100)
+            : Number(pSplit.sgstMinorUnits || 0);
+          const pUtgst = pcn.utgst_amount !== undefined && pcn.utgst_amount !== null
+            ? Math.round(Number(pcn.utgst_amount) * 100)
+            : Number(pSplit.utgstMinorUnits || 0);
+          const pIgst = pcn.igst_amount !== undefined && pcn.igst_amount !== null
+            ? Math.round(Number(pcn.igst_amount) * 100)
+            : Number(pSplit.igstMinorUnits || 0);
+          alreadyRefundedTotalMinor += pTot;
+          alreadyRefundedTaxableMinor += pTaxable;
+          alreadyRefundedGstMinor += pGst;
+          alreadyRefundedCgstMinor += pCgst;
+          alreadyRefundedSgstMinor += pSgst;
+          alreadyRefundedUtgstMinor += pUtgst;
+          alreadyRefundedIgstMinor += pIgst;
+        }
+      } catch {}
+    }
+
+    const fallbackTax = !originalSnapshot
+      ? taxDeterminationService.determineTax({
+          amountMinorUnits: Number(params.subRecord.amount_minor_units || refundMinor),
+          currency,
+          customerCountry: subMeta.customerCountry || subMeta.country,
+          customerState: subMeta.customerState || subMeta.billingState || subMeta.state,
+          customerGstin: subMeta.customerGstin,
+          supplierGstin: process.env.AIRA_SUPPLIER_GSTIN,
+          supplierGstinVerified: process.env.AIRA_SUPPLIER_GSTIN_VERIFIED === 'true'
+        })
+      : null;
+
+    const origTotalMinor = originalSnapshot
+      ? Math.round(originalSnapshot.totalAmount * 100)
+      : (fallbackTax?.totalAmountMinorUnits || Math.max(refundMinor, Number(params.subRecord.amount_minor_units || 0)));
+    const origTaxableMinor = originalSnapshot
+      ? Math.round(originalSnapshot.taxableBase * 100)
+      : (fallbackTax?.taxableBaseMinorUnits || refundMinor);
+    const origGstMinor = originalSnapshot
+      ? Math.round(originalSnapshot.gstAmount * 100)
+      : (fallbackTax?.gstAmountMinorUnits || 0);
+    const origCgstMinor = originalSnapshot
+      ? Math.round((originalSnapshot.cgstAmount || 0) * 100)
+      : (fallbackTax?.cgstAmountMinorUnits || 0);
+    const origSgstMinor = originalSnapshot
+      ? Math.round((originalSnapshot.sgstAmount || 0) * 100)
+      : (fallbackTax?.sgstAmountMinorUnits || 0);
+    const origUtgstMinor = originalSnapshot
+      ? Math.round((originalSnapshot.utgstAmount || 0) * 100)
+      : (fallbackTax?.utgstAmountMinorUnits || 0);
+    const origIgstMinor = originalSnapshot
+      ? Math.round((originalSnapshot.igstAmount || 0) * 100)
+      : (fallbackTax?.igstAmountMinorUnits || 0);
+
+    const taxSplit = calculateProportionalRefundTax({
+      originalTotalMinorUnits: origTotalMinor,
+      originalTaxableMinorUnits: origTaxableMinor,
+      originalGstMinorUnits: origGstMinor,
+      originalCgstMinorUnits: origCgstMinor,
+      originalSgstMinorUnits: origSgstMinor,
+      originalUtgstMinorUnits: origUtgstMinor,
+      originalIgstMinorUnits: origIgstMinor,
+      refundMinorUnits: refundMinor,
+      alreadyRefundedTotalMinorUnits: alreadyRefundedTotalMinor,
+      alreadyRefundedTaxableMinorUnits: alreadyRefundedTaxableMinor,
+      alreadyRefundedGstMinorUnits: alreadyRefundedGstMinor,
+      alreadyRefundedCgstMinorUnits: alreadyRefundedCgstMinor,
+      alreadyRefundedSgstMinorUnits: alreadyRefundedSgstMinor,
+      alreadyRefundedUtgstMinorUnits: alreadyRefundedUtgstMinor,
+      alreadyRefundedIgstMinorUnits: alreadyRefundedIgstMinor
+    });
+
+    // 2. Allocate FY-scoped credit note sequence number (`CN/26-27/00001` or `SCN/26-27/00001`)
     let creditNoteNumber = '';
+    let cnSerialClaimed = false;
     const isPostgres = typeof params.trx?.raw === 'function';
     const inTransaction = isPostgres && (Boolean(params.trx.isTransaction) || typeof params.trx.commit === 'function');
 
     for (let attempt = 0; attempt < 10; attempt++) {
-      creditNoteNumber = await this.allocateCreditNoteNumber(params.trx, 2026);
+      creditNoteNumber = await this.allocateCreditNoteNumber(params.trx, {
+        now: params.now,
+        isSandbox: isSandboxDoc
+      });
 
       // Verify number is not already used in relational table
       try {
@@ -7129,6 +7945,7 @@ export class PaymentGatewayService {
           claimed = true;
         }
         if (claimed) {
+          cnSerialClaimed = true;
           break;
         }
       } catch (cnClaimErr: any) {
@@ -7145,6 +7962,10 @@ export class PaymentGatewayService {
       }
     }
 
+    if (!cnSerialClaimed || !creditNoteNumber) {
+      throw new Error('CREDIT_NOTE_SEQUENCE_EXHAUSTED: Unable to claim unique FY credit note number after 10 attempts.');
+    }
+
     let principalId = params.subRecord.principal_id;
     if (!principalId && params.subRecord.customer_id) {
       try {
@@ -7157,6 +7978,58 @@ export class PaymentGatewayService {
       ? 'PENDING_RECONCILIATION'
       : (params.isPartialRefund ? 'Partially Refunded' : 'Refunded');
 
+    const supplierConfig = taxDeterminationService.getSupplierTaxConfig();
+    const cnSnapshot: CreditNoteRecord = {
+      creditNoteNumber,
+      originalInvoiceNumber,
+      originalInvoiceDate: originalSnapshot?.date,
+      date: fyInfo.issueDateIst,
+      financialYear: fyInfo.financialYear,
+      documentStatus: 'ISSUED',
+      reason: params.isPartialRefund ? 'Partial subscription refund' : 'Full subscription refund',
+      currency,
+      refundAmount: params.refundAmount,
+      refundAmountMinorUnits: refundMinor,
+      taxableBase: taxSplit.taxableBaseMajor,
+      gstAmount: taxSplit.gstAmountMajor,
+      cgstAmount: origCgstMinor > 0 ? taxSplit.cgstMajor : undefined,
+      sgstAmount: origSgstMinor > 0 ? taxSplit.sgstMajor : undefined,
+      utgstAmount: origUtgstMinor > 0 ? taxSplit.utgstMajor : undefined,
+      igstAmount: origIgstMinor > 0 ? taxSplit.igstMajor : undefined,
+      taxRate: originalSnapshot?.taxRate ?? fallbackTax?.taxRate,
+      cgstRate: originalSnapshot?.cgstRate ?? fallbackTax?.cgstRate,
+      sgstRate: originalSnapshot?.sgstRate ?? fallbackTax?.sgstRate,
+      utgstRate: originalSnapshot?.utgstRate ?? fallbackTax?.utgstRate,
+      igstRate: originalSnapshot?.igstRate ?? fallbackTax?.igstRate,
+      sacCode: originalSnapshot?.sacCode || supplierConfig.sacCode,
+      sacDescription: originalSnapshot?.sacDescription || supplierConfig.sacDescription,
+      placeOfSupply: originalSnapshot?.placeOfSupply || fallbackTax?.placeOfSupply || 'UNKNOWN',
+      placeOfSupplyName: originalSnapshot?.placeOfSupplyName || fallbackTax?.placeOfSupplyName,
+      posBasis: originalSnapshot?.posBasis || fallbackTax?.posBasis,
+      supplierName: originalSnapshot?.supplierName || supplierConfig.legalName,
+      supplierTradeName: originalSnapshot?.supplierTradeName || supplierConfig.tradeName,
+      supplierGstin: originalSnapshot?.supplierGstin || supplierConfig.gstin,
+      supplierStateCode: originalSnapshot?.supplierStateCode || supplierConfig.stateCode,
+      supplierAddress: originalSnapshot?.supplierAddress || supplierConfig.address,
+      supplierPan: originalSnapshot?.supplierPan || supplierConfig.pan,
+      supplierCin: originalSnapshot?.supplierCin || supplierConfig.cin,
+      supplierEmail: originalSnapshot?.supplierEmail || supplierConfig.supportEmail,
+      customerName: originalSnapshot?.customerName || subMeta.customerName || 'AIRA Subscriber',
+      customerEmail: originalSnapshot?.customerEmail || subMeta.customerEmail,
+      customerAddress: originalSnapshot?.customerAddress || subMeta.customerAddress,
+      customerStateCode: originalSnapshot?.customerStateCode || subMeta.customerState,
+      customerGstin: originalSnapshot?.customerGstin || subMeta.customerGstin,
+      isB2b: Boolean(originalSnapshot?.isB2b ?? subMeta.customerGstin),
+      statutoryGstr1Cutoff: fyInfo.gstr1CreditNoteCutoff,
+      isPartialRefund: params.isPartialRefund,
+      isSandbox: isSandboxDoc,
+      status: creditNoteStatus,
+      gateway: params.gateway,
+      refundId: String(refundId),
+      pdfDownloadAvailable: false,
+      printableDocumentAvailable: true
+    };
+
     // 4. Persist in relational billing_credit_notes table if available
     if (hasCreditNotesTable) {
       const isPostgres = typeof params.trx?.raw === 'function';
@@ -7165,7 +8038,10 @@ export class PaymentGatewayService {
         await params.trx.raw('SAVEPOINT sp_credit_note_insert');
       }
       try {
-        await params.trx('billing_credit_notes').insert({
+        const hasExtendedCnCols = typeof params.trx.schema?.hasColumn === 'function'
+          ? await params.trx.schema.hasColumn('billing_credit_notes', 'issuance_snapshot')
+          : false;
+        const cnInsert: Record<string, any> = {
           id: `cn_${crypto.randomUUID().replace(/-/g, '')}`,
           credit_note_number: creditNoteNumber,
           original_invoice_number: originalInvoiceNumber,
@@ -7173,24 +8049,67 @@ export class PaymentGatewayService {
           subscription_id: params.subRecord.id,
           refund_id: String(refundId),
           refund_amount: params.refundAmount,
-          currency: (params.subRecord.currency || 'INR').toUpperCase(),
+          currency,
           is_partial_refund: params.isPartialRefund,
-          supplier_name: 'Virexa AI Ventures Private Limited',
-          supplier_gstin: process.env.AIRA_SUPPLIER_GSTIN || null,
+          supplier_name: cnSnapshot.supplierName,
+          supplier_gstin: cnSnapshot.supplierGstin || null,
           status: creditNoteStatus,
           gateway: params.gateway,
           metadata: JSON.stringify({
-            refundAmountMinorUnits: params.refundAmountMinorUnits
+            refundAmountMinorUnits: refundMinor,
+            taxSplit,
+            isSandbox: isSandboxDoc
           }),
           created_at: params.now,
           updated_at: params.now
-        });
+        };
+
+        if (hasExtendedCnCols) {
+          Object.assign(cnInsert, {
+            financial_year: cnSnapshot.financialYear,
+            document_status: 'ISSUED',
+            is_sandbox: isSandboxDoc,
+            original_invoice_date: cnSnapshot.originalInvoiceDate ?? null,
+            reason: cnSnapshot.reason ?? null,
+            taxable_base: cnSnapshot.taxableBase ?? null,
+            gst_amount: cnSnapshot.gstAmount ?? null,
+            cgst_amount: cnSnapshot.cgstAmount ?? null,
+            sgst_amount: cnSnapshot.sgstAmount ?? null,
+            utgst_amount: cnSnapshot.utgstAmount ?? null,
+            igst_amount: cnSnapshot.igstAmount ?? null,
+            tax_rate_percent: cnSnapshot.taxRate !== undefined ? cnSnapshot.taxRate * 100 : null,
+            cgst_rate: cnSnapshot.cgstRate !== undefined ? cnSnapshot.cgstRate * 100 : null,
+            sgst_rate: cnSnapshot.sgstRate !== undefined ? cnSnapshot.sgstRate * 100 : null,
+            utgst_rate: cnSnapshot.utgstRate !== undefined ? cnSnapshot.utgstRate * 100 : null,
+            igst_rate: cnSnapshot.igstRate !== undefined ? cnSnapshot.igstRate * 100 : null,
+            sac_code: cnSnapshot.sacCode ?? null,
+            sac_description: cnSnapshot.sacDescription ?? null,
+            place_of_supply: cnSnapshot.placeOfSupply ?? null,
+            pos_basis: cnSnapshot.posBasis ?? null,
+            supplier_trade_name: cnSnapshot.supplierTradeName ?? null,
+            supplier_address: cnSnapshot.supplierAddress ?? null,
+            supplier_state_code: cnSnapshot.supplierStateCode ?? null,
+            supplier_pan: cnSnapshot.supplierPan ?? null,
+            supplier_cin: cnSnapshot.supplierCin ?? null,
+            supplier_email: cnSnapshot.supplierEmail ?? null,
+            customer_name: cnSnapshot.customerName ?? null,
+            customer_email: cnSnapshot.customerEmail ?? null,
+            customer_address: cnSnapshot.customerAddress ?? null,
+            customer_state_code: cnSnapshot.customerStateCode ?? null,
+            customer_gstin: cnSnapshot.customerGstin ?? null,
+            is_b2b: Boolean(cnSnapshot.isB2b),
+            statutory_gstr1_cutoff: cnSnapshot.statutoryGstr1Cutoff ?? null,
+            issuance_snapshot: JSON.stringify(cnSnapshot)
+          });
+        }
+
+        await params.trx('billing_credit_notes').insert(cnInsert);
 
         if (inTransaction) {
           await params.trx.raw('RELEASE SAVEPOINT sp_credit_note_insert');
         }
 
-        // Update linked invoice status in relational billing_invoices table if available
+        // Update linked invoice refund display status only (NEVER mutate original tax snapshot amounts!)
         try {
           const hasInvTbl = typeof params.trx.schema?.hasTable === 'function'
             ? await params.trx.schema.hasTable('billing_invoices')
@@ -7252,6 +8171,9 @@ export class PaymentGatewayService {
           error: cnErr?.message || String(cnErr),
           now: params.now
         });
+        if (cnErr && typeof cnErr === 'object') {
+          cnErr._pendingReconciliationPersisted = true;
+        }
 
         throw cnErr;
       }
@@ -7286,20 +8208,9 @@ export class PaymentGatewayService {
       actor_type: 'system',
       actor_id: creditNoteNumber,
       payload: JSON.stringify({
-        creditNoteNumber,
-        originalInvoiceNumber,
-        date: new Date(params.now).toISOString().split('T')[0],
+        ...cnSnapshot,
         subscriptionId: params.subRecord.id,
-        refundAmount: params.refundAmount,
-        refundAmountMinorUnits: params.refundAmountMinorUnits,
-        totalAmountMinor: params.subRecord.amount_minor_units,
-        isPartialRefund: params.isPartialRefund,
-        currency: (params.subRecord.currency || 'INR').toUpperCase(),
-        supplierName: 'Virexa AI Ventures Private Limited',
-        supplierGstin: process.env.AIRA_SUPPLIER_GSTIN || undefined,
-        status: creditNoteStatus,
-        refundId,
-        gateway: params.gateway
+        totalAmountMinor: params.subRecord.amount_minor_units
       }),
       created_at: params.now
     });
@@ -7405,6 +8316,7 @@ export class PaymentGatewayService {
       const grantRows: any[] = await grantQ.select('*');
 
       const activeMatchingGrants = (grantRows || []).filter((gr: any) => {
+        if (gr.grant_type && gr.grant_type !== 'subscription_monthly') return false;
         const gm = this.parseJsonRecordSafe(gr.metadata);
         if (gm.purchaseId !== revParams.subscriptionId) return false;
         // Skip already-expired grants so expired credits are not double-deducted from unrelated balance
@@ -7606,48 +8518,276 @@ export class PaymentGatewayService {
         await executeRefund(dbClient);
       }
     } catch (refundErr: any) {
-      await this.recordCreditNotePendingReconciliationOutOfBand({
-        customerId: params.subRecord.customer_id,
-        subscriptionId: params.subRecord.id,
-        refundId: norm.refundId,
-        refundAmount: norm.refundAmountMajor,
-        gateway: params.gateway,
-        error: refundErr?.message || String(refundErr),
-        now
-      });
+      if (!refundErr?._pendingReconciliationPersisted) {
+        await this.recordCreditNotePendingReconciliationOutOfBand({
+          customerId: params.subRecord.customer_id,
+          subscriptionId: params.subRecord.id,
+          refundId: norm.refundId,
+          refundAmount: norm.refundAmountMajor,
+          gateway: params.gateway,
+          error: refundErr?.message || String(refundErr),
+          now
+        });
+      }
       throw refundErr;
     }
   }
 
   /**
-   * Maps a relational billing_invoices database row to an InvoiceRecord.
+   * Maps a relational billing_invoices database row to an InvoiceRecord, preserving exact
+   * issuance-time snapshot attributes without backfilling over historical records.
    */
   public mapBillingInvoiceRow(row: any): InvoiceRecord {
     const meta = this.parseJsonRecordSafe(row.metadata);
-    return {
-      invoiceNumber: row.invoice_number,
-      date: new Date(Number(row.created_at) || Date.now()).toISOString().split('T')[0],
-      plan: row.plan_tier === 'pro' ? 'AIRA Pro' : 'AIRA Plus',
-      currency: (row.currency || 'INR').toUpperCase(),
-      totalAmount: Number(row.total_amount) || 0,
-      taxableBase: Number(row.taxable_base) || 0,
-      gstAmount: Number(row.gst_amount) || 0,
-      cgstAmount: row.cgst_amount !== null && row.cgst_amount !== undefined ? Number(row.cgst_amount) : undefined,
-      sgstAmount: row.sgst_amount !== null && row.sgst_amount !== undefined ? Number(row.sgst_amount) : undefined,
-      igstAmount: row.igst_amount !== null && row.igst_amount !== undefined ? Number(row.igst_amount) : undefined,
-      taxRate: typeof meta.taxRate === 'number' ? meta.taxRate : undefined,
-      cgstRate: typeof meta.cgstRate === 'number' ? meta.cgstRate : undefined,
-      sgstRate: typeof meta.sgstRate === 'number' ? meta.sgstRate : undefined,
-      igstRate: typeof meta.igstRate === 'number' ? meta.igstRate : undefined,
-      taxRateVersion: typeof meta.taxRateVersion === 'string' ? meta.taxRateVersion : undefined,
-      sacCode: row.sac_code || '998431',
-      supplierName: row.supplier_name || 'Virexa AI Ventures Private Limited',
-      supplierGstin: row.supplier_gstin || undefined,
-      taxComplianceStatus: row.tax_compliance_status || 'COMPLIANT',
-      placeOfSupply: row.place_of_supply || 'UNKNOWN',
-      status: row.status || 'Paid',
-      pdfDownloadAvailable: Boolean(row.pdf_download_available)
+    const snap = this.parseJsonRecordSafe(row.issuance_snapshot);
+    const hasSnap = Object.keys(snap).length > 0;
+    const fyFallback = getIndianFinancialYear(Number(row.created_at) || Date.now());
+    const invNum = String(row.invoice_number || '');
+    const isSandboxRow = Boolean(
+      row.is_sandbox === true ||
+      snap.isSandbox === true ||
+      meta.is_sandbox === true ||
+      row.tax_compliance_status === 'SANDBOX_REHEARSAL' ||
+      invNum.startsWith('SBX/')
+    );
+
+    const toOptRateFrac = (pctOrFrac: any, metaFrac: any): number | undefined => {
+      if (typeof metaFrac === 'number') return metaFrac;
+      if (pctOrFrac !== null && pctOrFrac !== undefined && Number.isFinite(Number(pctOrFrac))) {
+        const n = Number(pctOrFrac);
+        return n > 1 ? Math.round((n / 100) * 10000) / 10000 : n;
+      }
+      return undefined;
     };
+
+    const baseRecord: InvoiceRecord = {
+      invoiceNumber: invNum,
+      date: snap.date || fyFallback.issueDateIst,
+      financialYear: row.financial_year || snap.financialYear,
+      documentKind: row.document_kind || snap.documentKind,
+      documentStatus: row.document_status || snap.documentStatus || 'ISSUED',
+      voidedAt: row.voided_at ? Number(row.voided_at) : snap.voidedAt,
+      voidReason: row.void_reason || snap.voidReason,
+      plan: snap.plan || (row.plan_tier === 'pro' ? 'AIRA Pro' : 'AIRA Plus'),
+      currency: (row.currency || snap.currency || 'INR').toUpperCase(),
+      totalAmount: Number(row.total_amount ?? snap.totalAmount) || 0,
+      taxableBase: Number(row.taxable_base ?? snap.taxableBase) || 0,
+      gstAmount: Number(row.gst_amount ?? snap.gstAmount) || 0,
+      cgstAmount: row.cgst_amount !== null && row.cgst_amount !== undefined ? Number(row.cgst_amount) : snap.cgstAmount,
+      sgstAmount: row.sgst_amount !== null && row.sgst_amount !== undefined ? Number(row.sgst_amount) : snap.sgstAmount,
+      utgstAmount: row.utgst_amount !== null && row.utgst_amount !== undefined ? Number(row.utgst_amount) : snap.utgstAmount,
+      igstAmount: row.igst_amount !== null && row.igst_amount !== undefined ? Number(row.igst_amount) : snap.igstAmount,
+      taxRate: snap.taxRate ?? toOptRateFrac(row.tax_rate_percent, meta.taxRate),
+      cgstRate: snap.cgstRate ?? toOptRateFrac(row.cgst_rate, meta.cgstRate),
+      sgstRate: snap.sgstRate ?? toOptRateFrac(row.sgst_rate, meta.sgstRate),
+      utgstRate: snap.utgstRate ?? toOptRateFrac(row.utgst_rate, meta.utgstRate),
+      igstRate: snap.igstRate ?? toOptRateFrac(row.igst_rate, meta.igstRate),
+      taxRateVersion: row.tax_rate_version || snap.taxRateVersion || (typeof meta.taxRateVersion === 'string' ? meta.taxRateVersion : undefined),
+      roundingPolicy: row.rounding_policy || snap.roundingPolicy,
+      sacCode: row.sac_code || snap.sacCode || '998315',
+      sacDescription: row.sac_description || snap.sacDescription,
+      supplierName: row.supplier_name || snap.supplierName || 'VIREXA AI VENTURES PRIVATE LIMITED',
+      supplierTradeName: row.supplier_trade_name || snap.supplierTradeName,
+      supplierGstin: row.supplier_gstin || snap.supplierGstin || undefined,
+      supplierStateCode: row.supplier_state_code || snap.supplierStateCode,
+      supplierStateName: snap.supplierStateName,
+      supplierAddress: row.supplier_address || snap.supplierAddress,
+      supplierPan: row.supplier_pan || snap.supplierPan,
+      supplierCin: row.supplier_cin || snap.supplierCin,
+      supplierEmail: row.supplier_email || snap.supplierEmail,
+      customerName: row.customer_name || snap.customerName,
+      customerEmail: row.customer_email || snap.customerEmail,
+      customerAddress: row.customer_address || snap.customerAddress,
+      customerStateCode: row.customer_state_code || snap.customerStateCode,
+      customerStateName: snap.customerStateName,
+      customerGstin: row.customer_gstin || snap.customerGstin,
+      isB2b: Boolean(row.is_b2b ?? snap.isB2b),
+      reverseCharge: Boolean(row.reverse_charge ?? snap.reverseCharge),
+      taxComplianceStatus: (row.tax_compliance_status || snap.taxComplianceStatus || 'COMPLIANT') as any,
+      placeOfSupply: row.place_of_supply || snap.placeOfSupply || 'UNKNOWN',
+      placeOfSupplyName: snap.placeOfSupplyName,
+      posBasis: row.pos_basis || snap.posBasis,
+      billingPeriodStart: (row.billing_period_start !== null && row.billing_period_start !== undefined)
+        ? Number(row.billing_period_start)
+        : (snap.billingPeriodStart ?? (meta.billingPeriodStart ? Number(meta.billingPeriodStart) : undefined)),
+      billingPeriodEnd: (row.billing_period_end !== null && row.billing_period_end !== undefined)
+        ? Number(row.billing_period_end)
+        : (snap.billingPeriodEnd ?? (meta.billingPeriodEnd ? Number(meta.billingPeriodEnd) : undefined)),
+      invoiceTimingBasis: row.invoice_timing_basis || snap.invoiceTimingBasis,
+      status: row.status || (hasSnap ? snap.status : 'Paid'),
+      isSandbox: isSandboxRow,
+      gateway: row.gateway || snap.gateway,
+      paymentMethod: row.payment_method || snap.paymentMethod,
+      gatewayOrderId: row.gateway_order_id || snap.gatewayOrderId,
+      gatewayPaymentId: row.gateway_payment_id || snap.gatewayPaymentId,
+      irn: row.irn || snap.irn,
+      irnAckNo: row.irn_ack_no || snap.irnAckNo,
+      irnAckDate: row.irn_ack_date || snap.irnAckDate,
+      signedQrCode: row.signed_qr_code || snap.signedQrCode,
+      pdfDownloadAvailable: false,
+      printableDocumentAvailable: true
+    };
+    return baseRecord;
+  }
+
+  /**
+   * Maps a relational billing_credit_notes row cleanly into a CreditNoteRecord.
+   */
+  public mapCreditNoteRow(row: any): CreditNoteRecord {
+    const snap = this.parseJsonRecordSafe(row.issuance_snapshot);
+    const meta = this.parseJsonRecordSafe(row.metadata);
+    const fyFallback = getIndianFinancialYear(Number(row.created_at) || Date.now());
+    const cnNum = String(row.credit_note_number || '');
+    const isSandboxRow = Boolean(
+      row.is_sandbox === true ||
+      snap.isSandbox === true ||
+      meta.isSandbox === true ||
+      cnNum.startsWith('SCN/')
+    );
+    const toOptRateFrac = (pctOrFrac: any, snapFrac: any): number | undefined => {
+      if (typeof snapFrac === 'number') return snapFrac;
+      if (pctOrFrac !== null && pctOrFrac !== undefined && Number.isFinite(Number(pctOrFrac))) {
+        const n = Number(pctOrFrac);
+        return n > 1 ? Math.round((n / 100) * 10000) / 10000 : n;
+      }
+      return undefined;
+    };
+
+    return {
+      creditNoteNumber: cnNum,
+      originalInvoiceNumber: row.original_invoice_number || snap.originalInvoiceNumber,
+      originalInvoiceDate: row.original_invoice_date || snap.originalInvoiceDate,
+      date: snap.date || fyFallback.issueDateIst,
+      financialYear: row.financial_year || snap.financialYear,
+      documentStatus: row.document_status || snap.documentStatus || 'ISSUED',
+      voidedAt: row.voided_at ? Number(row.voided_at) : snap.voidedAt,
+      voidReason: row.void_reason || snap.voidReason,
+      reason: row.reason || snap.reason,
+      currency: (row.currency || snap.currency || 'INR').toUpperCase(),
+      refundAmount: Number(row.refund_amount ?? snap.refundAmount) || 0,
+      refundAmountMinorUnits: meta.refundAmountMinorUnits ?? snap.refundAmountMinorUnits,
+      taxableBase: row.taxable_base !== null && row.taxable_base !== undefined ? Number(row.taxable_base) : snap.taxableBase,
+      gstAmount: row.gst_amount !== null && row.gst_amount !== undefined ? Number(row.gst_amount) : snap.gstAmount,
+      cgstAmount: row.cgst_amount !== null && row.cgst_amount !== undefined ? Number(row.cgst_amount) : snap.cgstAmount,
+      sgstAmount: row.sgst_amount !== null && row.sgst_amount !== undefined ? Number(row.sgst_amount) : snap.sgstAmount,
+      utgstAmount: row.utgst_amount !== null && row.utgst_amount !== undefined ? Number(row.utgst_amount) : snap.utgstAmount,
+      igstAmount: row.igst_amount !== null && row.igst_amount !== undefined ? Number(row.igst_amount) : snap.igstAmount,
+      taxRate: toOptRateFrac(row.tax_rate_percent, snap.taxRate),
+      cgstRate: toOptRateFrac(row.cgst_rate, snap.cgstRate),
+      sgstRate: toOptRateFrac(row.sgst_rate, snap.sgstRate),
+      utgstRate: toOptRateFrac(row.utgst_rate, snap.utgstRate),
+      igstRate: toOptRateFrac(row.igst_rate, snap.igstRate),
+      sacCode: row.sac_code || snap.sacCode,
+      sacDescription: row.sac_description || snap.sacDescription,
+      placeOfSupply: row.place_of_supply || snap.placeOfSupply,
+      placeOfSupplyName: snap.placeOfSupplyName,
+      posBasis: row.pos_basis || snap.posBasis,
+      supplierName: row.supplier_name || snap.supplierName || 'VIREXA AI VENTURES PRIVATE LIMITED',
+      supplierTradeName: row.supplier_trade_name || snap.supplierTradeName,
+      supplierGstin: row.supplier_gstin || snap.supplierGstin || undefined,
+      supplierStateCode: row.supplier_state_code || snap.supplierStateCode,
+      supplierAddress: row.supplier_address || snap.supplierAddress,
+      supplierPan: row.supplier_pan || snap.supplierPan,
+      supplierCin: row.supplier_cin || snap.supplierCin,
+      supplierEmail: row.supplier_email || snap.supplierEmail,
+      customerName: row.customer_name || snap.customerName,
+      customerEmail: row.customer_email || snap.customerEmail,
+      customerAddress: row.customer_address || snap.customerAddress,
+      customerStateCode: row.customer_state_code || snap.customerStateCode,
+      customerGstin: row.customer_gstin || snap.customerGstin,
+      isB2b: Boolean(row.is_b2b ?? snap.isB2b),
+      statutoryGstr1Cutoff: row.statutory_gstr1_cutoff || snap.statutoryGstr1Cutoff,
+      isPartialRefund: Boolean(row.is_partial_refund),
+      isSandbox: isSandboxRow,
+      status: row.status || 'Refunded',
+      gateway: row.gateway || snap.gateway,
+      refundId: row.refund_id || snap.refundId,
+      irn: row.irn || snap.irn,
+      irnAckNo: row.irn_ack_no || snap.irnAckNo,
+      irnAckDate: row.irn_ack_date || snap.irnAckDate,
+      signedQrCode: row.signed_qr_code || snap.signedQrCode,
+      pdfDownloadAvailable: false,
+      printableDocumentAvailable: true
+    };
+  }
+
+  /**
+   * Lists issued Credit Notes scoped strictly to the authenticated principal.
+   */
+  async getCreditNotes(principalId: string): Promise<CreditNoteRecord[]> {
+    const dbClient = this.getDb() as any;
+    const cust = await dbClient('billing_customers').where({ principal_id: principalId }).first();
+    if (!cust) return [];
+    const hasCnTbl = typeof dbClient.schema?.hasTable === 'function'
+      ? await dbClient.schema.hasTable('billing_credit_notes')
+      : true;
+    if (!hasCnTbl) return [];
+    const rows: any[] = await dbClient('billing_credit_notes')
+      .where({ customer_id: cust.id })
+      .orderBy('created_at', 'desc')
+      .select('*');
+    return (rows || []).map((r) => this.mapCreditNoteRow(r));
+  }
+
+  /**
+   * Marks an issued GST invoice or credit note as VOIDED without deleting its serial number,
+   * preserving audit continuity under CGST Rule 46(b).
+   */
+  async voidBillingDocument(params: {
+    documentType: 'invoice' | 'credit_note';
+    documentNumber: string;
+    reason: string;
+    actorId: string;
+  }): Promise<{ documentNumber: string; documentStatus: 'VOIDED'; voidedAt: number; reason: string }> {
+    const cleanReason = params.reason?.trim();
+    if (!cleanReason) {
+      throw new Error('VALIDATION_ERROR: Voiding a billing document requires a non-empty audit reason.');
+    }
+    const dbClient = this.getDb() as Knex;
+    const now = Date.now();
+    const tableName = params.documentType === 'credit_note' ? 'billing_credit_notes' : 'billing_invoices';
+    const numCol = params.documentType === 'credit_note' ? 'credit_note_number' : 'invoice_number';
+
+    return await dbClient.transaction(async (trx) => {
+      const existing = await trx(tableName).where({ [numCol]: params.documentNumber }).forUpdate().first();
+      if (!existing) {
+        throw new Error(`NOT_FOUND: Billing document ${params.documentNumber} not found.`);
+      }
+      if (existing.document_status === 'VOIDED') {
+        return {
+          documentNumber: params.documentNumber,
+          documentStatus: 'VOIDED' as const,
+          voidedAt: Number(existing.voided_at || now),
+          reason: existing.void_reason || cleanReason
+        };
+      }
+      await trx(tableName).where({ [numCol]: params.documentNumber }).update({
+        document_status: 'VOIDED',
+        voided_at: now,
+        void_reason: cleanReason.slice(0, 255),
+        updated_at: now
+      });
+      await trx('billing_audit_events').insert({
+        id: `bae_${crypto.randomUUID().replace(/-/g, '')}`,
+        customer_id: existing.customer_id,
+        event_type: 'BILLING_DOCUMENT_VOIDED',
+        actor_type: 'operator',
+        actor_id: params.actorId,
+        payload: JSON.stringify({
+          documentType: params.documentType,
+          documentNumber: params.documentNumber,
+          reason: cleanReason.slice(0, 255),
+          voidedAt: now
+        }),
+        created_at: now
+      });
+      return {
+        documentNumber: params.documentNumber,
+        documentStatus: 'VOIDED' as const,
+        voidedAt: now,
+        reason: cleanReason.slice(0, 255)
+      };
+    });
   }
 
   /**
@@ -7669,6 +8809,7 @@ export class PaymentGatewayService {
 
     let reconciled = 0;
     let failed = 0;
+    const hasTransaction = typeof (dbClient as any)?.transaction === 'function';
 
     for (const ev of (pendingEvents || []).slice(0, limit)) {
       try {
@@ -7681,18 +8822,25 @@ export class PaymentGatewayService {
         const cust = await dbClient('billing_customers').where({ id: ev.customer_id }).first();
         const principalId = cust ? (cust as any).principal_id : ev.customer_id;
 
-        const inv = await this.issueDurableInvoice({
-          trx: dbClient,
-          customerId: ev.customer_id,
-          principalId,
-          purchaseRecord: sub,
-          planTier: (sub as any).plan_id,
-          gateway: p.gateway || 'razorpay',
-          actualPaymentId: p.paymentId,
-          gatewayOrderId: p.gatewayOrderId,
-          cycleNumber: p.cycleNumber || 1,
-          now: Date.now()
-        });
+        const runReconcile = async (invTrx: any) => {
+          const freshSub = await invTrx('subscriptions').where({ id: p.purchaseId }).first() || sub;
+          return await this.issueDurableInvoice({
+            trx: invTrx,
+            customerId: ev.customer_id,
+            principalId,
+            purchaseRecord: freshSub,
+            planTier: (freshSub as any).plan_id,
+            gateway: p.gateway || 'razorpay',
+            actualPaymentId: p.paymentId,
+            gatewayOrderId: p.gatewayOrderId,
+            cycleNumber: p.cycleNumber || 1,
+            now: Date.now()
+          });
+        };
+
+        const inv = hasTransaction
+          ? await (dbClient as Knex).transaction(async (invTrx) => runReconcile(invTrx))
+          : await runReconcile(dbClient);
 
         if (inv) {
           reconciled++;
@@ -8404,19 +9552,28 @@ export class PaymentGatewayService {
           gstAmount: Number(p.gstAmount) || 0,
           cgstAmount: p.cgstAmount !== undefined ? Number(p.cgstAmount) : undefined,
           sgstAmount: p.sgstAmount !== undefined ? Number(p.sgstAmount) : undefined,
+          utgstAmount: p.utgstAmount !== undefined ? Number(p.utgstAmount) : undefined,
           igstAmount: p.igstAmount !== undefined ? Number(p.igstAmount) : undefined,
           taxRate: typeof p.taxRate === 'number' ? p.taxRate : undefined,
           cgstRate: typeof p.cgstRate === 'number' ? p.cgstRate : undefined,
           sgstRate: typeof p.sgstRate === 'number' ? p.sgstRate : undefined,
+          utgstRate: typeof p.utgstRate === 'number' ? p.utgstRate : undefined,
           igstRate: typeof p.igstRate === 'number' ? p.igstRate : undefined,
           taxRateVersion: typeof p.taxRateVersion === 'string' ? p.taxRateVersion : undefined,
-          sacCode: p.sacCode || '998431',
-          supplierName: p.supplierName || 'Virexa AI Ventures Private Limited',
+          sacCode: p.sacCode || '998315',
+          supplierName: p.supplierName || 'VIREXA AI VENTURES PRIVATE LIMITED',
           supplierGstin: p.supplierGstin || process.env.AIRA_SUPPLIER_GSTIN || undefined,
           taxComplianceStatus: p.taxComplianceStatus || 'COMPLIANT',
           placeOfSupply: p.placeOfSupply || 'UNKNOWN',
+          placeOfSupplyName: typeof p.placeOfSupplyName === 'string' ? p.placeOfSupplyName : undefined,
+          posBasis: typeof p.posBasis === 'string' ? p.posBasis : undefined,
+          financialYear: typeof p.financialYear === 'string' ? p.financialYear : undefined,
+          isSandbox: p.isSandbox !== undefined ? Boolean(p.isSandbox) : invoiceNumber.startsWith('SBX/'),
+          customerGstin: typeof p.customerGstin === 'string' ? p.customerGstin : undefined,
+          customerStateCode: typeof p.customerStateCode === 'string' ? p.customerStateCode : undefined,
           status: p.status || 'Paid',
-          pdfDownloadAvailable: false
+          pdfDownloadAvailable: false,
+          printableDocumentAvailable: true
         }, p.subscriptionId, invoiceNumber);
 
         invoices.push(record);
@@ -8436,12 +9593,13 @@ export class PaymentGatewayService {
             totalAmount: Math.round(((Number(pp.amount) || 0) / 100) * 100) / 100,
             taxableBase: 0,
             gstAmount: 0,
-            sacCode: '998431',
-            supplierName: 'Virexa AI Ventures Private Limited',
+            sacCode: '998315',
+            supplierName: 'VIREXA AI VENTURES PRIVATE LIMITED',
             taxComplianceStatus: 'PROVISIONAL_PENDING_RECONCILIATION' as any,
             placeOfSupply: 'UNKNOWN',
             status: 'Pending Reconciliation',
-            pdfDownloadAvailable: false
+            pdfDownloadAvailable: false,
+            printableDocumentAvailable: false
           });
         }
       }

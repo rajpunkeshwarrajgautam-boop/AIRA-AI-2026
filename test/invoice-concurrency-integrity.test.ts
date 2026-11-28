@@ -156,7 +156,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       );
 
       for (const invNum of allocations) {
-        assert.match(invNum, /^INV-2026-\d{4,}$/);
+        assert.match(invNum, /^INV\/\d{2}-\d{2}\/\d{5}$/);
       }
     });
 
@@ -178,7 +178,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       );
 
       for (const cnNum of allocations) {
-        assert.match(cnNum, /^CN-2026-\d{4,}$/);
+        assert.match(cnNum, /^CN\/\d{2}-\d{2}\/\d{5}$/);
       }
     });
   });
@@ -295,7 +295,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       });
 
       assert.ok(workerBInvoice);
-      assert.match(workerBInvoice.invoiceNumber, /^INV-2026-\d{4,}$/);
+      assert.match(workerBInvoice.invoiceNumber, /^INV\/\d{2}-\d{2}\/\d{5}$/);
 
       // Verify idempotent_operations now has generation 2, COMPLETED, and response_body
       const opRecord = tables.idempotent_operations.find(r => r.key === cycleBindingKey);
@@ -389,7 +389,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       const postReconcileInvoices = await service.getInvoices(principalId);
       assert.equal(postReconcileInvoices.length, 1);
       assert.equal(postReconcileInvoices[0].status, 'Paid');
-      assert.ok(postReconcileInvoices[0].invoiceNumber.startsWith('INV-2026-'));
+      assert.match(postReconcileInvoices[0].invoiceNumber, /^INV\/\d{2}-\d{2}\/\d{5}$/);
     });
   });
 
@@ -429,7 +429,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       // Invariant: Never manufacture invoice number like INV-2026-NO-INV-01!
       assert.equal(payload.originalInvoiceNumber, 'UNRESOLVED_ORIGINAL_INVOICE');
       assert.equal(payload.status, 'PENDING_RECONCILIATION');
-      assert.ok(payload.creditNoteNumber.startsWith('CN-2026-'));
+      assert.match(payload.creditNoteNumber, /^CN\/\d{2}-\d{2}\/\d{5}$/);
     });
 
     it('verifies existing credit note on uniqueness conflict and rejects tenant/amount mismatch', async () => {
@@ -572,12 +572,12 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
   });
 
   describe('6. Comprehensive Tax Determination Matrix', () => {
-    it('correctly calculates intra-state Delhi tax (9% CGST + 9% SGST)', () => {
+    it('correctly calculates intra-state Uttar Pradesh tax (9% CGST + 9% SGST)', () => {
       const res = taxDeterminationService.determineTax({
         amountMinorUnits: 39900,
         currency: 'INR',
-        customerState: 'Delhi',
-        supplierGstin: '07AAACV2026E1Z5',
+        customerState: 'Uttar Pradesh',
+        supplierGstin: '09AAMCV4678C1ZV',
         supplierGstinVerified: true
       });
 
@@ -587,7 +587,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       assert.equal(res.cgstAmount, 30.43);
       assert.equal(res.sgstAmount, 30.43);
       assert.equal(res.igstAmount, undefined);
-      assert.equal(res.placeOfSupply, '07');
+      assert.equal(res.placeOfSupply, '09');
       assert.equal(res.taxComplianceStatus, 'COMPLIANT');
     });
 
@@ -596,7 +596,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
         amountMinorUnits: 99900,
         currency: 'INR',
         customerState: 'MH',
-        supplierGstin: '07AAACV2026E1Z5',
+        supplierGstin: '09AAMCV4678C1ZV',
         supplierGstinVerified: true
       });
 
@@ -610,18 +610,18 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       assert.equal(res.taxComplianceStatus, 'COMPLIANT');
     });
 
-    it('flags missing place of supply as PROVISIONAL_PENDING_PLACE_OF_SUPPLY and never defaults to Delhi', () => {
+    it('flags missing place of supply as PROVISIONAL_PENDING_PLACE_OF_SUPPLY and never guesses IGST', () => {
       const res = taxDeterminationService.determineTax({
         amountMinorUnits: 39900,
         currency: 'INR',
         customerState: undefined,
-        supplierGstin: '07AAACV2026E1Z5',
+        supplierGstin: '09AAMCV4678C1ZV',
         supplierGstinVerified: true
       });
 
       assert.equal(res.placeOfSupply, 'UNKNOWN');
       assert.equal(res.taxComplianceStatus, 'PROVISIONAL_PENDING_PLACE_OF_SUPPLY');
-      assert.equal(res.igstAmount, 60.86);
+      assert.equal(res.igstAmount, undefined);
       assert.equal(res.cgstAmount, undefined);
       assert.equal(res.sgstAmount, undefined);
     });
@@ -632,7 +632,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
         currency: 'USD',
         customerCountry: 'IN', // Customer located in India
         customerState: '27',
-        supplierGstin: '07AAACV2026E1Z5',
+        supplierGstin: '09AAMCV4678C1ZV',
         supplierGstinVerified: true
       });
 
@@ -650,7 +650,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
         currency: 'USD',
         customerCountry: 'US',
         lutAvailable: false,
-        supplierGstin: '07AAACV2026E1Z5',
+        supplierGstin: '09AAMCV4678C1ZV',
         supplierGstinVerified: true
       });
 
@@ -669,7 +669,7 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
         customerCountry: 'US',
         lutNumber: 'LUT-2026-EX-001',
         lutAvailable: true,
-        supplierGstin: '07AAACV2026E1Z5',
+        supplierGstin: '09AAMCV4678C1ZV',
         supplierGstinVerified: true
       });
 
@@ -685,8 +685,8 @@ describe('Invoice Concurrency, Tax Matrix & Failure Handling Integrity Suite', (
       const res = taxDeterminationService.determineTax({
         amountMinorUnits: 39900,
         currency: 'INR',
-        customerState: '07',
-        supplierGstin: '07AAACV2026E1Z5',
+        customerState: '09',
+        supplierGstin: '09AAMCV4678C1ZV',
         supplierGstinVerified: false
       });
 

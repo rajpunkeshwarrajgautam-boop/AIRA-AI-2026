@@ -110,6 +110,12 @@ jobs:
       - name: Cashfree recurring plan dynamic provisioning and safety verification
         run: npx tsx --test test/cashfree-recurring-plan-provisioning.test.ts test/cashfree-checkout-contact-details.test.ts
 
+      - name: Production readiness closure, INR-only USD gating & outbox CAS fencing
+        run: npx tsx --test test/production-readiness-closure.test.ts
+
+      - name: GST invoicing compliance, FY serial allocation, snapshots & Credit Notes (PG18)
+        run: npx tsx --test test/commercial-gst-tax.test.ts test/gst-invoicing-compliance-pg18.test.ts test/financial-lifecycle-phase3-repro.test.ts
+
       - name: Subscription readiness & superseded safety / hardening regressions (PG18)
         run: npx tsx --test test/billing-subscription-readiness.test.ts test/billing-superseded-and-hardening-regression.test.ts
 
