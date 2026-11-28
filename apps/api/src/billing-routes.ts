@@ -11,6 +11,12 @@ import {
 import { productionReadinessService } from './billing/production-readiness.js';
 import { taxDeterminationService } from './billing/tax-determination.js';
 import { buildInvoiceHtmlDocument, buildCreditNoteHtmlDocument } from './billing/gst-document-renderer.js';
+import { buildInvoicePdfBuffer, buildCreditNotePdfBuffer } from './billing/pdf-document-renderer.js';
+import {
+  GLOBAL_COUNTRY_CATALOG,
+  getProviderCapabilityMatrix,
+  resolveCheckoutProviderForRegion
+} from './billing/global-billing-catalog.js';
 import { COMMERCIAL_PLANS } from '../../../packages/contracts/src/commercial.js';
 import { isStagingSandboxRehearsalActive } from './billing/staging-sandbox-rehearsal-guard.js';
 
@@ -225,8 +231,7 @@ export function createBillingRoutes(): Router {
     const billingStatus = isCheckoutAvailable
       ? 'active'
       : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
-
-    const supplierTax = taxDeterminationService.getSupplierTaxConfig();
+    const internationalUsdEnabled = isSandbox || isInternationalUsdBillingEnabled();
 
     res.json({
       plans: Object.values(COMMERCIAL_PLANS).map(plan => ({
@@ -236,20 +241,13 @@ export function createBillingRoutes(): Router {
       topupPacks: [],
       billingStatus,
       checkoutAvailable: isCheckoutAvailable || isRehearsal,
-      internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
+      internationalUsdEnabled,
+      countries: GLOBAL_COUNTRY_CATALOG,
       gstJurisdictions: taxDeterminationService.listSupportedStates(),
-      taxConfigSummary: {
-        supplierLegalName: supplierTax.legalName,
-        supplierTradeName: supplierTax.tradeName,
-        supplierStateCode: supplierTax.stateCode,
-        supplierStateName: supplierTax.stateName,
-        supplierAddress: supplierTax.address,
-        supplierEmail: supplierTax.supportEmail,
-        sacCode: supplierTax.sacCode,
-        sacApproved: supplierTax.sacApproved,
-        financeTaxSignOff: supplierTax.financeTaxSignOff,
-        isProvisionalFixture: !supplierTax.sacApproved || !supplierTax.financeTaxSignOff
-      },
+      providerCapabilities: getProviderCapabilityMatrix({
+        isSandbox,
+        internationalUsdEnabled
+      }),
       featuresCertified: true
     });
   });
@@ -266,8 +264,9 @@ export function createBillingRoutes(): Router {
       const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
       const isRehearsal = isStagingSandboxRehearsalActive();
       const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+      // subscription-aware billingStatus: distinguishes active-subscribed from active-checkout-only
       const billingStatus = isCheckoutAvailable
-        ? 'active'
+        ? (entitlements.subscriptionStatus === 'active' ? 'active_subscribed' : 'active')
         : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
       res.json({
@@ -294,13 +293,16 @@ export function createBillingRoutes(): Router {
       const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
       const isRehearsal = isStagingSandboxRehearsalActive();
       const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+      // subscription-aware billingStatus: distinguishes active-subscribed from active-checkout-only
       const billingStatus = isCheckoutAvailable
-        ? 'active'
+        ? (entitlements.subscriptionStatus === 'active' ? 'active_subscribed' : 'active')
         : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
       const lifecycle = await paymentGatewayService.getCustomerBillingLifecycleState(principal.userId);
       const taxProfile = await commercialBillingService.getBillingTaxProfile(principal.userId).catch(() => null);
+      const paymentMethods = await paymentGatewayService.getPaymentMethods(principal.userId).catch(() => []);
       const supplierTax = taxDeterminationService.getSupplierTaxConfig();
+      const internationalUsdEnabled = isSandbox || isInternationalUsdBillingEnabled();
 
       res.json({
         principalId: principal.userId,
@@ -317,10 +319,29 @@ export function createBillingRoutes(): Router {
         reasoningBoostsUsed: entitlements.reasoningBoostsLimit - entitlements.reasoningBoostsRemaining,
         reasoningBoostLimit: entitlements.reasoningBoostsLimit,
         checkoutAvailable: isCheckoutAvailable || isRehearsal,
-        internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
+        internationalUsdEnabled,
         billingStatus,
         featuresCertified: true,
         taxProfile,
+        billingProfile: taxProfile ? {
+          country: taxProfile.country,
+          accountType: taxProfile.accountType,
+          legalName: taxProfile.legalName,
+          addressLine1: taxProfile.addressLine1,
+          addressLine2: taxProfile.addressLine2,
+          city: taxProfile.city,
+          stateCode: taxProfile.stateCode,
+          stateName: taxProfile.stateName,
+          postalCode: taxProfile.postalCode,
+          customerGstin: taxProfile.customerGstin,
+          taxId: taxProfile.taxId,
+          isB2b: taxProfile.isB2b
+        } : null,
+        paymentMethods,
+        providerCapabilities: getProviderCapabilityMatrix({
+          isSandbox,
+          internationalUsdEnabled
+        }),
         supplierIdentity: {
           legalName: supplierTax.legalName,
           tradeName: supplierTax.tradeName,
@@ -372,6 +393,56 @@ export function createBillingRoutes(): Router {
   });
 
   /**
+   * Protected: Global customer billing profile (Country, Individual/Business, State/Region, Tax ID / GSTIN).
+   */
+  router.get('/profile', async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    try {
+      const profile = await commercialBillingService.getBillingTaxProfile(principal.userId);
+      res.json({
+        profile,
+        countries: GLOBAL_COUNTRY_CATALOG,
+        jurisdictions: taxDeterminationService.listSupportedStates()
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to fetch billing profile.' });
+    }
+  });
+
+  router.put('/profile', async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    try {
+      const profile = await commercialBillingService.upsertBillingTaxProfile(principal.userId, req.body || {});
+      res.json({ profile });
+    } catch (err: any) {
+      const isValidation = err?.message?.startsWith('VALIDATION_ERROR');
+      res.status(isValidation ? 400 : 500).json({
+        error: isValidation ? 'VALIDATION_ERROR' : 'PROFILE_UPDATE_FAILED',
+        message: err?.message || 'Failed to update billing profile.'
+      });
+    }
+  });
+
+  /**
+   * Protected: Strictly masked payment method summaries derived from verified provider metadata.
+   */
+  router.get('/payment-methods', async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    try {
+      const paymentMethods = await paymentGatewayService.getPaymentMethods(principal.userId);
+      res.json({ paymentMethods });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to fetch payment methods.' });
+    }
+  });
+
+  /**
    * Protected: Get user's credit note history scoped to authenticated principal.
    */
   router.get('/credit-notes', async (req: Request, res: Response) => {
@@ -414,8 +485,16 @@ export function createBillingRoutes(): Router {
       if (!cn) {
         return res.status(404).json({ error: 'NOT_FOUND: Credit note not found for this account.' });
       }
-      const html = buildCreditNoteHtmlDocument(cn);
       const safeFileNum = cn.creditNoteNumber.replace(/[^a-zA-Z0-9_-]/g, '-');
+      const wantsPdf = String(req.query?.format || '').toLowerCase() === 'pdf' || req.path.endsWith('/pdf');
+      if (wantsPdf) {
+        const pdf = buildCreditNotePdfBuffer(cn);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="AIRA-Credit-Note-${safeFileNum}.pdf"`);
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).send(pdf);
+      }
+      const html = buildCreditNoteHtmlDocument(cn);
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="AIRA-GST-Credit-Note-${safeFileNum}.html"`);
       res.setHeader('Cache-Control', 'no-store');
@@ -426,6 +505,8 @@ export function createBillingRoutes(): Router {
   };
   router.get('/credit-notes/:creditNoteNumber/download', handleCreditNoteDownload);
   router.get(/^\/credit-notes\/(.+)\/download$/, handleCreditNoteDownload);
+  router.get('/credit-notes/:creditNoteNumber/pdf', handleCreditNoteDownload);
+  router.get(/^\/credit-notes\/(.+)\/pdf$/, handleCreditNoteDownload);
 
   /**
    * Protected: Get user's invoice history with GST details.
@@ -479,6 +560,26 @@ export function createBillingRoutes(): Router {
       }
 
       const safeFileNum = invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '-');
+      const wantsPdf = String(req.query?.format || '').toLowerCase() === 'pdf' || req.path.endsWith('/pdf');
+      if (wantsPdf) {
+        let pdf: Buffer;
+        try {
+          pdf = buildInvoicePdfBuffer(invoice);
+        } catch (pdfErr: any) {
+          if (pdfErr?.code === 'PDF_UNSUPPORTED_CHARACTERS') {
+            return res.status(422).json({
+              error: 'PDF generation is not available for invoices with non-Latin characters in the customer name or address. Please use the HTML invoice instead.',
+              code: 'PDF_UNSUPPORTED_CHARACTERS',
+              htmlAvailable: true
+            });
+          }
+          throw pdfErr;
+        }
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="AIRA-Invoice-${safeFileNum}.pdf"`);
+        res.setHeader('Cache-Control', 'no-store');
+        return res.status(200).send(pdf);
+      }
       const html = buildInvoiceHtmlDocument(invoice);
 
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -491,6 +592,53 @@ export function createBillingRoutes(): Router {
   };
   router.get('/invoices/:invoiceNumber/download', handleInvoiceDownload);
   router.get(/^\/invoices\/(.+)\/download$/, handleInvoiceDownload);
+  router.get('/invoices/:invoiceNumber/pdf', handleInvoiceDownload);
+  router.get(/^\/invoices\/(.+)\/pdf$/, handleInvoiceDownload);
+
+  /**
+   * Protected: Invoice email delivery endpoint.
+   * Enforces principal ownership first (404 on missing/other account), then fails closed with 503
+   * when transactional email delivery is unconfigured.
+   */
+  const handleInvoiceEmail = async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    const rawParam = typeof req.params.invoiceNumber === 'string'
+      ? req.params.invoiceNumber
+      : (typeof (req.params as any)[0] === 'string' ? (req.params as any)[0] : '');
+    let requested = '';
+    try {
+      requested = decodeURIComponent(rawParam).trim();
+    } catch {
+      return res.status(400).json({ error: 'VALIDATION_ERROR: Invalid invoice number encoding.' });
+    }
+    if (!requested || !/^[a-zA-Z0-9_/-]{3,80}$/.test(requested) || requested.includes('..')) {
+      return res.status(400).json({ error: 'VALIDATION_ERROR: Invalid invoice number format.' });
+    }
+
+    try {
+      const invoices = await paymentGatewayService.getInvoices(principal.userId);
+      const invoice = invoices.find(inv => inv.invoiceNumber === requested);
+      if (!invoice || (invoice.status !== 'Paid' && invoice.status !== 'Refunded' && invoice.status !== 'Partially Refunded')) {
+        return res.status(404).json({ error: 'NOT_FOUND: Invoice not found for this account.' });
+      }
+      if (!(process.env.RESEND_API_KEY || process.env.SMTP_HOST || process.env.SENDGRID_API_KEY)) {
+        return res.status(503).json({
+          error: 'EMAIL_DELIVERY_NOT_CONFIGURED',
+          message: 'Transactional invoice email delivery is not configured in this environment. Use Download PDF or Print A4 instead.'
+        });
+      }
+      return res.status(503).json({
+        error: 'EMAIL_DELIVERY_NOT_CONFIGURED',
+        message: 'Transactional invoice email adapter is not enabled in this release.'
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to process invoice email request.' });
+    }
+  };
+  router.post('/invoices/:invoiceNumber/email', handleInvoiceEmail);
+  router.post(/^\/invoices\/(.+)\/email$/, handleInvoiceEmail);
 
   /**
    * Protected: Initiate subscription checkout session.
@@ -504,7 +652,23 @@ export function createBillingRoutes(): Router {
       return res.status(400).json({ error: 'Invalid planId. Must be "plus" or "pro".' });
     }
 
-    const resolvedGateway = currency === 'USD' ? 'razorpay' : (gateway || 'razorpay');
+    const targetCurrency = currency === 'USD' ? 'USD' : 'INR';
+    const isRehearsal = isStagingSandboxRehearsalActive();
+    const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+    const providerDecision = resolveCheckoutProviderForRegion({
+      currency: targetCurrency,
+      country: billingProfile?.country || customerDetails?.country,
+      requestedGateway: gateway,
+      isSandbox,
+      internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled()
+    });
+    if (!providerDecision.allowed) {
+      return res.status(providerDecision.code === 'UNSUPPORTED_INTERNATIONAL_GATEWAY' ? 400 : 503).json({
+        error: providerDecision.code,
+        message: providerDecision.message
+      });
+    }
+    const resolvedGateway = providerDecision.gateway;
     const rawPhone = customerPhone || customerDetails?.phone;
     const clientOpKey = (req.headers['x-idempotency-key'] as string) || bodyIdempotencyKey;
 

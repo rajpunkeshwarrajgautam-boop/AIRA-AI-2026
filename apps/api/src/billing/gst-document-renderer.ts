@@ -53,6 +53,8 @@ export interface GstInvoiceRenderInput {
   placeOfSupplyName?: string;
   posBasis?: string;
   taxComplianceStatus?: string;
+  lutNumber?: string;
+  lutApproved?: boolean;
   status: string;
   isSandbox?: boolean;
   billingPeriodStart?: number;
@@ -154,6 +156,11 @@ function sanitizeCustomerEmail(email?: string): string | undefined {
 
 function buildTaxRowsHtml(params: {
   symbol: string;
+  currency?: string;
+  taxComplianceStatus?: string;
+  posBasis?: string;
+  lutNumber?: string;
+  lutApproved?: boolean;
   taxRate?: number;
   cgstAmount?: number;
   cgstRate?: number;
@@ -167,6 +174,18 @@ function buildTaxRowsHtml(params: {
   placeOfSupply?: string;
 }): string {
   const { symbol } = params;
+  const isExportSupply = params.posBasis === 'EXPORT_OUTSIDE_INDIA';
+  const isVerifiedLutExport = isExportSupply && (
+    params.taxComplianceStatus === 'COMPLIANT_ZERO_RATED_EXPORT' ||
+    Boolean(params.lutApproved && params.lutNumber)
+  );
+  if (isExportSupply && Number(params.gstAmount ?? 0) === 0) {
+    if (isVerifiedLutExport) {
+      const lutSuffix = params.lutNumber ? ` (${escapeHtml(params.lutNumber)})` : '';
+      return `<tr><td>Zero-Rated Export of Services (IGST Act Sec 2(6) / LUT${lutSuffix})</td><td class="num">${symbol}0.00</td></tr>`;
+    }
+    return `<tr><td>Export of Services (Outside India &mdash; Tax/LUT Pending Verification)</td><td class="num">${symbol}0.00</td></tr>`;
+  }
   if (params.cgstAmount !== undefined && (params.utgstRate !== undefined || (params.utgstAmount !== undefined && params.utgstAmount > 0))) {
     return [
       `<tr><td>CGST (${formatPct(params.cgstRate, 9)})</td><td class="num">${symbol}${Number(params.cgstAmount || 0).toFixed(2)}</td></tr>`,
@@ -238,6 +257,11 @@ export function buildInvoiceHtmlDocument(inv: GstInvoiceRenderInput): string {
 
   const taxRows = buildTaxRowsHtml({
     symbol,
+    currency: inv.currency,
+    taxComplianceStatus: inv.taxComplianceStatus,
+    posBasis: inv.posBasis,
+    lutNumber: inv.lutNumber,
+    lutApproved: inv.lutApproved,
     taxRate: inv.taxRate,
     cgstAmount: inv.cgstAmount,
     cgstRate: inv.cgstRate,
@@ -250,6 +274,14 @@ export function buildInvoiceHtmlDocument(inv: GstInvoiceRenderInput): string {
     gstAmount: inv.gstAmount,
     placeOfSupply: inv.placeOfSupply
   });
+  const isExportDoc = inv.posBasis === 'EXPORT_OUTSIDE_INDIA';
+  const isVerifiedLutExport = isExportDoc && (
+    inv.taxComplianceStatus === 'COMPLIANT_ZERO_RATED_EXPORT' ||
+    Boolean(inv.lutApproved && inv.lutNumber)
+  );
+  const docTitle = isSandboxDoc
+    ? (isExportDoc ? 'Sandbox Export Receipt' : 'Sandbox Tax Invoice')
+    : (isExportDoc ? (isVerifiedLutExport ? 'Commercial Export Invoice' : 'Provisional Export Statement') : 'Tax Invoice');
 
   const bannerHtml = isVoided
     ? `<div class="banner-voided">VOIDED DOCUMENT — NOT VALID FOR INPUT TAX CREDIT${inv.voidReason ? ` (${escapeHtml(inv.voidReason)})` : ''}</div>`
@@ -268,7 +300,7 @@ export function buildInvoiceHtmlDocument(inv: GstInvoiceRenderInput): string {
   ${bannerHtml}
   <div class="hdr">
     <div>
-      <h1 style="margin:0 0 4px 0;font-size:21px;">${isSandboxDoc ? 'Sandbox Tax Invoice' : 'Tax Invoice'}</h1>
+      <h1 style="margin:0 0 4px 0;font-size:21px;">${escapeHtml(docTitle)}</h1>
       <div><strong>${escapeHtml(supplierLegal)}</strong>${supplierTrade !== supplierLegal ? ` <span class="meta">(${escapeHtml(supplierTrade)})</span>` : ''}</div>
       <div class="meta">${escapeHtml(supplierAddr)}</div>
       <div class="meta">
@@ -291,8 +323,8 @@ export function buildInvoiceHtmlDocument(inv: GstInvoiceRenderInput): string {
       <div><strong>${escapeHtml(inv.customerName || 'AIRA Subscriber')}</strong></div>
       ${buyerEmail ? `<div class="meta">${escapeHtml(buyerEmail)}</div>` : ''}
       ${inv.customerAddress ? `<div class="meta">${escapeHtml(inv.customerAddress)}</div>` : ''}
-      ${inv.customerStateCode ? `<div class="meta">State/UT Code: ${escapeHtml(inv.customerStateName ? `${inv.customerStateName} (${inv.customerStateCode})` : inv.customerStateCode)}</div>` : ''}
-      ${inv.customerGstin ? `<div class="meta">Recipient GSTIN (B2B): <strong>${escapeHtml(inv.customerGstin)}</strong></div>` : '<div class="meta">Supply Category: B2C (Unregistered)</div>'}
+      ${inv.customerStateCode ? `<div class="meta">State/Region: ${escapeHtml(inv.customerStateName ? `${inv.customerStateName} (${inv.customerStateCode})` : inv.customerStateCode)}</div>` : ''}
+      ${inv.customerGstin ? `<div class="meta">Recipient GSTIN (B2B): <strong>${escapeHtml(inv.customerGstin)}</strong></div>` : (isExportDoc ? `<div class="meta">Supply Category: Export of Services (Outside India)</div>` : '<div class="meta">Supply Category: B2C (Unregistered)</div>')}
     </div>
     <div class="card">
       <h2>Statutory &amp; Payment Details</h2>
@@ -326,7 +358,7 @@ export function buildInvoiceHtmlDocument(inv: GstInvoiceRenderInput): string {
   </table>
 
   <div class="foot">
-    <div><strong>Compliance Status:</strong> ${escapeHtml(inv.taxComplianceStatus || 'COMPLIANT')} &middot; Prices include applicable GST.</div>
+    <div><strong>Compliance Status:</strong> ${escapeHtml(inv.taxComplianceStatus || 'COMPLIANT')} &middot; ${isVerifiedLutExport ? `Zero-rated export of services under LUT ${escapeHtml(inv.lutNumber || '')} (IGST Act Sec 2(6) &amp; Sec 16).` : (isExportDoc ? 'Export outside India; LUT verification pending before claiming zero-rated IGST Sec 2(6) status.' : 'Prices include applicable GST.')}</div>
     <div>Printable A4 HTML tax document (use browser Print &rarr; Save as PDF for local archival).</div>
     <div>Notice: Computer-generated document. Electronic signature / authentication under IT Act &amp; CGST Rule 46 requires separate authorized finance/sign-off (U2) before commercial release.</div>
   </div>
@@ -353,6 +385,7 @@ export function buildCreditNoteHtmlDocument(cn: GstCreditNoteRenderInput): strin
 
   const taxRows = buildTaxRowsHtml({
     symbol,
+    currency: cn.currency,
     taxRate: cn.taxRate,
     cgstAmount: cn.cgstAmount,
     cgstRate: cn.cgstRate,

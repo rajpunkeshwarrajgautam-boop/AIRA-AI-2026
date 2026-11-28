@@ -1,56 +1,53 @@
 {
   "schema": "handoff/v2",
-  "updated_at": "2026-11-23T05:15:00.000Z",
-  "phase": "GATE-4-FINAL-COMPLETION-PAYMENT-CERTIFICATION",
+  "updated_at": "2026-11-28T22:45:00+05:30",
+  "phase": "GLOBAL_PAYMENTS_BILLING_V2_DRAFT_PR_READY",
   "staging_baseline": {
-    "commit": "06aa2d2f7fff7a7e4077226544e9855fb0d4a6c5",
-    "pr": 200,
-    "status": "OPEN",
-    "head_sha": "3f5a9afccf1a1872441de0cfb4c91ab19436b549",
-    "code_sha": "c8627143eb8a3e9336535bcdf511d27274b8e5ba",
-    "vercel_deployment_id": "dpl_4ouJFFgxn8um9z9bojKErVqaR8jp",
+    "runtime_commit": "5da4a4d1c0987de68e75eaddd24d60fab7c51264",
+    "pr": 218,
+    "status": "MERGED",
     "host": "https://staging.virexaaiventures.com",
+    "vercel_deployment_id": "dpl_4gu8wqpQssa6rFp82s5PYKzpVmGF",
     "staging_neon_branch": "br-snowy-bonus-b32thjlz",
-    "staging_neon_endpoint": "ep-twilight-cherry-b3iz2oqv"
+    "staging_neon_endpoint": "ep-twilight-cherry-b3iz2oqv",
+    "applied_migrations": 36,
+    "latest_migration": "036_gst_invoice_compliance_snapshots.ts",
+    "public_tables": 55,
+    "historical_invoices_preserved": 5
   },
-  "verified_investigation_findings": {
-    "pr_200_certification": {
-      "verdict": "CERTIFIED",
-      "ci_run_id": "45062355898",
-      "fast_ci": "PASS",
-      "pg18_durability": "PASS",
-      "pg16_regression": "PASS",
-      "semantic_search_ci": "PASS",
-      "main_pr_certification": "PASS",
-      "gitguardian": "PASS",
-      "local_tests": "115/115 PASS",
+  "v2_candidate": {
+    "branch": "feat/global-payments-billing-v2",
+    "base_branch": "staging",
+    "specification": "docs/GLOBAL_PAYMENTS_BILLING_V2_SPECIFICATION.md (SPEC-GLOBAL-BILLING-V2-2026-01)",
+    "local_verification": {
+      "pg18_billing_suites": "298/298 PASS (73 suites)",
+      "pg16_regression_suites": "47/47 PASS (4 suites)",
+      "browser_e2e_chromium": "PASS (Light/Dark, Desktop 1440x900 & Mobile 390x844, PDF %PDF-1.4)",
       "typecheck": "PASS",
-      "build": "PASS"
-    },
-    "browser_verification": {
-      "deployment": "https://aira-ai-2026-flgv7y4po-rajpunkeshwarrajgautam-boops-projects.vercel.app",
-      "subagent_id": "aad88c64-026d-4f4c-85ae-8982e9e82cfd",
-      "pricing_modal_direct_open": "PASS",
-      "circular_navigation_eliminated": "PASS",
-      "currency_toggle_usd_inr": "PASS",
-      "gateway_toggle_razorpay_cashfree": "PASS",
-      "checkout_disabled_honest_state": "PASS"
-    },
-    "staging_isolation": {
-      "commercial_billing": "DISABLED",
-      "sandbox_rehearsal": "DISABLED",
-      "authorized_test_principal": "neon_user_fc6f9c72-6ebb-4fd2-960a-5a8779e59cb7"
+      "lint": "0 errors",
+      "build": "PASS",
+      "secrets_hygiene": "PASS (0 exposed across 1123 tracked files)",
+      "db_verify_deploy": "READY (36 migrations, 14 required tables)"
     }
   },
-  "candidate_pr_production": {
-    "number": 196,
-    "url": "https://github.com/rajpunkeshwarrajgautam-boop/AIRA-AI-2026/pull/196",
-    "branch": "feat/cashfree-razorpay-subscriptions-20261120",
-    "target": "prod-release",
-    "head_sha": "29b66870c36fa57bf9bbb63f71b9953e0d8be0f3",
-    "state": "OPEN",
-    "status": "STRICT_HOLD"
+  "knowledge_graph": {
+    "nodes": 53,
+    "edges": 65,
+    "json": ".planning/graphs/payment_billing_knowledge_graph.json",
+    "manifest": ".planning/graphs/manifest.json",
+    "sha256": "02e7cc90bb6ed84663ebe143d550d0a4c2fac45e7c2ac8b31c84e827f0f67c49"
   },
-  "gate_4_verdict": "OPEN_AWAITING_PR200_STAGING_MERGE",
-  "commercial_billing": "STRICT_HOLD"
+  "production_hold": {
+    "pr_215": "STRICT_HOLD",
+    "prod_branch": "prod-release",
+    "external_blockers": [
+      "U1_GST_AMENDMENT",
+      "U2_CA_SIGNOFF",
+      "U3_ZERO_INVOICES",
+      "U4_LIVE_MERCHANT_GO_LIVE",
+      "U5_EMAIL_TRANSPORT",
+      "U6_RAZORPAY_INTL_ACTIVATION"
+    ]
+  },
+  "next_authorized_action": "Review Draft PR targeting staging and verify remote CI checks before any staging merge decision."
 }

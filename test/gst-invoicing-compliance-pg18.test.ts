@@ -230,7 +230,7 @@ describe('GST Invoicing, FY Sequences, Immutable Snapshots & Credit Note Complia
     assert.equal(issued!.igstAmount, 60.86);
     assert.equal(issued!.cgstAmount, undefined);
     assert.equal(issued!.utgstAmount, undefined);
-    assert.equal(issued!.pdfDownloadAvailable, false);
+    assert.equal(issued!.pdfDownloadAvailable, true);
     assert.equal(issued!.printableDocumentAvailable, true);
 
     // Mutate environment & customer profile AFTER issuance

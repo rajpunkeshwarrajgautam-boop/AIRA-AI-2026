@@ -1,4 +1,4 @@
-import type { PlanTier } from '../types/commercial-types';
+import type { PlanTier, PaymentMethodSummary, GlobalBillingProfile } from '../types/commercial-types';
 
 export interface BillingSummary {
   principalId: string;
@@ -15,6 +15,8 @@ export interface BillingSummary {
   monthlyUnitLimit: number;
   reasoningBoostsUsed: number;
   reasoningBoostLimit: number;
+  paymentMethods?: PaymentMethodSummary[];
+  billingProfile?: GlobalBillingProfile | null;
 }
 
 export type ServerSessionState = 'verified' | 'anonymous' | 'mismatch';

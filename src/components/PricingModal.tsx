@@ -345,9 +345,18 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     : null;
 
   const setLoadingPlan = (tier: PlanTier | null) => setActivePlanTier(tier);
+  // Stage A/B: plan_selection shows ONLY plan cards + currency toggle.
+  // Stage B (checkout) shows billing fields, gateway, pricing disclosure.
+  const [uiStage, setUiStage] = useState<'plan_selection' | 'checkout'>('plan_selection');
+  // Which plan was selected in Stage A before entering Stage B
+  const [selectedPlanTier, setSelectedPlanTier] = useState<PlanTier | null>(null);
+
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
   const [activatedSummary, setActivatedSummary] = useState<ActivatedConfirmationSummary | null>(null);
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
+  const [downloadingPdfNum, setDownloadingPdfNum] = useState<string | null>(null);
+  const userTouchedCurrencyRef = useRef<boolean>(false);
+  const usdEnabledRef = useRef<boolean>(false);
   const [pendingCheckout, setPendingCheckout] = useState<PendingCheckoutSummary | null>(null);
   const [activeSubSummary, setActiveSubSummary] = useState<{
     planId: PlanTier;
@@ -360,6 +369,19 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const [_billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [countries, setCountries] = useState<Array<{ code: string; name: string; defaultCurrency: CurrencyCode }>>([
+    { code: 'US', name: 'United States', defaultCurrency: 'USD' },
+    { code: 'IN', name: 'India', defaultCurrency: 'INR' },
+    { code: 'GB', name: 'United Kingdom', defaultCurrency: 'USD' },
+    { code: 'CA', name: 'Canada', defaultCurrency: 'USD' },
+    { code: 'AU', name: 'Australia', defaultCurrency: 'USD' },
+    { code: 'DE', name: 'Germany', defaultCurrency: 'USD' },
+    { code: 'SG', name: 'Singapore', defaultCurrency: 'USD' },
+    { code: 'AE', name: 'United Arab Emirates', defaultCurrency: 'USD' }
+  ]);
+  const [billingCountry, setBillingCountry] = useState<string>('IN');
+  const [billingAccountType, setBillingAccountType] = useState<'individual' | 'business'>('individual');
+  const [billingTaxId, setBillingTaxId] = useState<string>('');
   const [gstJurisdictions, setGstJurisdictions] = useState<Array<{ code: string; name: string }>>([
     { code: '09', name: 'Uttar Pradesh' },
     { code: '07', name: 'Delhi' },
@@ -370,11 +392,6 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     { code: '24', name: 'Gujarat' },
     { code: '19', name: 'West Bengal' }
   ]);
-  const [taxConfigSummary, setTaxConfigSummary] = useState<{
-    supplierLegalName?: string;
-    sacCode?: string;
-    isProvisionalFixture?: boolean;
-  } | null>(null);
   const [billingStateCode, setBillingStateCode] = useState<string>('');
   const [billingStateError, setBillingStateError] = useState<string | null>(null);
   const [showB2bGstFields, setShowB2bGstFields] = useState<boolean>(false);
@@ -414,6 +431,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     isDismissedRef.current = true;
     setActivePlanTier(null);
     setWatchdogRecoveryUrl(null);
+    setUiStage('plan_selection');
+    setSelectedPlanTier(null);
 
     // Modal dismissal must NOT erase unresolved financial operation identity.
     // Preserve AMBIGUOUS_OUTCOME, RECONCILIATION_REQUIRED, or AWAITING_CONFIRMATION.
@@ -482,10 +501,14 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleModalClose();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        handleModalClose();
+      }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
   }, [isOpen, handleModalClose]);
 
   useEffect(() => {
@@ -499,16 +522,19 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           setCheckoutAvailable(data.checkoutAvailable);
         }
         if (typeof data.internationalUsdEnabled === 'boolean') {
+          usdEnabledRef.current = data.internationalUsdEnabled;
           setInternationalUsdEnabled(data.internationalUsdEnabled);
           if (!data.internationalUsdEnabled) {
             setCurrency('INR');
+          } else if (!userTouchedCurrencyRef.current && billingCountry && billingCountry !== 'IN') {
+            setCurrency('USD');
           }
+        }
+        if (Array.isArray(data.countries) && data.countries.length > 0) {
+          setCountries(data.countries);
         }
         if (Array.isArray(data.gstJurisdictions) && data.gstJurisdictions.length > 0) {
           setGstJurisdictions(data.gstJurisdictions);
-        }
-        if (data.taxConfigSummary) {
-          setTaxConfigSummary(data.taxConfigSummary);
         }
         if (data.billingStatus) {
           setBillingStatus(data.billingStatus);
@@ -544,16 +570,32 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           activePendingSubIdRef.current = null;
           setPendingCheckout(null);
         }
-        if (summary?.taxProfile) {
-          const tp = summary.taxProfile;
-          if (tp.stateCode) setBillingStateCode(String(tp.stateCode));
-          if (tp.legalName) setBillingLegalName(String(tp.legalName));
-          if (tp.customerGstin) {
-            setBillingGstin(String(tp.customerGstin));
+        const bp = summary?.billingProfile || summary?.taxProfile;
+        if (bp) {
+          const resolvedCountry = String(bp.country || 'IN').toUpperCase();
+          setBillingCountry(resolvedCountry);
+          if (!userTouchedCurrencyRef.current) {
+            if (resolvedCountry === 'IN') {
+              setCurrency('INR');
+            } else if (usdEnabledRef.current) {
+              setCurrency('USD');
+            }
+          }
+          setBillingAccountType(bp.accountType === 'business' || bp.customerGstin ? 'business' : 'individual');
+          if (bp.stateCode) setBillingStateCode(String(bp.stateCode));
+          if (bp.legalName) setBillingLegalName(String(bp.legalName));
+          if (bp.taxId) setBillingTaxId(String(bp.taxId));
+          if (bp.customerGstin) {
+            setBillingGstin(String(bp.customerGstin));
+            setShowB2bGstFields(true);
+          } else if (bp.accountType === 'business') {
             setShowB2bGstFields(true);
           }
-          if (tp.addressLine1) setBillingAddress(String(tp.addressLine1));
+          if (bp.addressLine1) setBillingAddress(String(bp.addressLine1));
         } else {
+          setBillingCountry('IN');
+          setBillingAccountType('individual');
+          setBillingTaxId('');
           setBillingStateCode('');
           setBillingLegalName('');
           setBillingGstin('');
@@ -587,6 +629,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     try {
       const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(pendingSubId)}/reconcile`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });
       const data = await res.json().catch(() => ({} as Record<string, any>));
@@ -657,6 +700,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     try {
       const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(subscriptionId)}/cancel-pending`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reason: options?.reason || 'customer_cancelled_pending',
           allowCancelAuthorizedMandate: Boolean(options?.allowCancelAuthorizedMandate)
@@ -795,22 +839,32 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             planId: tier,
             currency,
             gateway: targetGateway,
-            customerPhone: customerPhone.trim() || undefined,
-            ...(currency === 'INR' && billingStateCode
+            customerPhone: currency === 'INR' ? (customerPhone.trim() || undefined) : undefined,
+            billingProfile: currency === 'INR'
               ? {
-                  billingProfile: {
-                    stateCode: billingStateCode,
-                    country: 'IN',
-                    ...(showB2bGstFields
-                      ? {
-                          legalName: billingLegalName.trim() || undefined,
-                          customerGstin: billingGstin.trim().toUpperCase() || undefined,
-                          addressLine1: billingAddress.trim() || undefined
-                        }
-                      : {})
-                  }
+                  country: 'IN',
+                  accountType: showB2bGstFields ? 'business' : billingAccountType,
+                  ...(billingStateCode ? { stateCode: billingStateCode } : {}),
+                  ...(showB2bGstFields
+                    ? {
+                        legalName: billingLegalName.trim() || undefined,
+                        customerGstin: billingGstin.trim().toUpperCase() || undefined,
+                        addressLine1: billingAddress.trim() || undefined
+                      }
+                    : {})
                 }
-              : {}),
+              : {
+                  country: billingCountry === 'IN' ? 'US' : billingCountry,
+                  accountType: showB2bGstFields ? 'business' : billingAccountType,
+                  ...(billingStateCode.trim() ? { stateCode: billingStateCode.trim() } : {}),
+                  ...(showB2bGstFields
+                    ? {
+                        legalName: billingLegalName.trim() || undefined,
+                        taxId: billingTaxId.trim() || undefined,
+                        addressLine1: billingAddress.trim() || undefined
+                      }
+                    : {})
+                },
             idempotencyKey: clientOpId
           })
         });
@@ -859,7 +913,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             setCheckoutNotice(
               data.customerMessage ||
               (data.pendingSubscription ? buildFriendlyPendingNotice(data.pendingSubscription) : null) ||
-              'Another checkout session is already open for your account. Verify its status or cancel it before starting a new checkout.'
+              'Another checkout session is already in progress for your account. Verify its status or cancel it before starting a new checkout.'
             );
           }
         } else if (res.status === 504 || data.error === 'GATEWAY_AMBIGUOUS_OUTCOME') {
@@ -1061,6 +1115,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                         if (data.purchaseId) {
                           await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(data.purchaseId)}/reconcile`, {
                             method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({})
                           }).catch(() => null);
                         }
@@ -1220,28 +1275,31 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="relative my-2 sm:my-8 max-h-[92dvh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-white/10 bg-stone-900 text-white shadow-lg"
+        className="relative my-2 sm:my-8 max-h-[92dvh] w-full max-w-5xl overflow-y-auto rounded-3xl border border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-claude-surface-dark text-claude-text-light dark:text-white shadow-2xl"
       >
         {/* Header */}
-        <div className="p-6 md:p-8 border-b border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="p-4 sm:p-6 md:p-8 border-b border-claude-border-light dark:border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4 bg-claude-surface2-light/50 dark:bg-transparent">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-orange-500/10 border border-orange-500/20 text-orange-400 text-xs font-semibold mb-2">
-              <Shield className="w-3.5 h-3.5" />
-              AIRA AI 2026 Commercial Plans
-            </div>
-            <h2 id="aira-pricing-title" className="text-2xl font-bold font-serif">Choose Your Intelligence Tier</h2>
-            <p className="text-stone-400 text-xs mt-1">Autonomous cognitive workflows, neural memory, and verifiable audit durability.</p>
+            <h2 id="aira-pricing-title" className="text-xl sm:text-2xl font-bold font-serif text-claude-text-light dark:text-white">Choose your plan</h2>
+            <p className="text-claude-muted-light dark:text-stone-400 text-xs mt-1">Choose the plan that fits your needs. Cancel anytime.</p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between sm:justify-end gap-3">
             {/* Currency switcher */}
-            <div className="flex items-center bg-stone-950/80 p-1 rounded-xl border border-white/10">
+            <div className="flex items-center bg-claude-surface2-light dark:bg-stone-950/80 p-1 rounded-xl border border-claude-border-light dark:border-white/10">
               <button
                 type="button"
                 disabled={isCheckoutBusy}
-                onClick={() => setCurrency('INR')}
+                onClick={() => {
+                  userTouchedCurrencyRef.current = true;
+                  setCurrency('INR');
+                  if (billingCountry !== 'IN') {
+                    setBillingCountry('IN');
+                    setBillingStateCode('');
+                  }
+                }}
                 aria-pressed={currency === 'INR'}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'INR' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'INR' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 ₹ INR (India)
               </button>
@@ -1249,9 +1307,16 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 <button
                   type="button"
                   disabled={isCheckoutBusy}
-                  onClick={() => setCurrency('USD')}
+                  onClick={() => {
+                    userTouchedCurrencyRef.current = true;
+                    setCurrency('USD');
+                    if (billingCountry === 'IN') {
+                      setBillingCountry('US');
+                      setBillingStateCode('');
+                    }
+                  }}
                   aria-pressed={currency === 'USD'}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   $ USD (Global)
                 </button>
@@ -1261,7 +1326,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             <button
               type="button"
               onClick={handleModalClose}
-              className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-white/5 transition-colors"
+              className="p-2 rounded-xl text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
               aria-label="Close modal"
             >
               <X className="w-5 h-5" />
@@ -1287,42 +1352,77 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
               {activatedSummary.invoiceNumber && (
-                <button
-                  type="button"
-                  disabled={downloadingInvoiceNum === activatedSummary.invoiceNumber}
-                  onClick={async () => {
-                    const invNum = activatedSummary.invoiceNumber!;
-                    const safeFilename = `AIRA-GST-Invoice-${invNum.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
-                    setDownloadingInvoiceNum(invNum);
-                    try {
-                      const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invNum)}/download`);
-                      if (!res.ok) {
-                        const errData = await res.json().catch(() => ({}));
-                        alert(errData.error || 'Failed to load A4 invoice.');
-                        return;
+                <>
+                  <button
+                    type="button"
+                    disabled={downloadingPdfNum === activatedSummary.invoiceNumber}
+                    onClick={async () => {
+                      const invNum = activatedSummary.invoiceNumber!;
+                      const safeFilename = `AIRA-Invoice-${invNum.replace(/[^a-zA-Z0-9_-]/g, '-')}.pdf`;
+                      setDownloadingPdfNum(invNum);
+                      try {
+                        const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invNum)}/pdf`);
+                        if (!res.ok) {
+                          const errData = await res.json().catch(() => ({}));
+                          alert(errData.error || 'Failed to download PDF invoice.');
+                          return;
+                        }
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = safeFilename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      } catch (err: any) {
+                        alert(err?.message || 'Unable to download PDF invoice.');
+                      } finally {
+                        setDownloadingPdfNum(null);
                       }
-                      const html = await res.text();
-                      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = safeFilename;
-                      document.body.appendChild(a);
-                      a.click();
-                      a.remove();
-                      URL.revokeObjectURL(url);
-                    } catch (err: any) {
-                      alert(err?.message || 'Unable to open A4 invoice.');
-                    } finally {
-                      setDownloadingInvoiceNum(null);
-                    }
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/40 text-white font-semibold text-[11px] whitespace-nowrap transition-colors disabled:opacity-50"
-                >
-                  {downloadingInvoiceNum === activatedSummary.invoiceNumber
-                    ? 'Opening…'
-                    : `View / Print A4 Invoice (${activatedSummary.invoiceNumber})`}
-                </button>
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white font-semibold text-[11px] whitespace-nowrap transition-colors disabled:opacity-50"
+                  >
+                    {downloadingPdfNum === activatedSummary.invoiceNumber ? 'Generating…' : 'Download PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={downloadingInvoiceNum === activatedSummary.invoiceNumber}
+                    onClick={async () => {
+                      const invNum = activatedSummary.invoiceNumber!;
+                      const safeFilename = `AIRA-GST-Invoice-${invNum.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
+                      setDownloadingInvoiceNum(invNum);
+                      try {
+                        const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invNum)}/download`);
+                        if (!res.ok) {
+                          const errData = await res.json().catch(() => ({}));
+                          alert(errData.error || 'Failed to load A4 invoice.');
+                          return;
+                        }
+                        const html = await res.text();
+                        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = safeFilename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      } catch (err: any) {
+                        alert(err?.message || 'Unable to open A4 invoice.');
+                      } finally {
+                        setDownloadingInvoiceNum(null);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/40 text-white font-semibold text-[11px] whitespace-nowrap transition-colors disabled:opacity-50"
+                  >
+                    {downloadingInvoiceNum === activatedSummary.invoiceNumber
+                      ? 'Opening…'
+                      : `View / Print A4 Invoice (${activatedSummary.invoiceNumber})`}
+                  </button>
+                </>
               )}
               <button
                 type="button"
@@ -1340,7 +1440,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           const targetPendingId = pendingCheckout?.id || activePendingSubIdRef.current || null;
           const hasMandate = Boolean(pendingCheckout?.hasAuthorizedMandate);
           return (
-            <div className="mx-6 md:mx-8 mt-4 p-3.5 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-200 text-xs flex flex-wrap items-center justify-between gap-3">
+            <div data-testid="pricing-checkout-notice" className="mx-4 sm:mx-6 md:mx-8 mt-4 p-3.5 rounded-xl bg-orange-500/10 border border-orange-500/35 text-amber-950 dark:text-orange-200 text-xs flex flex-wrap items-center justify-between gap-3">
               <span className="flex-1 min-w-[220px] leading-relaxed">
                 {checkoutNotice || (pendingCheckout ? buildFriendlyPendingNotice(pendingCheckout) : '')}
               </span>
@@ -1350,7 +1450,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                     <button
                       type="button"
                       onClick={() => void handleReconcilePendingCheckout(targetPendingId)}
-                      className="px-2.5 py-1.5 rounded-lg bg-orange-500/20 hover:bg-orange-500/30 border border-orange-400/40 text-orange-100 font-semibold text-[11px] whitespace-nowrap transition-colors"
+                      className="px-2.5 py-1.5 rounded-lg bg-orange-500/20 hover:bg-orange-500/30 border border-orange-500/40 text-amber-950 dark:text-orange-100 font-semibold text-[11px] whitespace-nowrap transition-colors"
                     >
                       Verify / Reconcile Status
                     </button>
@@ -1360,13 +1460,13 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                         reason: hasMandate ? 'user_cancel_authorized_mandate' : 'user_cancel_pending',
                         allowCancelAuthorizedMandate: hasMandate
                       })}
-                      className="px-2.5 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 border border-white/15 text-stone-200 font-semibold text-[11px] whitespace-nowrap transition-colors"
+                      className="px-2.5 py-1.5 rounded-lg bg-claude-surface2-light dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 border border-claude-border-light dark:border-white/15 text-claude-text-light dark:text-stone-200 font-semibold text-[11px] whitespace-nowrap transition-colors"
                     >
                       {hasMandate ? 'Cancel Authorized Mandate' : 'Cancel Pending Checkout'}
                     </button>
                   </>
                 )}
-                {isCheckoutBusy && <span className="animate-pulse text-[11px] text-orange-400 font-semibold">Processing…</span>}
+                {isCheckoutBusy && <span className="animate-pulse text-[11px] text-claude-accentInk dark:text-orange-400 font-semibold">Processing…</span>}
               </div>
             </div>
           );
@@ -1374,8 +1474,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
         {/* Watchdog Actionable Recovery Container */}
         {watchdogRecoveryUrl && (
-          <div className="mx-6 md:mx-8 mt-4 p-4 rounded-xl bg-orange-500/10 border border-orange-500/40 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
-            <div className="text-xs text-orange-200">
+          <div className="mx-4 sm:mx-6 md:mx-8 mt-4 p-4 rounded-xl bg-orange-500/10 border border-orange-500/40 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+            <div className="text-xs text-amber-950 dark:text-orange-200">
               Mandate authorization window did not open automatically. You can launch the official payment gateway page directly:
             </div>
             <div className="flex items-center gap-2 shrink-0">
@@ -1399,7 +1499,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                     setCheckoutNotice(null);
                   }
                 }}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-stone-800 text-stone-300 hover:text-white transition-colors"
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-claude-surface2-light dark:bg-stone-800 text-claude-text-light dark:text-stone-300 hover:text-claude-text-light dark:hover:text-white border border-claude-border-light dark:border-white/10 transition-colors"
               >
                 Cancel & Dismiss
               </button>
@@ -1407,18 +1507,126 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         )}
 
-        {/* Payment Gateway Selector & Customer Phone for INR */}
-        {currency === 'INR' && (
-          <div className="px-6 md:px-8 pt-4 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+        {/* Global Country / Region Alignment — only shown in checkout stage */}
+        {uiStage === 'checkout' && <div className="px-4 sm:px-6 md:px-8 pt-3 sm:pt-4 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <label htmlFor="pricing-billing-country" className="text-claude-muted-light dark:text-stone-400 whitespace-nowrap">
+              Country / Region:
+            </label>
+            <select
+              id="pricing-billing-country"
+              disabled={isCheckoutBusy}
+              value={billingCountry}
+              onChange={(e) => {
+                userTouchedCurrencyRef.current = true;
+                const nextCode = e.target.value.toUpperCase();
+                if ((nextCode === 'IN') !== (billingCountry === 'IN')) {
+                  setBillingStateCode('');
+                }
+                setBillingCountry(nextCode);
+                if (nextCode === 'IN') {
+                  setCurrency('INR');
+                } else if (internationalUsdEnabled) {
+                  setCurrency('USD');
+                }
+              }}
+              className="bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/15 rounded-xl px-3 py-1.5 text-xs text-claude-text-light dark:text-white focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+            >
+              {countries.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.name} ({c.defaultCurrency})
+                </option>
+              ))}
+            </select>
+          </div>
+          <span className="text-[11px] text-claude-muted-light dark:text-stone-400">
+            {currency === 'USD'
+              ? 'Global Card Checkout (Visa / Mastercard / Amex) · Billed in USD'
+              : 'India Domestic Billing (UPI / Card / NetBanking) · GST-inclusive pricing'}
+          </span>
+        </div>}
+
+        {/* Payment Method & Optional Tax Disclosure (Global USD) — checkout stage only */}
+        {uiStage === 'checkout' && currency === 'USD' && (
+          <div className="px-4 sm:px-6 md:px-8 pt-3 space-y-2 text-xs">
+            <div className="rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/70 dark:bg-stone-950/60 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-claude-text-light dark:text-stone-300">
+                Pay securely in <strong className="text-claude-text-light dark:text-white">USD</strong> by international credit or debit card.
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !showB2bGstFields;
+                  setShowB2bGstFields(next);
+                  setBillingAccountType(next ? 'business' : 'individual');
+                }}
+                className="text-[11px] font-semibold text-claude-accentInk dark:text-orange-300 hover:underline text-left sm:text-right whitespace-nowrap"
+              >
+                {showB2bGstFields ? 'Hide business tax details' : 'Purchasing for a business? Add company & Tax ID (optional)'}
+              </button>
+            </div>
+            {showB2bGstFields && (
+              <div className="rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/70 dark:bg-stone-950/60 p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div>
+                  <label htmlFor="global-b2b-name" className="block text-[11px] text-claude-muted-light dark:text-stone-400 mb-1">
+                    Company / Legal Name
+                  </label>
+                  <input
+                    id="global-b2b-name"
+                    type="text"
+                    disabled={isCheckoutBusy}
+                    placeholder="Company LLC or Full Name"
+                    value={billingLegalName}
+                    onChange={(e) => setBillingLegalName(e.target.value)}
+                    className="w-full bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-claude-text-light dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="global-b2b-taxid" className="block text-[11px] text-claude-muted-light dark:text-stone-400 mb-1">
+                    {billingCountry === 'GB' ? 'VAT number (Optional)' : billingCountry === 'US' ? 'EIN or Tax ID (Optional)' : billingCountry === 'CA' ? 'Business Number (Optional)' : billingCountry === 'AU' ? 'ABN (Optional)' : 'Tax ID (Optional)'}
+                  </label>
+                  <input
+                    id="global-b2b-taxid"
+                    type="text"
+                    maxLength={64}
+                    disabled={isCheckoutBusy}
+                    placeholder="e.g. EU123456789 or EIN-88-9911223"
+                    value={billingTaxId}
+                    onChange={(e) => setBillingTaxId(e.target.value)}
+                    className="w-full bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-claude-text-light dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="global-b2b-address" className="block text-[11px] text-claude-muted-light dark:text-stone-400 mb-1">
+                    Billing Address (Optional)
+                  </label>
+                  <input
+                    id="global-b2b-address"
+                    type="text"
+                    disabled={isCheckoutBusy}
+                    placeholder="Street, City, Postal Code"
+                    value={billingAddress}
+                    onChange={(e) => setBillingAddress(e.target.value)}
+                    className="w-full bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-claude-text-light dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Payment Gateway Selector & Customer Phone for INR — checkout stage only */}
+        {uiStage === 'checkout' && currency === 'INR' && (
+          <div className="px-4 sm:px-6 md:px-8 pt-3 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 text-xs">
             <div className="flex items-center gap-2">
-              <span className="text-stone-400">Payment Partner:</span>
-              <div className="inline-flex items-center bg-stone-950/80 p-0.5 rounded-lg border border-white/10">
+              <span className="text-claude-muted-light dark:text-stone-400">Payment method:</span>
+              <div className="inline-flex items-center bg-claude-surface2-light dark:bg-stone-950/80 p-0.5 rounded-lg border border-claude-border-light dark:border-white/10">
                 <button
                   type="button"
                   disabled={isCheckoutBusy}
                   onClick={() => setGateway('razorpay')}
                   aria-pressed={gateway === 'razorpay'}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${gateway === 'razorpay' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${gateway === 'razorpay' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   Razorpay
                 </button>
@@ -1427,7 +1635,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   disabled={isCheckoutBusy}
                   onClick={() => setGateway('cashfree')}
                   aria-pressed={gateway === 'cashfree'}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${gateway === 'cashfree' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${gateway === 'cashfree' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   Cashfree
                 </button>
@@ -1436,7 +1644,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
             {/* Mobile number collection required for Cashfree e-mandate */}
             <div className="flex items-center gap-2">
-              <label htmlFor="cashfree-phone-input" className="text-stone-400 whitespace-nowrap">
+              <label htmlFor="cashfree-phone-input" className="text-claude-muted-light dark:text-stone-400 whitespace-nowrap">
                 {gateway === 'cashfree' ? 'Mobile for Mandate *:' : 'Mobile (optional):'}
               </label>
               <input
@@ -1456,7 +1664,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 aria-label="Mobile Number for Cashfree Mandate Notifications"
                 aria-invalid={!!phoneError}
                 aria-describedby={phoneError ? 'cashfree-phone-error' : undefined}
-                className={`w-full sm:w-44 bg-stone-900 border rounded-xl px-3 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta ${phoneError ? 'border-red-500/60' : 'border-white/15'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`w-full sm:w-44 bg-claude-surface-light dark:bg-claude-surface2-dark border rounded-xl px-3 py-1.5 sm:py-2 text-xs text-claude-text-light dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta ${phoneError ? 'border-red-500/60' : 'border-claude-border-light dark:border-white/15'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
                 maxLength={14}
               />
             </div>
@@ -1464,20 +1672,20 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         )}
 
         {phoneError && (
-          <div className="px-6 md:px-8 pt-1">
-            <p id="cashfree-phone-error" className="text-[11px] text-red-400 font-medium">
+          <div className="px-4 sm:px-6 md:px-8 pt-1">
+            <p id="cashfree-phone-error" className="text-[11px] text-red-600 dark:text-red-400 font-medium">
               {phoneError}
             </p>
           </div>
         )}
 
-        {/* Indian GST Place of Supply & Optional B2B GSTIN */}
-        {currency === 'INR' && (
-          <div className="px-6 md:px-8 pt-3 space-y-2 text-xs">
-            <div className="rounded-xl border border-white/10 bg-stone-950/60 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        {/* Indian GST Place of Supply & Optional B2B GSTIN — checkout stage only */}
+        {uiStage === 'checkout' && currency === 'INR' && (
+          <div className="px-4 sm:px-6 md:px-8 pt-2.5 sm:pt-3 space-y-2 text-xs">
+            <div className="rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/70 dark:bg-stone-950/60 p-2.5 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-1">
-                <label htmlFor="gst-billing-state" className="text-stone-300 font-medium whitespace-nowrap">
-                  Billing State / UT * (Place of Supply):
+                <label htmlFor="gst-billing-state" className="text-claude-text-light dark:text-stone-300 font-medium whitespace-nowrap">
+                  Billing state:
                 </label>
                 <select
                   id="gst-billing-state"
@@ -1494,7 +1702,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   aria-required="true"
                   aria-invalid={!!billingStateError}
                   aria-describedby={billingStateError ? 'gst-billing-state-error' : undefined}
-                  className={`w-full sm:w-64 bg-stone-900 border rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-claude-terracotta ${billingStateError ? 'border-red-500/60' : 'border-white/15'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`w-full sm:w-64 bg-claude-surface-light dark:bg-claude-surface2-dark border rounded-xl px-3 py-1.5 text-xs text-claude-text-light dark:text-white focus:outline-none focus:ring-1 focus:ring-claude-terracotta ${billingStateError ? 'border-red-500/60' : 'border-claude-border-light dark:border-white/15'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   <option value="">Select State / Union Territory…</option>
                   {gstJurisdictions.map((j) => (
@@ -1507,22 +1715,22 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowB2bGstFields((v) => !v)}
-                className="text-[11px] font-semibold text-orange-300 hover:text-orange-200 underline text-left sm:text-right whitespace-nowrap"
+                className="text-[11px] font-semibold text-claude-accentInk dark:text-orange-300 hover:underline text-left sm:text-right whitespace-nowrap"
               >
                 {showB2bGstFields ? 'Hide B2B GSTIN Details' : 'Purchasing for a business? Add GSTIN (optional)'}
               </button>
             </div>
 
             {billingStateError && (
-              <p id="gst-billing-state-error" className="text-[11px] text-red-400 font-medium">
+              <p id="gst-billing-state-error" className="text-[11px] text-red-600 dark:text-red-400 font-medium">
                 {billingStateError}
               </p>
             )}
 
             {showB2bGstFields && (
-              <div className="rounded-xl border border-white/10 bg-stone-950/60 p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div className="rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/70 dark:bg-stone-950/60 p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                 <div>
-                  <label htmlFor="gst-b2b-name" className="block text-[11px] text-stone-400 mb-1">
+                  <label htmlFor="gst-b2b-name" className="block text-[11px] text-claude-muted-light dark:text-stone-400 mb-1">
                     Business / Legal Name
                   </label>
                   <input
@@ -1532,19 +1740,19 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                     placeholder="Registered company or full name"
                     value={billingLegalName}
                     onChange={(e) => setBillingLegalName(e.target.value)}
-                    className="w-full bg-stone-900 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                    className="w-full bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-claude-text-light dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
                   />
                 </div>
                 <div>
-                  <label htmlFor="gst-b2b-gstin" className="block text-[11px] text-stone-400 mb-1">
-                    15-Char Recipient GSTIN (Optional)
+                  <label htmlFor="gst-b2b-gstin" className="block text-[11px] text-claude-muted-light dark:text-stone-400 mb-1">
+                    15-Char GSTIN (Optional)
                   </label>
                   <input
                     id="gst-b2b-gstin"
                     type="text"
                     maxLength={15}
                     disabled={isCheckoutBusy}
-                    placeholder="e.g. 09AAMCV4678C1ZV"
+                    placeholder="e.g. 27AABCU9603R1ZM"
                     value={billingGstin}
                     aria-invalid={!!billingGstinError}
                     aria-describedby={billingGstinError ? 'gst-b2b-gstin-error' : undefined}
@@ -1557,14 +1765,14 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                         if (match) setBillingStateCode(match.code);
                       }
                     }}
-                    className={`w-full bg-stone-900 border rounded-lg px-2.5 py-1.5 text-xs font-mono text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta ${billingGstinError ? 'border-red-500/60' : 'border-white/15'}`}
+                    className={`w-full bg-claude-surface-light dark:bg-claude-surface2-dark border rounded-lg px-2.5 py-1.5 text-xs font-mono text-claude-text-light dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta ${billingGstinError ? 'border-red-500/60' : 'border-claude-border-light dark:border-white/15'}`}
                   />
                   {billingGstinError && (
-                    <p id="gst-b2b-gstin-error" className="text-[10px] text-red-400 mt-1">{billingGstinError}</p>
+                    <p id="gst-b2b-gstin-error" className="text-[10px] text-red-600 dark:text-red-400 mt-1">{billingGstinError}</p>
                   )}
                 </div>
                 <div>
-                  <label htmlFor="gst-b2b-address" className="block text-[11px] text-stone-400 mb-1">
+                  <label htmlFor="gst-b2b-address" className="block text-[11px] text-claude-muted-light dark:text-stone-400 mb-1">
                     Billing Address (Optional)
                   </label>
                   <input
@@ -1574,7 +1782,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                     placeholder="Street, City, PIN"
                     value={billingAddress}
                     onChange={(e) => setBillingAddress(e.target.value)}
-                    className="w-full bg-stone-900 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                    className="w-full bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-claude-text-light dark:text-white placeholder-stone-400 dark:placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
                   />
                 </div>
               </div>
@@ -1582,112 +1790,135 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         )}
 
-        <div className="px-6 md:px-8 pt-2">
+        {/* Pricing Cards — Stage A: Back button + plan cards. Stage B: plan cards + billing fields above */}
+        {uiStage === 'checkout' && (
+          <div className="px-4 sm:px-6 md:px-8 pt-2 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setUiStage('plan_selection');
+                setSelectedPlanTier(null);
+              }}
+              className="flex items-center gap-1.5 text-xs text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white transition-colors"
+              aria-label="Back to plan selection"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+              Back to plans
+            </button>
+            {selectedPlanTier && (
+              <span className="text-[11px] text-claude-muted-light dark:text-stone-400">
+                Selected: <strong className="text-claude-text-light dark:text-white">{selectedPlanTier === 'plus' ? 'AIRA Plus' : 'AIRA Pro'}</strong>
+              </span>
+            )}
+          </div>
+        )}
+
+        {uiStage === 'checkout' && <div className="px-4 sm:px-6 md:px-8 pt-2">
           {activeSubSummary?.cancelAtPeriodEnd && (currentPlan === 'plus' || currentPlan === 'pro') && (
-            <div className="mb-3 rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-xs text-amber-100 space-y-1">
-              <div className="font-bold text-white flex flex-wrap items-center gap-2">
+            <div className="mb-3 rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-xs text-amber-950 dark:text-amber-100 space-y-1">
+              <div className="font-bold text-claude-text-light dark:text-white flex flex-wrap items-center gap-2">
                 <span>
                   {currentPlan === 'pro' ? 'AIRA Pro' : 'AIRA Plus'} — Active until{' '}
                   {activeSubSummary.currentPeriodEnd
                     ? new Date(activeSubSummary.currentPeriodEnd).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium' })
                     : 'period end'}
                 </span>
-                <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-400/30 text-[10px] font-semibold text-amber-200">
+                <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/30 text-[10px] font-semibold text-amber-900 dark:text-amber-200">
                   {activeSubSummary.cancellationPending ? 'Cancellation Pending Confirmation' : 'Automatic renewal: Cancelled'}
                 </span>
               </div>
-              <p className="text-[11px] text-amber-200/90">
+              <p className="text-[11px] text-amber-900/90 dark:text-amber-200/90">
                 {activeSubSummary.cancellationPending
                   ? 'Cancellation request is pending gateway confirmation. Paid plan features and credits remain active.'
                   : 'No further recurring payments will be charged for this subscription. Paid plan features and remaining credits remain active through the paid billing period.'}
               </p>
             </div>
           )}
-          <div className="rounded-xl border border-white/10 bg-stone-950/60 px-3.5 py-2.5 text-[11px] text-stone-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/70 dark:bg-stone-950/60 px-3.5 py-2 text-[11px] text-claude-text-light/85 dark:text-stone-300 flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2">
             <div>
               {currency === 'INR' ? (
                 <>
-                  <strong className="text-white">Immediate Activation ({gateway === 'cashfree' ? 'Cashfree UPI AutoPay / Card' : 'Razorpay'}):</strong>{' '}
-                  Full Cycle 1 payment (Plus ₹399 or Pro ₹999, GST inclusive) is collected upfront today; paid access, credits, and your GST invoice unlock immediately upon confirmation.
+                  <strong className="text-claude-text-light dark:text-white">Immediate Activation ({gateway === 'cashfree' ? 'Cashfree UPI AutoPay / Card' : 'Razorpay'}):</strong>{' '}
+                  Full Cycle 1 payment (Plus ₹399 or Pro ₹999, GST inclusive) unlocks paid access, credits, and your invoice immediately upon confirmation.
                 </>
               ) : (
                 <>
-                  <strong className="text-white">Immediate Activation:</strong>{' '}
+                  <strong className="text-claude-text-light dark:text-white">Immediate Activation:</strong>{' '}
                   Full Cycle 1 payment ($7.99 Plus / $19.99 Pro) charges today with immediate plan & credit unlock.
                 </>
               )}
             </div>
-            <span className="text-stone-400 whitespace-nowrap shrink-0">
-              Monthly auto-debits follow NPCI / card mandate rules · Cancel anytime
+            <span className="hidden sm:inline text-claude-muted-light dark:text-stone-400 whitespace-nowrap shrink-0">
+              Monthly auto-debits follow card / mandate rules · Cancel anytime
             </span>
           </div>
-        </div>
+        </div>}
 
         {/* Pricing Cards Grid */}
-        <div className="p-6 md:p-8 grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="p-4 sm:p-6 md:p-8 grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
           {/* FREE */}
-          <div className={`rounded-2xl p-6 border flex flex-col justify-between ${currentPlan === 'free' ? 'bg-stone-900/60 border-orange-500/40' : 'bg-stone-900/30 border-white/10'}`}>
+          <div className={`rounded-2xl p-6 border flex flex-col justify-between ${currentPlan === 'free' ? 'bg-claude-surface2-light/90 dark:bg-stone-900/60 border-claude-terracotta/50' : 'bg-claude-surface2-light/50 dark:bg-stone-900/30 border-claude-border-light dark:border-white/10'}`}>
             <div>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-white">AIRA Free</h3>
+                <h3 className="text-lg font-bold text-claude-text-light dark:text-white">AIRA Free</h3>
                 {currentPlan === 'free' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-stone-800 text-stone-300 border border-white/10">Current Plan</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface-light dark:bg-stone-800 text-claude-text-light dark:text-stone-300 border border-claude-border-light dark:border-white/10">Current Plan</span>
                 )}
               </div>
-              <div className="text-3xl font-bold font-serif mb-1">
+              <div className="text-3xl font-bold font-serif mb-1 text-claude-text-light dark:text-white">
                 {currency === 'INR' ? '₹0' : '$0'}
-                <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
+                <span className="text-xs font-sans text-claude-muted-light dark:text-stone-400 font-normal"> / month</span>
               </div>
-              <p className="text-xs text-stone-400 mb-6">Essential intelligence for everyday exploration</p>
+              <p className="text-xs text-claude-muted-light dark:text-stone-400 mb-6">Essential intelligence for everyday exploration</p>
 
-              <div className="space-y-3 text-xs text-stone-300">
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>15</strong> standard chats / day</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>150</strong> monthly standard chat units</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>100</strong> monthly premium credits</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>5</strong> complimentary Auto reasoning boosts</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span>Fast & Auto general models included</span></div>
-                <div className="flex items-center gap-2 text-stone-500"><X className="w-4 h-4 shrink-0" /><span>Builder sandbox not included</span></div>
+              <div className="space-y-3 text-xs text-claude-text-light/85 dark:text-stone-300">
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>15</strong> standard chats / day</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>150</strong> monthly standard chat units</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>100</strong> monthly premium credits</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>5</strong> complimentary Auto reasoning boosts</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span>Fast & Auto general models included</span></div>
+                <div className="flex items-center gap-2 text-claude-muted-light dark:text-stone-500"><X className="w-4 h-4 shrink-0" /><span>Builder sandbox not included</span></div>
               </div>
             </div>
 
             <button
               type="button"
               disabled
-              className="mt-8 w-full py-2.5 px-4 rounded-xl bg-stone-800 text-stone-400 text-xs font-semibold cursor-not-allowed"
+              className="mt-8 w-full py-2.5 px-4 rounded-xl bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-400 text-xs font-semibold cursor-not-allowed"
             >
               {currentPlan === 'free' ? 'Active Plan' : 'Free Tier'}
             </button>
           </div>
 
           {/* PLUS */}
-          <div className="relative rounded-2xl p-6 border border-orange-500/50 bg-gradient-to-b from-orange-500/5 to-transparent flex flex-col justify-between shadow-lg">
+          <div className="relative rounded-2xl p-6 border border-claude-terracotta/50 bg-gradient-to-b from-claude-terracotta/10 to-claude-surface-light dark:to-transparent flex flex-col justify-between shadow-lg">
             <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-0.5 rounded-full bg-claude-terracotta text-white text-xs font-semibold shadow-sm">
               Popular value
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-white">AIRA Plus</h3>
+                <h3 className="text-lg font-bold text-claude-text-light dark:text-white">AIRA Plus</h3>
                 {currentPlan === 'plus' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-orange-500/20 text-orange-300 border border-orange-500/30">Active</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-terracotta/15 text-claude-accentInk dark:text-orange-300 border border-claude-terracotta/30">Active</span>
                 )}
               </div>
-              <div className="text-3xl font-bold font-serif mb-1 text-white">
+              <div className="text-3xl font-bold font-serif mb-1 text-claude-text-light dark:text-white">
                 {currency === 'INR' ? '₹399' : '$7.99'}
-                <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
+                <span className="text-xs font-sans text-claude-muted-light dark:text-stone-400 font-normal"> / month</span>
               </div>
-              <p className="text-[11px] text-stone-400 mb-6">
+              <p className="text-[11px] text-claude-muted-light dark:text-stone-400 mb-6">
                 {currency === 'INR' ? 'Pay ₹399 now (₹338.14 + 18% GST) · Auto-renews monthly' : 'Pay $7.99 now · Auto-renews monthly'}
               </p>
 
-              <div className="space-y-3 text-xs text-stone-300">
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>50</strong> standard chats / day</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>700</strong> monthly standard chat units</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>3,000</strong> monthly premium credits ($3 value)</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>50</strong> complimentary Auto reasoning boosts</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span>AIRA Vision (Understand, Generate, Edit)</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>3</strong> saved autonomous agents</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span>Builder sandbox limited trial</span></div>
+              <div className="space-y-3 text-xs text-claude-text-light/85 dark:text-stone-300">
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>50</strong> standard chats / day</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>700</strong> monthly standard chat units</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>3,000</strong> monthly premium credits</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>50</strong> complimentary Auto reasoning boosts</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span>AIRA Vision (Understand, Generate, Edit)</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>3</strong> saved autonomous agents</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span>Builder sandbox limited trial</span></div>
               </div>
             </div>
 
@@ -1695,7 +1926,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <button
                 type="button"
                 disabled
-                className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
+                className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-400 cursor-not-allowed border border-claude-border-light dark:border-white/5"
               >
                 Active Plan
               </button>
@@ -1704,54 +1935,63 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 <button
                   type="button"
                   disabled
-                  className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
+                  className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-400 cursor-not-allowed border border-claude-border-light dark:border-white/5"
                 >
                   Checkout Unavailable
                 </button>
-                <p className="text-[10px] text-center text-stone-500">
+                <p className="text-[10px] text-center text-claude-muted-light dark:text-stone-500">
                   Online checkout currently offline · Entitlements operational for active accounts
                 </p>
               </div>
             ) : (
               <button
                 type="button"
-                onClick={() => handleSubscribe('plus')}
+                onClick={() => {
+                  if (uiStage === 'plan_selection') {
+                    setSelectedPlanTier('plus');
+                    setUiStage('checkout');
+                  } else {
+                    handleSubscribe('plus');
+                  }
+                }}
                 disabled={loadingPlan !== null}
                 className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-claude-terracotta hover:bg-claude-terracotta-hover text-white transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {activePlanTier === 'plus' && isCheckoutBusy
                   ? 'Initiating Checkout…'
+                  : uiStage === 'plan_selection'
+                  ? (currentPlan === 'pro' ? 'Select Plus' : 'Get Plus')
                   : (currentPlan === 'pro' ? 'Downgrade to Plus' : 'Upgrade to Plus')}
               </button>
             )}
           </div>
 
           {/* PRO */}
-          <div className="rounded-2xl p-6 border border-white/10 bg-stone-900/30 flex flex-col justify-between">
+          <div className="rounded-2xl p-6 border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/50 dark:bg-stone-900/30 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-white">AIRA Pro</h3>
+                <h3 className="text-lg font-bold text-claude-text-light dark:text-white">AIRA Pro</h3>
                 {currentPlan === 'pro' && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-stone-800 text-stone-300 border border-white/10">Active</span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-claude-surface-light dark:bg-stone-800 text-claude-text-light dark:text-stone-300 border border-claude-border-light dark:border-white/10">Active</span>
                 )}
               </div>
-              <div className="text-3xl font-bold font-serif mb-1 text-white">
+              <div className="text-3xl font-bold font-serif mb-1 text-claude-text-light dark:text-white">
                 {currency === 'INR' ? '₹999' : '$19.99'}
-                <span className="text-xs font-sans text-stone-400 font-normal"> / month</span>
+                <span className="text-xs font-sans text-claude-muted-light dark:text-stone-400 font-normal"> / month</span>
               </div>
-              <p className="text-[11px] text-stone-400 mb-6">
+              <p className="text-[11px] text-claude-muted-light dark:text-stone-400 mb-6">
                 {currency === 'INR' ? 'Pay ₹999 now (₹846.61 + 18% GST) · Auto-renews monthly' : 'Pay $19.99 now · Auto-renews monthly'}
               </p>
 
-              <div className="space-y-3 text-xs text-stone-300">
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>150</strong> standard chats / day</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>2,000</strong> monthly standard chat units</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>7,500</strong> monthly premium credits ($7.50 value)</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>200</strong> complimentary Auto reasoning boosts</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span>Vision Studio & Deep Research priority</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>20</strong> saved autonomous agents</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span>AIRA Builder metered access</span></div>
-                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-400 shrink-0" /><span><strong>2</strong> concurrent inferences</span></div>
+              <div className="space-y-3 text-xs text-claude-text-light/85 dark:text-stone-300">
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>150</strong> standard chats / day</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>2,000</strong> monthly standard chat units</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>7,500</strong> monthly premium credits</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>200</strong> complimentary Auto reasoning boosts</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span>Vision Studio & Deep Research priority</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>20</strong> saved autonomous agents</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span>AIRA Builder metered access</span></div>
+                <div className="flex items-center gap-2"><Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" /><span><strong>2</strong> concurrent inferences</span></div>
               </div>
             </div>
 
@@ -1759,7 +1999,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <button
                 type="button"
                 disabled
-                className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
+                className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-400 cursor-not-allowed border border-claude-border-light dark:border-white/5"
               >
                 Active Plan
               </button>
@@ -1768,36 +2008,46 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 <button
                   type="button"
                   disabled
-                  className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-800 text-stone-400 cursor-not-allowed border border-white/5"
+                  className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-400 cursor-not-allowed border border-claude-border-light dark:border-white/5"
                 >
                   Checkout Unavailable
                 </button>
-                <p className="text-[10px] text-center text-stone-500">
+                <p className="text-[10px] text-center text-claude-muted-light dark:text-stone-500">
                   Online checkout currently offline · Entitlements operational for active accounts
                 </p>
               </div>
             ) : (
               <button
                 type="button"
-                onClick={() => handleSubscribe('pro')}
+                onClick={() => {
+                  if (uiStage === 'plan_selection') {
+                    setSelectedPlanTier('pro');
+                    setUiStage('checkout');
+                  } else {
+                    handleSubscribe('pro');
+                  }
+                }}
                 disabled={loadingPlan !== null}
                 className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-claude-terracotta hover:bg-claude-terracotta-hover text-white transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {activePlanTier === 'pro' && isCheckoutBusy ? 'Initiating Checkout…' : 'Upgrade to Pro'}
+                {activePlanTier === 'pro' && isCheckoutBusy
+                  ? 'Initiating Checkout…'
+                  : uiStage === 'plan_selection'
+                  ? 'Get Pro'
+                  : 'Upgrade to Pro'}
               </button>
             )}
           </div>
         </div>
 
         {/* Footer info */}
-        <div className="p-6 md:p-8 bg-stone-950/60 border-t border-white/10 flex flex-col md:flex-row items-center justify-between text-xs text-stone-400 gap-4">
+        <div className="p-4 sm:p-6 md:p-8 bg-claude-surface2-light dark:bg-stone-950/60 border-t border-claude-border-light dark:border-white/10 flex flex-col md:flex-row items-center justify-between text-xs text-claude-muted-light dark:text-stone-400 gap-3 sm:gap-4">
           <div className="flex items-center gap-2">
-            <Shield className="w-4 h-4 text-emerald-400" />
-            <span>Secure payment gateway encryption. Cancel anytime at period end with zero penalty.</span>
+            <Shield className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>Encrypted checkout · Instant credit activation · Cancel anytime in Settings</span>
           </div>
-          <div>
-            {taxConfigSummary?.supplierLegalName || 'VIREXA AI VENTURES PRIVATE LIMITED'} · Uttar Pradesh (09) · SAC {taxConfigSummary?.sacCode || '998315'}
-            {taxConfigSummary?.isProvisionalFixture === false ? ' · GST Compliant' : ' · GST Provisional Fixture'}
+          <div className="text-[11px] text-claude-muted-light dark:text-stone-400">
+            Pricing adapts automatically by billing country &amp; currency
           </div>
         </div>
       </motion.div>

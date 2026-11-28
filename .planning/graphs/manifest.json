@@ -1,0 +1,59 @@
+{
+  "manifest_version": "2.5.0",
+  "last_refresh": "2026-11-28T22:45:00.000Z",
+  "candidate_commit_sha": "cc00bbb40fb07092f90c5085a22afbf31f571fda",
+  "predecessor_commit_sha": "32156ace356462e98d025f42af1eab941a450eaf",
+  "staging_runtime_sha": "5da4a4d1c0987de68e75eaddd24d60fab7c51264",
+  "branch": "staging",
+  "pr": 218,
+  "pr_status": "MERGED",
+  "merged_at": "2026-11-28T12:51:11Z",
+  "staging_merge_sha": "5da4a4d1c0987de68e75eaddd24d60fab7c51264",
+  "vercel_deployment": {
+    "id": "dpl_4gu8wqpQssa6rFp82s5PYKzpVmGF",
+    "status": "Ready",
+    "url": "https://staging.virexaaiventures.com",
+    "build_duration": "54s"
+  },
+  "database_state": {
+    "neon_project": "mute-frost-50372225",
+    "authoritative_branch": "br-snowy-bonus-b32thjlz",
+    "endpoint": "ep-twilight-cherry-b3iz2oqv",
+    "applied_migrations": 36,
+    "latest_migration": "036_gst_invoice_compliance_snapshots.ts",
+    "public_tables": 55,
+    "recovery_checkpoint_branch": "br-jolly-dust-b32gx2qo",
+    "historical_invoices": 5
+  },
+  "remote_ci_status": {
+    "fast_ci": "PASS (runs 46128505320 / 46128500635)",
+    "pg18_durability": "PASS (job 140928322168)",
+    "pg16_isolated_regression": "PASS (job 140928322244, run 46128505450)",
+    "semantic_search_ci": "PASS (job 140928321972)",
+    "main_pr_certification": "PASS (job 140929425860)",
+    "gitguardian_security": "PASS",
+    "vercel_preview": "PASS (B21uBUgdbxPwgXRYeG7B6DGEZF11)"
+  },
+  "deployed_acceptance_status": {
+    "health": "PASS (200 OK)",
+    "readiness_gate": "PASS (401 Gated)",
+    "plans_pricing": "PASS (200 OK, ₹399 Plus / ₹999 Pro)",
+    "unauth_protection": "PASS (401 Protected)",
+    "cross_account_isolation": "PASS (401 Denied)",
+    "database_state": "PASS (36 migrations, 55 tables, 5 invoices)"
+  },
+  "artifacts": [
+    "payment_billing_knowledge_graph.json",
+    "PAYMENT_BILLING_GRAPH_REPORT.md",
+    "payment_billing_graph.html",
+    "manifest.json"
+  ],
+  "node_count": 53,
+  "edge_count": 65,
+  "graph_json_sha256": "02e7cc90bb6ed84663ebe143d550d0a4c2fac45e7c2ac8b31c84e827f0f67c49",
+  "graft_mcp_verified": true,
+  "ontoly_status": "UNAVAILABLE_ON_PATH_ENGAGED_GRAPHIFY_FALLBACK",
+  "production_verdict": "STRICT_HOLD",
+  "v2_branch": "feat/global-payments-billing-v2",
+  "v2_spec": "SPEC-GLOBAL-BILLING-V2-2026-01"
+}
