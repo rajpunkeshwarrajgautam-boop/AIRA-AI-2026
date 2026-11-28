@@ -5,8 +5,10 @@ import {
   COMMERCIAL_PLANS,
   PlanTier,
   CurrencyCode,
+  PaymentMethodSummary,
   isGuestPrincipal
 } from '../../../../packages/contracts/src/commercial.js';
+import { resolveCheckoutProviderForRegion } from './global-billing-catalog.js';
 import {
   commercialBillingService,
   hasPaidPeriodEntitlement,
@@ -50,6 +52,110 @@ export function extractRawWebhookBody(req: { rawBody?: unknown; body?: unknown }
     return req.body.toString('utf8');
   }
   return null;
+}
+
+/**
+ * Extracts strictly masked provider-derived payment method metadata from verified
+ * gateway payment/subscription payloads. Never stores raw PAN, CVV, OTP, or bank numbers.
+ */
+export function extractMaskedPaymentMethodSummary(
+  gateway: 'razorpay' | 'cashfree',
+  paymentEntity: Record<string, any> = {},
+  subEntity: Record<string, any> = {},
+  idHint?: string
+): PaymentMethodSummary | null {
+  const pmMethodObj = paymentEntity.payment_method && typeof paymentEntity.payment_method === 'object'
+    ? paymentEntity.payment_method
+    : {};
+  const card = paymentEntity.card || pmMethodObj.card || {};
+  const upi = paymentEntity.upi || pmMethodObj.upi || {};
+  const rawMethod = String(
+    paymentEntity.method ||
+    (card && (card.last4 || card.card_number || card.network) ? 'card' : '') ||
+    (upi && (upi.upi_id || paymentEntity.vpa) ? 'upi' : '') ||
+    paymentEntity.payment_group ||
+    ''
+  ).trim().toLowerCase();
+
+  const rawLast4Match = String(card.last4 || card.card_number || '').match(/(\d{4})$/);
+  const last4 = rawLast4Match ? rawLast4Match[1] : undefined;
+  const brand = card.network || card.card_network || card.card_type || undefined;
+  const network = card.network || card.card_network || undefined;
+  const issuer = card.issuer || card.card_bank_name || undefined;
+  const rawVpa = paymentEntity.vpa || upi.upi_id || undefined;
+  const maskedUpi = typeof rawVpa === 'string' && rawVpa.includes('@')
+    ? `${rawVpa.slice(0, 2)}***@${rawVpa.split('@')[1]}`
+    : (typeof rawVpa === 'string' && rawVpa ? `${rawVpa.slice(0, 2)}***` : undefined);
+  const mandateStatus = String(
+    subEntity.status ||
+    subEntity.subscription_status ||
+    paymentEntity.status ||
+    paymentEntity.payment_status ||
+    'active'
+  ).trim();
+
+  if (last4 || rawMethod === 'card') {
+    const cleanBrand = brand ? String(brand).trim() : 'Card';
+    const displayLabel = last4 ? `${cleanBrand} ending in ${last4}` : `${cleanBrand} card`;
+    return {
+      id: idHint || `pm_${gateway}_${last4 || 'card'}`,
+      gateway,
+      methodType: 'card',
+      ...(brand ? { brand: String(brand).slice(0, 40) } : {}),
+      ...(last4 ? { last4 } : {}),
+      ...(network ? { network: String(network).slice(0, 40) } : {}),
+      ...(issuer ? { issuer: String(issuer).slice(0, 80) } : {}),
+      mandateStatus: mandateStatus.slice(0, 40),
+      displayLabel: displayLabel.slice(0, 120),
+      updatedAt: Date.now()
+    };
+  }
+
+  if (maskedUpi || rawMethod === 'upi') {
+    const displayLabel = maskedUpi ? `UPI (${maskedUpi})` : 'UPI Autopay';
+    return {
+      id: idHint || `pm_${gateway}_upi`,
+      gateway,
+      methodType: 'upi',
+      ...(maskedUpi ? { maskedUpi: maskedUpi.slice(0, 100) } : {}),
+      mandateStatus: mandateStatus.slice(0, 40),
+      displayLabel: displayLabel.slice(0, 120),
+      updatedAt: Date.now()
+    };
+  }
+
+  if (rawMethod === 'emandate' || rawMethod === 'nach' || rawMethod === 'enach') {
+    return {
+      id: idHint || `pm_${gateway}_emandate`,
+      gateway,
+      methodType: 'emandate',
+      mandateStatus: mandateStatus.slice(0, 40),
+      displayLabel: 'Bank Mandate / e-Mandate',
+      updatedAt: Date.now()
+    };
+  }
+
+  if (rawMethod === 'netbanking') {
+    return {
+      id: idHint || `pm_${gateway}_netbanking`,
+      gateway,
+      methodType: 'netbanking',
+      ...(paymentEntity.bank ? { issuer: String(paymentEntity.bank).slice(0, 80) } : {}),
+      mandateStatus: mandateStatus.slice(0, 40),
+      displayLabel: paymentEntity.bank ? `Netbanking (${String(paymentEntity.bank).slice(0, 40)})` : 'Netbanking',
+      updatedAt: Date.now()
+    };
+  }
+
+  if (!rawMethod) return null;
+  return {
+    id: idHint || `pm_${gateway}_${rawMethod}`,
+    gateway,
+    methodType: 'unknown',
+    mandateStatus: mandateStatus.slice(0, 40),
+    displayLabel: `${rawMethod.toUpperCase()} (${gateway === 'razorpay' ? 'Primary Checkout' : 'Mandate Checkout'})`,
+    updatedAt: Date.now()
+  };
 }
 
 export interface CreditTopupPack {
@@ -2412,6 +2518,16 @@ export class PaymentGatewayService {
         if (actualPaymentId) {
           meta.lastPaymentId = actualPaymentId;
         }
+        const renewalPm = extractMaskedPaymentMethodSummary(
+          gateway as 'razorpay' | 'cashfree',
+          paymentEntity,
+          subEntity,
+          `pm_${purchaseRecord.id}`
+        );
+        if (renewalPm) {
+          meta.paymentMethodSummary = renewalPm;
+          meta.paymentMethod = renewalPm.displayLabel;
+        }
 
         await trx('subscriptions').where({ id: purchaseRecord.id }).update({
           current_period_start: periodStart,
@@ -2599,6 +2715,17 @@ export class PaymentGatewayService {
       }
 
       // Initial Activation (transition from pending -> active)
+      const initialPm = extractMaskedPaymentMethodSummary(
+        gateway as 'razorpay' | 'cashfree',
+        paymentEntity,
+        subEntity,
+        `pm_${purchaseRecord.id}`
+      );
+      if (initialPm) {
+        meta.paymentMethodSummary = initialPm;
+        meta.paymentMethod = initialPm.displayLabel;
+      }
+
       await this.executeInitialSubscriptionActivation({
         trx,
         purchaseRecord,
@@ -3068,7 +3195,8 @@ export class PaymentGatewayService {
 
     // Validate explicit GST billing profile or GSTIN before creating gateway sessions
     if (billingProfile) {
-      if (billingProfile.stateCode) {
+      const bpCountry = (billingProfile.country || (currency === 'USD' ? 'US' : 'IN')).trim().toUpperCase();
+      if (billingProfile.stateCode && bpCountry === 'IN') {
         const normState = taxDeterminationService.normalizePlaceOfSupply(billingProfile.stateCode);
         if (normState === 'UNKNOWN') {
           throw new Error(`VALIDATION_ERROR: Unsupported Indian GST State/UT code '${billingProfile.stateCode}'.`);
@@ -3079,7 +3207,7 @@ export class PaymentGatewayService {
         if (!gstCheck.valid) {
           throw new Error(`VALIDATION_ERROR: Invalid customer GSTIN '${billingProfile.customerGstin}': ${gstCheck.reason || 'verification failed'}.`);
         }
-        if (billingProfile.stateCode) {
+        if (billingProfile.stateCode && bpCountry === 'IN') {
           const normState = taxDeterminationService.normalizePlaceOfSupply(billingProfile.stateCode);
           if (normState !== 'UNKNOWN' && gstCheck.stateCode && normState !== gstCheck.stateCode) {
             throw new Error(`VALIDATION_ERROR: GSTIN state prefix '${gstCheck.stateCode}' does not match selected billing state '${normState}'.`);
@@ -3134,7 +3262,23 @@ export class PaymentGatewayService {
       throw new Error(`BILLING_UNAVAILABLE: No valid price configured for plan ${planTier} in ${currency}.`);
     }
 
-    const gateway = resolvePaymentGateway(requestedGateway);
+    const providerDecision = resolveCheckoutProviderForRegion({
+      currency,
+      country: billingProfile?.country,
+      requestedGateway,
+      isSandbox,
+      internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled()
+    });
+    if (!providerDecision.allowed) {
+      if (providerDecision.code === 'UNSUPPORTED_INTERNATIONAL_GATEWAY') {
+        throw new Error(`VALIDATION_ERROR: ${providerDecision.code} — ${providerDecision.message}`);
+      }
+      throw new Error(`BILLING_UNAVAILABLE: ${providerDecision.code} — ${providerDecision.message}`);
+    }
+
+    const gateway = currency === 'USD'
+      ? providerDecision.gateway
+      : resolvePaymentGateway(requestedGateway);
     const keyId = gateway === 'razorpay'
       ? (process.env.RAZORPAY_KEY_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined))
       : (process.env.CASHFREE_APP_ID || (isSandbox ? process.env.AIRA_TEST_GATEWAY_KEY_ID : undefined));
@@ -3177,28 +3321,42 @@ export class PaymentGatewayService {
       }
     }
     const customerEmail = authoritativeEmail || contactDetails?.email || `${principalId}@aira.internal`;
-    const customerName =
+    const rawCustomerName =
       billingProfile?.legalName?.trim() ||
       (existingCustRecord as any)?.billing_legal_name ||
       (principalContext as any)?.name ||
       (existingCustRecord as any)?.name ||
       contactDetails?.name ||
       'AIRA Subscriber';
+    const customerName = rawCustomerName.slice(0, 255);
 
-    // Persist or resolve customer GST billing profile for Place of Supply snapshot
+    // Persist or resolve customer GST / global billing profile
     let resolvedTaxProfile = (!this.customDbClient)
       ? await commercialBillingService.getBillingTaxProfile(principalId).catch(() => null)
       : null;
-    if (billingProfile && (billingProfile.stateCode || billingProfile.customerGstin || billingProfile.legalName)) {
+    const bpCountry = (billingProfile?.country || resolvedTaxProfile?.country || (currency === 'USD' ? 'US' : 'IN')).trim().toUpperCase();
+    if (
+      billingProfile &&
+      (
+        billingProfile.stateCode ||
+        billingProfile.customerGstin ||
+        billingProfile.legalName ||
+        billingProfile.taxId ||
+        (billingProfile.country && billingProfile.country.trim().toUpperCase() !== 'IN')
+      )
+    ) {
       if (!this.customDbClient) {
         resolvedTaxProfile = await commercialBillingService.upsertBillingTaxProfile(principalId, {
           ...billingProfile,
+          country: bpCountry,
           legalName: billingProfile.legalName || customerName
         });
       }
     }
     const resolvedStateCode =
-      (billingProfile?.stateCode ? taxDeterminationService.normalizePlaceOfSupply(billingProfile.stateCode) : null) ||
+      (billingProfile?.stateCode
+        ? (bpCountry === 'IN' ? taxDeterminationService.normalizePlaceOfSupply(billingProfile.stateCode) : billingProfile.stateCode.trim().slice(0, 64))
+        : null) ||
       (billingProfile?.customerGstin ? validateGstin(billingProfile.customerGstin).stateCode || null : null) ||
       resolvedTaxProfile?.stateCode ||
       null;
@@ -3622,6 +3780,9 @@ export class PaymentGatewayService {
           }
 
           if (!rzpSubRes.ok) {
+            if (currency === 'USD' && /currency.*not supported|international/i.test(errText)) {
+              throw new Error('BILLING_UNAVAILABLE: INTERNATIONAL_USD_ACTIVATION_REQUIRED — International USD recurring checkout requires Razorpay International Payments activation on the merchant account.');
+            }
             throw new Error(`GATEWAY_SUBSCRIPTION_FAILED: Razorpay monthly recurring subscription creation failed (HTTP ${rzpSubRes.status}): ${errText}`);
           } else {
             const rzpData: any = await rzpSubRes.json();
@@ -7424,7 +7585,12 @@ export class PaymentGatewayService {
       const billingPeriodEnd = params.purchaseRecord.current_period_end
         ? Number(params.purchaseRecord.current_period_end)
         : undefined;
-      const customerJurisdiction = taxDeterminationService.getJurisdiction(resolvedCustomerState);
+      const resolvedCustomerCountry = (meta.customerCountry || meta.country || customerRow?.billing_country || customerRow?.country_code || (params.purchaseRecord.currency === 'USD' ? 'US' : 'IN')).toUpperCase();
+      const isIndiaCustomer = resolvedCustomerCountry === 'IN';
+      const customerJurisdiction = isIndiaCustomer ? taxDeterminationService.getJurisdiction(resolvedCustomerState) : undefined;
+      const pmLabel = typeof meta.paymentMethod === 'string' && meta.paymentMethod.trim()
+        ? meta.paymentMethod.trim().slice(0, 64)
+        : (typeof meta.paymentMethodSummary?.displayLabel === 'string' ? meta.paymentMethodSummary.displayLabel.trim().slice(0, 64) : undefined);
 
       const invoiceRecord: InvoiceRecord = {
         invoiceNumber,
@@ -7462,10 +7628,14 @@ export class PaymentGatewayService {
         customerName: resolvedCustomerName,
         customerEmail: resolvedCustomerEmail,
         customerAddress: resolvedCustomerAddress,
-        customerStateCode: customerJurisdiction?.code || (resolvedCustomerState ? taxDeterminationService.normalizePlaceOfSupply(resolvedCustomerState) : undefined),
-        customerStateName: customerJurisdiction?.name,
+        customerStateCode: isIndiaCustomer
+          ? (customerJurisdiction?.code || (resolvedCustomerState ? taxDeterminationService.normalizePlaceOfSupply(resolvedCustomerState) : undefined))
+          : (typeof resolvedCustomerState === 'string' ? resolvedCustomerState.trim().slice(0, 64) : undefined),
+        customerStateName: isIndiaCustomer
+          ? customerJurisdiction?.name
+          : (typeof resolvedCustomerState === 'string' ? resolvedCustomerState.trim().slice(0, 120) : undefined),
         customerGstin: taxResult.customerGstin,
-        isB2b: taxResult.isB2b,
+        isB2b: Boolean(taxResult.isB2b || (!isIndiaCustomer && customerTaxInfo?.accountType === 'business')),
         reverseCharge: false,
         taxComplianceStatus: isSandboxDoc ? 'SANDBOX_REHEARSAL' : (taxResult.taxComplianceStatus as any),
         placeOfSupply: taxResult.placeOfSupply,
@@ -7477,9 +7647,10 @@ export class PaymentGatewayService {
         status: 'Paid',
         isSandbox: isSandboxDoc,
         gateway: params.gateway,
+        ...(pmLabel ? { paymentMethod: pmLabel } : {}),
         gatewayOrderId: params.gatewayOrderId,
         gatewayPaymentId: params.actualPaymentId,
-        pdfDownloadAvailable: false,
+        pdfDownloadAvailable: true,
         printableDocumentAvailable: true
       };
 
@@ -7517,7 +7688,7 @@ export class PaymentGatewayService {
               place_of_supply: invoiceRecord.placeOfSupply,
               status: invoiceRecord.status,
               gateway: params.gateway,
-              pdf_download_available: false,
+              pdf_download_available: true,
               metadata: JSON.stringify({
                 taxRate: taxResult.taxRate,
                 cgstRate: taxResult.cgstRate,
@@ -7559,8 +7730,11 @@ export class PaymentGatewayService {
                 customer_name: invoiceRecord.customerName,
                 customer_email: invoiceRecord.customerEmail ?? null,
                 customer_address: invoiceRecord.customerAddress ?? null,
-                customer_state_code: invoiceRecord.customerStateCode ?? null,
+                customer_state_code: (invoiceRecord.customerStateCode && invoiceRecord.customerStateCode.length <= 4)
+                  ? invoiceRecord.customerStateCode
+                  : null,
                 customer_gstin: invoiceRecord.customerGstin ?? null,
+                payment_method: invoiceRecord.paymentMethod ? invoiceRecord.paymentMethod.slice(0, 64) : null,
                 is_b2b: Boolean(invoiceRecord.isB2b),
                 reverse_charge: false,
                 pos_basis: invoiceRecord.posBasis,
@@ -8026,7 +8200,7 @@ export class PaymentGatewayService {
       status: creditNoteStatus,
       gateway: params.gateway,
       refundId: String(refundId),
-      pdfDownloadAvailable: false,
+      pdfDownloadAvailable: true,
       printableDocumentAvailable: true
     };
 
@@ -8092,10 +8266,12 @@ export class PaymentGatewayService {
             supplier_pan: cnSnapshot.supplierPan ?? null,
             supplier_cin: cnSnapshot.supplierCin ?? null,
             supplier_email: cnSnapshot.supplierEmail ?? null,
-            customer_name: cnSnapshot.customerName ?? null,
+            customer_name: cnSnapshot.customerName ? cnSnapshot.customerName.slice(0, 255) : null,
             customer_email: cnSnapshot.customerEmail ?? null,
             customer_address: cnSnapshot.customerAddress ?? null,
-            customer_state_code: cnSnapshot.customerStateCode ?? null,
+            customer_state_code: (cnSnapshot.customerStateCode && cnSnapshot.customerStateCode.length <= 4)
+              ? cnSnapshot.customerStateCode
+              : null,
             customer_gstin: cnSnapshot.customerGstin ?? null,
             is_b2b: Boolean(cnSnapshot.isB2b),
             statutory_gstr1_cutoff: cnSnapshot.statutoryGstr1Cutoff ?? null,
@@ -8624,7 +8800,7 @@ export class PaymentGatewayService {
       irnAckNo: row.irn_ack_no || snap.irnAckNo,
       irnAckDate: row.irn_ack_date || snap.irnAckDate,
       signedQrCode: row.signed_qr_code || snap.signedQrCode,
-      pdfDownloadAvailable: false,
+      pdfDownloadAvailable: true,
       printableDocumentAvailable: true
     };
     return baseRecord;
@@ -8706,9 +8882,77 @@ export class PaymentGatewayService {
       irnAckNo: row.irn_ack_no || snap.irnAckNo,
       irnAckDate: row.irn_ack_date || snap.irnAckDate,
       signedQrCode: row.signed_qr_code || snap.signedQrCode,
-      pdfDownloadAvailable: false,
+      pdfDownloadAvailable: true,
       printableDocumentAvailable: true
     };
+  }
+
+  /**
+   * Lists strictly masked provider-derived payment methods for the authenticated principal.
+   * Derived only from verified subscription metadata & invoice payment references.
+   */
+  async getPaymentMethods(principalId: string): Promise<PaymentMethodSummary[]> {
+    const dbClient = this.getDb() as any;
+    const cust = await dbClient('billing_customers').where({ principal_id: principalId }).first().catch(() => null);
+    if (!cust) return [];
+
+    const subs = await this.querySubscriptions(dbClient, { customer_id: cust.id });
+    subs.sort((a: any, b: any) => {
+      const aActive = a.status === 'active' ? 1 : 0;
+      const bActive = b.status === 'active' ? 1 : 0;
+      if (aActive !== bActive) return bActive - aActive;
+      return Number(b.updated_at || b.created_at || 0) - Number(a.updated_at || a.created_at || 0);
+    });
+
+    const seen = new Set<string>();
+    const results: PaymentMethodSummary[] = [];
+
+    for (const sub of subs) {
+      const meta = this.parseJsonRecordSafe(sub.metadata);
+      const pm = meta.paymentMethodSummary as PaymentMethodSummary | undefined;
+      const hasPaidState =
+        sub.status === 'active' ||
+        sub.status === 'cancelled' ||
+        sub.status === 'refunded' ||
+        Boolean(meta.initialPaymentId || meta.lastPaymentId);
+      if (!hasPaidState) continue;
+
+      let item: PaymentMethodSummary | null = null;
+      if (pm && typeof pm === 'object' && typeof pm.displayLabel === 'string') {
+        item = {
+          id: String(pm.id || `pm_${sub.id}`),
+          gateway: pm.gateway === 'cashfree' ? 'cashfree' : 'razorpay',
+          methodType: pm.methodType || 'unknown',
+          ...(pm.brand ? { brand: pm.brand } : {}),
+          ...(pm.last4 ? { last4: pm.last4 } : {}),
+          ...(pm.maskedUpi ? { maskedUpi: pm.maskedUpi } : {}),
+          ...(pm.network ? { network: pm.network } : {}),
+          ...(pm.issuer ? { issuer: pm.issuer } : {}),
+          mandateStatus: sub.status === 'cancelled' ? 'cancelled' : (pm.mandateStatus || sub.status),
+          displayLabel: pm.displayLabel,
+          updatedAt: Number(pm.updatedAt || sub.updated_at || sub.created_at || Date.now()),
+          isDefault: results.length === 0 && sub.status === 'active'
+        };
+      } else if (typeof meta.paymentMethod === 'string' && meta.paymentMethod.trim()) {
+        item = {
+          id: `pm_${sub.id}`,
+          gateway: sub.gateway === 'cashfree' ? 'cashfree' : 'razorpay',
+          methodType: 'unknown',
+          mandateStatus: sub.status,
+          displayLabel: meta.paymentMethod.trim().slice(0, 120),
+          updatedAt: Number(sub.updated_at || sub.created_at || Date.now()),
+          isDefault: results.length === 0 && sub.status === 'active'
+        };
+      }
+
+      if (!item) continue;
+      const dedupeKey = `${item.gateway}:${item.methodType}:${item.last4 || ''}:${item.maskedUpi || ''}:${item.displayLabel}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      results.push(item);
+    }
+
+    return results;
   }
 
   /**
@@ -9572,7 +9816,7 @@ export class PaymentGatewayService {
           customerGstin: typeof p.customerGstin === 'string' ? p.customerGstin : undefined,
           customerStateCode: typeof p.customerStateCode === 'string' ? p.customerStateCode : undefined,
           status: p.status || 'Paid',
-          pdfDownloadAvailable: false,
+          pdfDownloadAvailable: true,
           printableDocumentAvailable: true
         }, p.subscriptionId, invoiceNumber);
 

@@ -348,6 +348,9 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
   const [activatedSummary, setActivatedSummary] = useState<ActivatedConfirmationSummary | null>(null);
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
+  const [downloadingPdfNum, setDownloadingPdfNum] = useState<string | null>(null);
+  const userTouchedCurrencyRef = useRef<boolean>(false);
+  const usdEnabledRef = useRef<boolean>(false);
   const [pendingCheckout, setPendingCheckout] = useState<PendingCheckoutSummary | null>(null);
   const [activeSubSummary, setActiveSubSummary] = useState<{
     planId: PlanTier;
@@ -360,6 +363,19 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   const [_billingStatus, setBillingStatus] = useState<string>('checkout_disabled');
   const [customerPhone, setCustomerPhone] = useState<string>('');
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [countries, setCountries] = useState<Array<{ code: string; name: string; defaultCurrency: CurrencyCode }>>([
+    { code: 'US', name: 'United States', defaultCurrency: 'USD' },
+    { code: 'IN', name: 'India', defaultCurrency: 'INR' },
+    { code: 'GB', name: 'United Kingdom', defaultCurrency: 'USD' },
+    { code: 'CA', name: 'Canada', defaultCurrency: 'USD' },
+    { code: 'AU', name: 'Australia', defaultCurrency: 'USD' },
+    { code: 'DE', name: 'Germany', defaultCurrency: 'USD' },
+    { code: 'SG', name: 'Singapore', defaultCurrency: 'USD' },
+    { code: 'AE', name: 'United Arab Emirates', defaultCurrency: 'USD' }
+  ]);
+  const [billingCountry, setBillingCountry] = useState<string>('IN');
+  const [billingAccountType, setBillingAccountType] = useState<'individual' | 'business'>('individual');
+  const [billingTaxId, setBillingTaxId] = useState<string>('');
   const [gstJurisdictions, setGstJurisdictions] = useState<Array<{ code: string; name: string }>>([
     { code: '09', name: 'Uttar Pradesh' },
     { code: '07', name: 'Delhi' },
@@ -370,11 +386,6 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     { code: '24', name: 'Gujarat' },
     { code: '19', name: 'West Bengal' }
   ]);
-  const [taxConfigSummary, setTaxConfigSummary] = useState<{
-    supplierLegalName?: string;
-    sacCode?: string;
-    isProvisionalFixture?: boolean;
-  } | null>(null);
   const [billingStateCode, setBillingStateCode] = useState<string>('');
   const [billingStateError, setBillingStateError] = useState<string | null>(null);
   const [showB2bGstFields, setShowB2bGstFields] = useState<boolean>(false);
@@ -482,10 +493,14 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleModalClose();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        handleModalClose();
+      }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
   }, [isOpen, handleModalClose]);
 
   useEffect(() => {
@@ -499,16 +514,19 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           setCheckoutAvailable(data.checkoutAvailable);
         }
         if (typeof data.internationalUsdEnabled === 'boolean') {
+          usdEnabledRef.current = data.internationalUsdEnabled;
           setInternationalUsdEnabled(data.internationalUsdEnabled);
           if (!data.internationalUsdEnabled) {
             setCurrency('INR');
+          } else if (!userTouchedCurrencyRef.current && billingCountry && billingCountry !== 'IN') {
+            setCurrency('USD');
           }
+        }
+        if (Array.isArray(data.countries) && data.countries.length > 0) {
+          setCountries(data.countries);
         }
         if (Array.isArray(data.gstJurisdictions) && data.gstJurisdictions.length > 0) {
           setGstJurisdictions(data.gstJurisdictions);
-        }
-        if (data.taxConfigSummary) {
-          setTaxConfigSummary(data.taxConfigSummary);
         }
         if (data.billingStatus) {
           setBillingStatus(data.billingStatus);
@@ -544,16 +562,32 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           activePendingSubIdRef.current = null;
           setPendingCheckout(null);
         }
-        if (summary?.taxProfile) {
-          const tp = summary.taxProfile;
-          if (tp.stateCode) setBillingStateCode(String(tp.stateCode));
-          if (tp.legalName) setBillingLegalName(String(tp.legalName));
-          if (tp.customerGstin) {
-            setBillingGstin(String(tp.customerGstin));
+        const bp = summary?.billingProfile || summary?.taxProfile;
+        if (bp) {
+          const resolvedCountry = String(bp.country || 'IN').toUpperCase();
+          setBillingCountry(resolvedCountry);
+          if (!userTouchedCurrencyRef.current) {
+            if (resolvedCountry === 'IN') {
+              setCurrency('INR');
+            } else if (usdEnabledRef.current) {
+              setCurrency('USD');
+            }
+          }
+          setBillingAccountType(bp.accountType === 'business' || bp.customerGstin ? 'business' : 'individual');
+          if (bp.stateCode) setBillingStateCode(String(bp.stateCode));
+          if (bp.legalName) setBillingLegalName(String(bp.legalName));
+          if (bp.taxId) setBillingTaxId(String(bp.taxId));
+          if (bp.customerGstin) {
+            setBillingGstin(String(bp.customerGstin));
+            setShowB2bGstFields(true);
+          } else if (bp.accountType === 'business') {
             setShowB2bGstFields(true);
           }
-          if (tp.addressLine1) setBillingAddress(String(tp.addressLine1));
+          if (bp.addressLine1) setBillingAddress(String(bp.addressLine1));
         } else {
+          setBillingCountry('IN');
+          setBillingAccountType('individual');
+          setBillingTaxId('');
           setBillingStateCode('');
           setBillingLegalName('');
           setBillingGstin('');
@@ -587,6 +621,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     try {
       const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(pendingSubId)}/reconcile`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });
       const data = await res.json().catch(() => ({} as Record<string, any>));
@@ -657,6 +692,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     try {
       const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(subscriptionId)}/cancel-pending`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reason: options?.reason || 'customer_cancelled_pending',
           allowCancelAuthorizedMandate: Boolean(options?.allowCancelAuthorizedMandate)
@@ -795,22 +831,32 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             planId: tier,
             currency,
             gateway: targetGateway,
-            customerPhone: customerPhone.trim() || undefined,
-            ...(currency === 'INR' && billingStateCode
+            customerPhone: currency === 'INR' ? (customerPhone.trim() || undefined) : undefined,
+            billingProfile: currency === 'INR'
               ? {
-                  billingProfile: {
-                    stateCode: billingStateCode,
-                    country: 'IN',
-                    ...(showB2bGstFields
-                      ? {
-                          legalName: billingLegalName.trim() || undefined,
-                          customerGstin: billingGstin.trim().toUpperCase() || undefined,
-                          addressLine1: billingAddress.trim() || undefined
-                        }
-                      : {})
-                  }
+                  country: 'IN',
+                  accountType: showB2bGstFields ? 'business' : billingAccountType,
+                  ...(billingStateCode ? { stateCode: billingStateCode } : {}),
+                  ...(showB2bGstFields
+                    ? {
+                        legalName: billingLegalName.trim() || undefined,
+                        customerGstin: billingGstin.trim().toUpperCase() || undefined,
+                        addressLine1: billingAddress.trim() || undefined
+                      }
+                    : {})
                 }
-              : {}),
+              : {
+                  country: billingCountry === 'IN' ? 'US' : billingCountry,
+                  accountType: showB2bGstFields ? 'business' : billingAccountType,
+                  ...(billingStateCode.trim() ? { stateCode: billingStateCode.trim() } : {}),
+                  ...(showB2bGstFields
+                    ? {
+                        legalName: billingLegalName.trim() || undefined,
+                        taxId: billingTaxId.trim() || undefined,
+                        addressLine1: billingAddress.trim() || undefined
+                      }
+                    : {})
+                },
             idempotencyKey: clientOpId
           })
         });
@@ -1061,6 +1107,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                         if (data.purchaseId) {
                           await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(data.purchaseId)}/reconcile`, {
                             method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({})
                           }).catch(() => null);
                         }
@@ -1239,7 +1286,14 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               <button
                 type="button"
                 disabled={isCheckoutBusy}
-                onClick={() => setCurrency('INR')}
+                onClick={() => {
+                  userTouchedCurrencyRef.current = true;
+                  setCurrency('INR');
+                  if (billingCountry !== 'IN') {
+                    setBillingCountry('IN');
+                    setBillingStateCode('');
+                  }
+                }}
                 aria-pressed={currency === 'INR'}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'INR' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
@@ -1249,7 +1303,14 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 <button
                   type="button"
                   disabled={isCheckoutBusy}
-                  onClick={() => setCurrency('USD')}
+                  onClick={() => {
+                    userTouchedCurrencyRef.current = true;
+                    setCurrency('USD');
+                    if (billingCountry === 'IN') {
+                      setBillingCountry('US');
+                      setBillingStateCode('');
+                    }
+                  }}
                   aria-pressed={currency === 'USD'}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors duration-150 ${currency === 'USD' ? 'bg-claude-terracotta text-white shadow-sm' : 'text-stone-400 hover:text-white'} ${isCheckoutBusy ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
@@ -1287,42 +1348,77 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             </div>
             <div className="flex flex-wrap items-center gap-2 shrink-0">
               {activatedSummary.invoiceNumber && (
-                <button
-                  type="button"
-                  disabled={downloadingInvoiceNum === activatedSummary.invoiceNumber}
-                  onClick={async () => {
-                    const invNum = activatedSummary.invoiceNumber!;
-                    const safeFilename = `AIRA-GST-Invoice-${invNum.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
-                    setDownloadingInvoiceNum(invNum);
-                    try {
-                      const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invNum)}/download`);
-                      if (!res.ok) {
-                        const errData = await res.json().catch(() => ({}));
-                        alert(errData.error || 'Failed to load A4 invoice.');
-                        return;
+                <>
+                  <button
+                    type="button"
+                    disabled={downloadingPdfNum === activatedSummary.invoiceNumber}
+                    onClick={async () => {
+                      const invNum = activatedSummary.invoiceNumber!;
+                      const safeFilename = `AIRA-Invoice-${invNum.replace(/[^a-zA-Z0-9_-]/g, '-')}.pdf`;
+                      setDownloadingPdfNum(invNum);
+                      try {
+                        const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invNum)}/pdf`);
+                        if (!res.ok) {
+                          const errData = await res.json().catch(() => ({}));
+                          alert(errData.error || 'Failed to download PDF invoice.');
+                          return;
+                        }
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = safeFilename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      } catch (err: any) {
+                        alert(err?.message || 'Unable to download PDF invoice.');
+                      } finally {
+                        setDownloadingPdfNum(null);
                       }
-                      const html = await res.text();
-                      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = safeFilename;
-                      document.body.appendChild(a);
-                      a.click();
-                      a.remove();
-                      URL.revokeObjectURL(url);
-                    } catch (err: any) {
-                      alert(err?.message || 'Unable to open A4 invoice.');
-                    } finally {
-                      setDownloadingInvoiceNum(null);
-                    }
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/40 text-white font-semibold text-[11px] whitespace-nowrap transition-colors disabled:opacity-50"
-                >
-                  {downloadingInvoiceNum === activatedSummary.invoiceNumber
-                    ? 'Opening…'
-                    : `View / Print A4 Invoice (${activatedSummary.invoiceNumber})`}
-                </button>
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white font-semibold text-[11px] whitespace-nowrap transition-colors disabled:opacity-50"
+                  >
+                    {downloadingPdfNum === activatedSummary.invoiceNumber ? 'Generating…' : 'Download PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={downloadingInvoiceNum === activatedSummary.invoiceNumber}
+                    onClick={async () => {
+                      const invNum = activatedSummary.invoiceNumber!;
+                      const safeFilename = `AIRA-GST-Invoice-${invNum.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
+                      setDownloadingInvoiceNum(invNum);
+                      try {
+                        const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invNum)}/download`);
+                        if (!res.ok) {
+                          const errData = await res.json().catch(() => ({}));
+                          alert(errData.error || 'Failed to load A4 invoice.');
+                          return;
+                        }
+                        const html = await res.text();
+                        const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = safeFilename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                      } catch (err: any) {
+                        alert(err?.message || 'Unable to open A4 invoice.');
+                      } finally {
+                        setDownloadingInvoiceNum(null);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/40 text-white font-semibold text-[11px] whitespace-nowrap transition-colors disabled:opacity-50"
+                  >
+                    {downloadingInvoiceNum === activatedSummary.invoiceNumber
+                      ? 'Opening…'
+                      : `View / Print A4 Invoice (${activatedSummary.invoiceNumber})`}
+                  </button>
+                </>
               )}
               <button
                 type="button"
@@ -1407,9 +1503,117 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         )}
 
+        {/* Global Country / Region Alignment */}
+        <div className="px-6 md:px-8 pt-4 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <label htmlFor="pricing-billing-country" className="text-stone-400 whitespace-nowrap">
+              Country / Region:
+            </label>
+            <select
+              id="pricing-billing-country"
+              disabled={isCheckoutBusy}
+              value={billingCountry}
+              onChange={(e) => {
+                userTouchedCurrencyRef.current = true;
+                const nextCode = e.target.value.toUpperCase();
+                if ((nextCode === 'IN') !== (billingCountry === 'IN')) {
+                  setBillingStateCode('');
+                }
+                setBillingCountry(nextCode);
+                if (nextCode === 'IN') {
+                  setCurrency('INR');
+                } else if (internationalUsdEnabled) {
+                  setCurrency('USD');
+                }
+              }}
+              className="bg-stone-900 border border-white/15 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+            >
+              {countries.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.name} ({c.defaultCurrency})
+                </option>
+              ))}
+            </select>
+          </div>
+          <span className="text-[11px] text-stone-400">
+            {currency === 'USD'
+              ? 'Global Card Checkout (Visa / Mastercard / Amex) · Zero Indian GST complexity'
+              : 'India Domestic Billing (UPI / Card / NetBanking) · GST-inclusive pricing'}
+          </span>
+        </div>
+
+        {/* Payment Method & Optional Tax Disclosure (Global USD) */}
+        {currency === 'USD' && (
+          <div className="px-6 md:px-8 pt-3 space-y-2 text-xs">
+            <div className="rounded-xl border border-white/10 bg-stone-950/60 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-stone-300">
+                Pay securely in <strong className="text-white">USD</strong> by international credit or debit card.
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !showB2bGstFields;
+                  setShowB2bGstFields(next);
+                  setBillingAccountType(next ? 'business' : 'individual');
+                }}
+                className="text-[11px] font-semibold text-orange-300 hover:text-orange-200 underline text-left sm:text-right whitespace-nowrap"
+              >
+                {showB2bGstFields ? 'Hide business tax details' : 'Purchasing for a business? Add company & Tax ID (optional)'}
+              </button>
+            </div>
+            {showB2bGstFields && (
+              <div className="rounded-xl border border-white/10 bg-stone-950/60 p-3 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div>
+                  <label htmlFor="global-b2b-name" className="block text-[11px] text-stone-400 mb-1">
+                    Company / Legal Name
+                  </label>
+                  <input
+                    id="global-b2b-name"
+                    type="text"
+                    disabled={isCheckoutBusy}
+                    placeholder="Company LLC or Full Name"
+                    value={billingLegalName}
+                    onChange={(e) => setBillingLegalName(e.target.value)}
+                    className="w-full bg-stone-900 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="global-b2b-taxid" className="block text-[11px] text-stone-400 mb-1">
+                    Business Tax / VAT / EIN (Optional)
+                  </label>
+                  <input
+                    id="global-b2b-taxid"
+                    type="text"
+                    maxLength={64}
+                    disabled={isCheckoutBusy}
+                    placeholder="e.g. EU123456789 or EIN-88-9911223"
+                    value={billingTaxId}
+                    onChange={(e) => setBillingTaxId(e.target.value)}
+                    className="w-full bg-stone-900 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="global-b2b-address" className="block text-[11px] text-stone-400 mb-1">
+                    Billing Address (Optional)
+                  </label>
+                  <input
+                    id="global-b2b-address"
+                    type="text"
+                    disabled={isCheckoutBusy}
+                    placeholder="Street, City, Postal Code"
+                    value={billingAddress}
+                    onChange={(e) => setBillingAddress(e.target.value)}
+                    className="w-full bg-stone-900 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:ring-1 focus:ring-claude-terracotta"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Payment Gateway Selector & Customer Phone for INR */}
         {currency === 'INR' && (
-          <div className="px-6 md:px-8 pt-4 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="px-6 md:px-8 pt-3 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2">
               <span className="text-stone-400">Payment Partner:</span>
               <div className="inline-flex items-center bg-stone-950/80 p-0.5 rounded-lg border border-white/10">
@@ -1793,11 +1997,10 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         <div className="p-6 md:p-8 bg-stone-950/60 border-t border-white/10 flex flex-col md:flex-row items-center justify-between text-xs text-stone-400 gap-4">
           <div className="flex items-center gap-2">
             <Shield className="w-4 h-4 text-emerald-400" />
-            <span>Secure payment gateway encryption. Cancel anytime at period end with zero penalty.</span>
+            <span>Encrypted checkout · Instant credit activation · Cancel anytime in Settings</span>
           </div>
-          <div>
-            {taxConfigSummary?.supplierLegalName || 'VIREXA AI VENTURES PRIVATE LIMITED'} · Uttar Pradesh (09) · SAC {taxConfigSummary?.sacCode || '998315'}
-            {taxConfigSummary?.isProvisionalFixture === false ? ' · GST Compliant' : ' · GST Provisional Fixture'}
+          <div className="text-[11px] text-stone-400">
+            Pricing adapts automatically by billing country &amp; currency
           </div>
         </div>
       </motion.div>

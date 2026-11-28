@@ -120,6 +120,7 @@ export interface StandardChatReservation {
 }
 
 export interface BillingTaxProfile {
+  accountType: 'individual' | 'business';
   legalName: string | null;
   addressLine1: string | null;
   addressLine2: string | null;
@@ -129,11 +130,13 @@ export interface BillingTaxProfile {
   postalCode: string | null;
   country: string;
   customerGstin: string | null;
+  taxId: string | null;
   gstinValidatedAt: number | null;
   isB2b: boolean;
 }
 
 export interface BillingTaxProfileInput {
+  accountType?: 'individual' | 'business';
   legalName?: string;
   addressLine1?: string;
   addressLine2?: string;
@@ -142,6 +145,7 @@ export interface BillingTaxProfileInput {
   postalCode?: string;
   country?: string;
   customerGstin?: string;
+  taxId?: string;
 }
 
 export class CommercialBillingService {
@@ -1320,6 +1324,7 @@ export class CommercialBillingService {
     const cust = await db('billing_customers').where({ principal_id: principalId }).first();
     if (!cust) {
       return {
+        accountType: 'individual',
         legalName: null,
         addressLine1: null,
         addressLine2: null,
@@ -1329,36 +1334,56 @@ export class CommercialBillingService {
         postalCode: null,
         country: 'IN',
         customerGstin: null,
+        taxId: null,
         gstinValidatedAt: null,
         isB2b: false
       };
     }
 
     const taxInfo = parseJsonSafe(cust.tax_info);
-    const rawState = cust.billing_state_code || taxInfo.stateCode || null;
-    const stateNorm = rawState ? taxDeterminationService.normalizePlaceOfSupply(rawState) : 'UNKNOWN';
-    const resolvedStateCode = stateNorm !== 'UNKNOWN' ? stateNorm : null;
-    const jurisdiction = resolvedStateCode ? taxDeterminationService.getJurisdiction(resolvedStateCode) : undefined;
+    const country = (cust.billing_country || taxInfo.country || cust.country_code || 'IN').toUpperCase();
+    const isIndia = country === 'IN';
+    const rawState = isIndia
+      ? (cust.billing_state_code || taxInfo.stateCode || null)
+      : (taxInfo.stateCode || cust.billing_state_code || null);
+    const stateNorm = isIndia && rawState ? taxDeterminationService.normalizePlaceOfSupply(rawState) : 'UNKNOWN';
+    const resolvedStateCode = isIndia
+      ? (stateNorm !== 'UNKNOWN' ? stateNorm : null)
+      : (rawState ? String(rawState).trim().slice(0, 64) : null);
+    const jurisdiction = isIndia && resolvedStateCode ? taxDeterminationService.getJurisdiction(resolvedStateCode) : undefined;
     const gstin = (cust.customer_gstin || taxInfo.gstin || null) as string | null;
+    const validatedGstin = Boolean(gstin && validateGstin(gstin).valid);
+    const taxId = typeof taxInfo.taxId === 'string' && taxInfo.taxId.trim()
+      ? taxInfo.taxId.trim().slice(0, 64)
+      : (validatedGstin ? String(gstin).toUpperCase() : null);
+    const accountType: 'individual' | 'business' =
+      validatedGstin
+        ? 'business'
+        : taxInfo.accountType === 'business'
+          ? 'business'
+          : taxInfo.accountType === 'individual'
+            ? 'individual'
+            : (Boolean(!isIndia && taxId) ? 'business' : 'individual');
 
     return {
+      accountType,
       legalName: cust.billing_legal_name || cust.name || taxInfo.legalName || null,
       addressLine1: cust.billing_address_line1 || taxInfo.addressLine1 || null,
       addressLine2: cust.billing_address_line2 || taxInfo.addressLine2 || null,
       city: cust.billing_city || taxInfo.city || null,
       stateCode: resolvedStateCode,
-      stateName: jurisdiction?.name || null,
+      stateName: isIndia ? (jurisdiction?.name || null) : resolvedStateCode,
       postalCode: cust.billing_postal_code || taxInfo.postalCode || null,
-      country: (cust.billing_country || cust.country_code || 'IN').toUpperCase(),
+      country,
       customerGstin: gstin ? String(gstin).toUpperCase() : null,
+      taxId,
       gstinValidatedAt: cust.gstin_validated_at ? Number(cust.gstin_validated_at) : null,
-      isB2b: Boolean(gstin && validateGstin(gstin).valid)
+      isB2b: Boolean(validatedGstin || (!isIndia && accountType === 'business'))
     };
   }
 
   /**
-   * Validates and persists a subscriber's GST billing state/UT & optional B2B GSTIN.
-   * Rejects retired state code '25', invalid GSTINs, and state/GSTIN prefix mismatches.
+   * Validates and persists subscriber billing profile across Indian GST & Global accounts.
    */
   async upsertBillingTaxProfile(
     principalId: string,
@@ -1366,16 +1391,25 @@ export class CommercialBillingService {
     outerTrx?: Knex.Transaction | Knex
   ): Promise<BillingTaxProfile> {
     const cleanCountry = (input.country || 'IN').trim().toUpperCase().slice(0, 8) || 'IN';
+    const isIndia = cleanCountry === 'IN';
     const rawGstin = typeof input.customerGstin === 'string' ? input.customerGstin.trim().toUpperCase() : '';
+    const rawTaxId = typeof input.taxId === 'string' ? input.taxId.trim() : '';
     const rawState = typeof input.stateCode === 'string' ? input.stateCode.trim() : '';
 
     let resolvedStateCode: string | null = null;
+    let dbStateCodeCol: string | null = null;
     if (rawState) {
-      const normalized = taxDeterminationService.normalizePlaceOfSupply(rawState);
-      if (normalized === 'UNKNOWN') {
-        throw new Error(`VALIDATION_ERROR: Unsupported Indian GST state or Union Territory code '${rawState}'.`);
+      if (isIndia) {
+        const normalized = taxDeterminationService.normalizePlaceOfSupply(rawState);
+        if (normalized === 'UNKNOWN') {
+          throw new Error(`VALIDATION_ERROR: Unsupported Indian GST state or Union Territory code '${rawState}'.`);
+        }
+        resolvedStateCode = normalized;
+        dbStateCodeCol = normalized;
+      } else {
+        resolvedStateCode = rawState.slice(0, 64);
+        dbStateCodeCol = resolvedStateCode.length <= 4 ? resolvedStateCode : null;
       }
-      resolvedStateCode = normalized;
     }
 
     let validatedGstin: string | null = null;
@@ -1385,17 +1419,20 @@ export class CommercialBillingService {
       if (!check.valid || !check.normalized || !check.stateCode) {
         throw new Error(`VALIDATION_ERROR: Invalid B2B GSTIN '${rawGstin}': ${check.reason || 'verification failed'}.`);
       }
-      if (resolvedStateCode && resolvedStateCode !== check.stateCode) {
+      if (isIndia && resolvedStateCode && resolvedStateCode !== check.stateCode) {
         throw new Error(
           `VALIDATION_ERROR: GSTIN state prefix '${check.stateCode}' does not match selected billing state '${resolvedStateCode}'.`
         );
       }
       validatedGstin = check.normalized;
-      resolvedStateCode = check.stateCode;
+      if (isIndia) {
+        resolvedStateCode = check.stateCode;
+        dbStateCodeCol = check.stateCode;
+      }
       gstinValidatedAt = Date.now();
     }
 
-    if (cleanCountry === 'IN' && !resolvedStateCode) {
+    if (isIndia && !resolvedStateCode) {
       throw new Error('VALIDATION_ERROR: A valid Indian State or Union Territory is required for GST billing.');
     }
 
@@ -1414,9 +1451,6 @@ export class CommercialBillingService {
       return t ? t.slice(0, maxLen) : null;
     };
 
-    // Preserve existing columns when omitted (`undefined`) so partial updates during checkout
-    // do not silently wipe previously saved B2B GSTIN or billing addresses, while explicit
-    // empty string / null clears the field intentionally.
     const legalName = input.legalName !== undefined
       ? cleanOpt(input.legalName, 255)
       : (custRow?.billing_legal_name ?? custRow?.name ?? null);
@@ -1437,7 +1471,7 @@ export class CommercialBillingService {
     let effectiveGstinValidatedAt: number | null = gstinValidatedAt;
     if (input.customerGstin === undefined) {
       const prevGstin = typeof custRow?.customer_gstin === 'string' ? custRow.customer_gstin.trim().toUpperCase() : null;
-      if (prevGstin && resolvedStateCode && prevGstin.slice(0, 2) !== resolvedStateCode) {
+      if (isIndia && prevGstin && resolvedStateCode && prevGstin.slice(0, 2) !== resolvedStateCode) {
         throw new Error(
           `VALIDATION_ERROR: Saved B2B GSTIN prefix '${prevGstin.slice(0, 2)}' does not match updated billing state '${resolvedStateCode}'. Clear or update GSTIN to switch states.`
         );
@@ -1446,18 +1480,29 @@ export class CommercialBillingService {
       effectiveGstinValidatedAt = prevGstin ? (Number(custRow?.gstin_validated_at || 0) || now) : null;
     }
 
+    const effectiveTaxId = input.taxId !== undefined
+      ? (rawTaxId ? rawTaxId.slice(0, 64) : null)
+      : (typeof prevTaxInfo.taxId === 'string' ? prevTaxInfo.taxId : (effectiveGstin || null));
+
+    const effectiveAccountType: 'individual' | 'business' = input.accountType === 'business'
+      ? 'business'
+      : input.accountType === 'individual'
+        ? (effectiveGstin ? 'business' : 'individual')
+        : (effectiveGstin || (prevTaxInfo.accountType === 'business' && !isIndia && effectiveTaxId) ? 'business' : (prevTaxInfo.accountType === 'business' ? 'business' : 'individual'));
+
     await executor('billing_customers').where({ id: custRow.id }).update({
       billing_legal_name: legalName,
       billing_address_line1: addressLine1,
       billing_address_line2: addressLine2,
       billing_city: city,
-      billing_state_code: resolvedStateCode,
+      billing_state_code: dbStateCodeCol,
       billing_postal_code: postalCode,
       billing_country: cleanCountry,
-      customer_gstin: effectiveGstin,
+      customer_gstin: isIndia ? effectiveGstin : (effectiveGstin || null),
       gstin_validated_at: effectiveGstinValidatedAt,
       tax_info: JSON.stringify({
         ...prevTaxInfo,
+        accountType: effectiveAccountType,
         legalName,
         addressLine1,
         addressLine2,
@@ -1465,24 +1510,27 @@ export class CommercialBillingService {
         stateCode: resolvedStateCode,
         postalCode,
         country: cleanCountry,
-        gstin: effectiveGstin
+        gstin: effectiveGstin,
+        taxId: effectiveTaxId
       }),
       updated_at: now
     });
 
-    const jurisdiction = resolvedStateCode ? taxDeterminationService.getJurisdiction(resolvedStateCode) : undefined;
+    const jurisdiction = isIndia && resolvedStateCode ? taxDeterminationService.getJurisdiction(resolvedStateCode) : undefined;
     return {
+      accountType: effectiveAccountType,
       legalName,
       addressLine1,
       addressLine2,
       city,
       stateCode: resolvedStateCode,
-      stateName: jurisdiction?.name || null,
+      stateName: isIndia ? (jurisdiction?.name || null) : resolvedStateCode,
       postalCode,
       country: cleanCountry,
       customerGstin: effectiveGstin,
+      taxId: effectiveTaxId,
       gstinValidatedAt: effectiveGstinValidatedAt,
-      isB2b: Boolean(effectiveGstin)
+      isB2b: Boolean(effectiveGstin || (!isIndia && effectiveAccountType === 'business'))
     };
   }
 }

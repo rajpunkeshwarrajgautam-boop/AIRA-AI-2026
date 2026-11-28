@@ -395,8 +395,14 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                 </div>
               </div>
 
-              {/* Billing Info Notice */}
+              {/* Payment Method & Account Protection Notice */}
               <div className="p-4 rounded-xl bg-stone-900/40 border border-white/10 text-xs text-stone-400 space-y-2">
+                {Array.isArray(confirmedBilling.paymentMethods) && confirmedBilling.paymentMethods.length > 0 && (
+                  <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-white/10">
+                    <span className="text-stone-300 font-medium">Payment Method</span>
+                    <span className="text-white font-semibold">{confirmedBilling.paymentMethods[0].displayLabel}</span>
+                  </div>
+                )}
                 <div className="font-semibold text-white flex items-center gap-2">
                   <Shield className="w-4 h-4 text-indigo-400" />
                   Financial Ledger Protection

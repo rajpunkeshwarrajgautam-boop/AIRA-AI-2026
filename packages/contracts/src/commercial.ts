@@ -728,3 +728,66 @@ export function isGuestPrincipal(principalId: unknown): boolean {
   if (!trimmed || trimmed === 'anonymous' || trimmed === 'guest') return true;
   return trimmed.startsWith('guest_') || trimmed.startsWith('user_');
 }
+
+// ==========================================
+// 7. GLOBAL PAYMENTS & BILLING V2 CONTRACTS
+// ==========================================
+
+export const BillingAccountTypeSchema = z.enum(['individual', 'business']);
+export type BillingAccountType = z.infer<typeof BillingAccountTypeSchema>;
+
+export const GlobalCountryOptionSchema = z.object({
+  code: z.string().regex(/^[A-Z]{2}$/),
+  name: z.string().min(2).max(100),
+  defaultCurrency: CurrencyCodeSchema,
+  regionLabel: z.string().min(2).max(60)
+});
+export type GlobalCountryOption = z.infer<typeof GlobalCountryOptionSchema>;
+
+export const GlobalBillingProfileSchema = z.object({
+  country: z.string().trim().min(2).max(8).transform(v => v.toUpperCase()).default('US'),
+  accountType: BillingAccountTypeSchema.default('individual'),
+  legalName: z.string().trim().max(255).nullable().optional(),
+  addressLine1: z.string().trim().max(255).nullable().optional(),
+  addressLine2: z.string().trim().max(255).nullable().optional(),
+  city: z.string().trim().max(120).nullable().optional(),
+  stateCode: z.string().trim().max(64).nullable().optional(),
+  stateName: z.string().trim().max(120).nullable().optional(),
+  postalCode: z.string().trim().max(32).nullable().optional(),
+  customerGstin: z.string().trim().max(15).nullable().optional(),
+  taxId: z.string().trim().max(64).nullable().optional(),
+  isB2b: z.boolean().optional()
+});
+export type GlobalBillingProfile = z.infer<typeof GlobalBillingProfileSchema>;
+
+export const PaymentMethodSummarySchema = z.object({
+  id: z.string().min(3).max(128),
+  gateway: z.enum(['razorpay', 'cashfree']),
+  methodType: z.enum(['card', 'upi', 'emandate', 'netbanking', 'wallet', 'unknown']),
+  brand: z.string().max(40).optional(),
+  last4: z.string().regex(/^\d{4}$/, 'Only masked last 4 digits are permitted').optional(),
+  maskedUpi: z.string().max(100).optional(),
+  network: z.string().max(40).optional(),
+  issuer: z.string().max(80).optional(),
+  mandateStatus: z.string().max(40).optional(),
+  displayLabel: z.string().min(2).max(120),
+  updatedAt: z.number().int().nonnegative().optional(),
+  isDefault: z.boolean().optional()
+});
+export type PaymentMethodSummary = z.infer<typeof PaymentMethodSummarySchema>;
+
+export type ProviderCapabilityStatus =
+  | 'VERIFIED_SUPPORTED'
+  | 'SUPPORTED_WITH_ACCOUNT_ACTIVATION'
+  | 'UNVERIFIED_FOR_CURRENT_CHECKOUT'
+  | 'UNCONFIGURED_BLOCKER';
+
+export interface ProviderCapabilityDescriptor {
+  id: string;
+  provider: 'razorpay' | 'cashfree' | 'aira_pdf' | 'aira_email';
+  scope: 'domestic_inr' | 'international_usd' | 'documents';
+  status: ProviderCapabilityStatus;
+  supportedMethods: string[];
+  notes: string;
+}
+

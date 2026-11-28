@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>AIRA AI 2026 — Payment & Commercial Billing Knowledge Graph (Reconciled & Synchronized)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; }
+    h1, h2, h3 { color: #38bdf8; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-right: 8px; }
+    .badge-verified { background: #065f46; color: #34d399; }
+    .badge-blocked { background: #991b1b; color: #f87171; }
+    .badge-provisional { background: #854d0e; color: #facc15; }
+    .badge-superseded { background: #475569; color: #94a3b8; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-top: 20px; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; }
+    .card h3 { margin-top: 0; color: #60a5fa; }
+    .card pre { background: #0f172a; padding: 8px; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+    .edge-list { font-size: 13px; color: #cbd5e1; }
+    .mermaid { background: #1e293b; padding: 20px; border-radius: 8px; margin: 20px 0; border: 1px solid #334155; }
+  </style>
+</head>
+<body>
+  <h1>AIRA AI 2026 — Payment & Commercial Billing Knowledge Graph (Reconciled & Synchronized)</h1>
+  <p><strong>Candidate Commit SHA:</strong> <code>aaf3974bdbbef751d502e569dd32cf2c27014994</code> | <strong>Predecessor SHA:</strong> <code>32156ace356462e98d025f42af1eab941a450eaf</code> | <strong>Staging Runtime SHA:</strong> <code>5da4a4d1c0987de68e75eaddd24d60fab7c51264</code></p>
+  <p><span class="badge badge-blocked">PRODUCTION STRICT HOLD</span> <span class="badge badge-verified">STAGING CANDIDATE CERTIFIED (PR #218)</span></p>
+
+  <h2>Subsystem Callflow & Lifecycle Diagram</h2>
+  <div class="mermaid">
+    <pre>
+sequenceDiagram
+    autonumber
+    actor Customer as Authenticated User
+    participant Route as BillingRoutes (/api/billing)
+    participant PGS as PaymentGatewayService
+    participant CBS as CommercialBillingService
+    participant Tax as TaxDeterminationService
+    participant Seq as billing_document_sequences
+    participant DB as Neon PostgreSQL (Migration 036)
+
+    Customer->>Route: POST /checkout/subscription
+    Route->>PGS: initiateSubscriptionCheckout() [records billingAnchorDay]
+    PGS->>Tax: determineTax() [UP 09 vs Customer PoS]
+    Tax-->>PGS: TaxDeterminationResult (CGST+SGST / IGST)
+    PGS->>DB: Lock pending checkout (CONCURRENT guard)
+    PGS-->>Customer: Gateway Checkout URL / Session
+
+    Note over Customer,PGS: Payment Completed on Cashfree / Razorpay Gateway
+    Customer->>Route: Webhook / Return Redirect
+    Route->>PGS: processCashfreeWebhook() / processRazorpayWebhook()
+    PGS->>DB: Deduplicate webhook (payment_gateway_events)
+    PGS->>Seq: Atomic UPSERT RETURNING last_number
+    Seq-->>PGS: Formatted Serial (e.g. SBX/26-27/00001)
+    PGS->>DB: Insert billing_invoices (immutable snapshot JSONB + discrete columns)
+    PGS->>CBS: fulfillSubscription() -> Grant 3,000 (Plus) / 7,500 (Pro) Credits
+    CBS->>DB: Record credit_grants & activate subscription
+    PGS-->>Route: HTTP 200 OK Reconciled
+    </pre>
+  </div>
+
+  <h2>Canonical Knowledge Nodes (40 Total)</h2>
+  <div class="grid">
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>PaymentGatewayService</h3>
+      <p><strong>Type:</strong> <code>service</code> | <strong>Domain:</strong> <code>payment_gateway</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/payment-gateway-service.ts#588-9635</code></p>
+      <p>Core payment gateway integration managing Razorpay and Cashfree webhook verification, checkout session creation, recurring mandate handling, calendar-month renewal calculation with anchor day preservation, reconciliation, invoice allocation, and credit note issuance.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>CommercialBillingService</h3>
+      <p><strong>Type:</strong> <code>service</code> | <strong>Domain:</strong> <code>commercial_billing</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/commercial-billing-service.ts#147-1490</code></p>
+      <p>Commercial billing service managing billing customer profiles, tax profiles, credit grants (3,000 Plus / 7,500 Pro), credit reservations/settlement, standard chat quota enforcement, and tier restrictions.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>TaxDeterminationService</h3>
+      <p><strong>Type:</strong> <code>service</code> | <strong>Domain:</strong> <code>gst_compliance</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/tax-determination.ts#1-866</code></p>
+      <p>Statutory Indian GST calculation engine implementing IGST Act Sec 12(2), CGST Act Sec 31/34, 37 Indian jurisdictions (UP 09 supplier), B2B/B2C Place of Supply, integer-paise math, and provisional SAC 998315 logic (PENDING_APPROVAL).</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>GstDocumentRenderer</h3>
+      <p><strong>Type:</strong> <code>service</code> | <strong>Domain:</strong> <code>invoicing</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/gst-document-renderer.ts#1-452</code></p>
+      <p>Generates A4 printable, accessible HTML tax invoices and credit notes satisfying CGST Rule 46 and Rule 53(1A) with zero external fonts and sanitized CSS. Distinct from IT Act 2000 Section 65B electronic record certificate and CGST Rule 48(4) e-invoicing.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>ProductionReadinessService</h3>
+      <p><strong>Type:</strong> <code>service</code> | <strong>Domain:</strong> <code>release_governance</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/production-readiness.ts#1-554</code></p>
+      <p>14-gate commercial production readiness auditor enforcing fail-closed release gates (live credentials, webhooks, UP 09 GSTIN, SAC 998315 amendment, and CA sign-off).</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>BillingRoutes</h3>
+      <p><strong>Type:</strong> <code>api_router</code> | <strong>Domain:</strong> <code>api_routing</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing-routes.ts#1-811</code></p>
+      <p>Express router exposing protected and public endpoints for checkout, webhooks, customer tax profiles, invoices, credit notes, and readiness audit.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>Migration 036: GST Invoice Compliance Snapshots & FY Sequences</h3>
+      <p><strong>Type:</strong> <code>migration</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/migrations/036_gst_invoice_compliance_snapshots.ts#1-214</code></p>
+      <p>Expand-only Knex migration creating billing_document_sequences table, extending billing_invoices with immutable snapshot columns, extending billing_credit_notes with CGST Rule 53(1A) tax split, and extending billing_customers with B2B GSTIN profile.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>billing_document_sequences</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/migrations/036_gst_invoice_compliance_snapshots.ts#28-36</code></p>
+      <p>Atomic FY-partitioned serial sequence table with composite primary key (document_scope, financial_year) and check constraint chk_billing_doc_seq_nonnegative.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>billing_invoices</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/migrations/036_gst_invoice_compliance_snapshots.ts#57-115</code></p>
+      <p>Stores issued tax invoices with immutable issuance_snapshot JSONB, discrete relational snapshot columns, supplier/customer state snapshots, SAC breakdown, and FY index.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>billing_credit_notes</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/migrations/036_gst_invoice_compliance_snapshots.ts#118-175</code></p>
+      <p>Stores issued credit notes satisfying CGST Rule 53(1A) with original invoice linkage, reason, and proportional CGST/SGST/UTGST/IGST reversal.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>billing_customers</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/migrations/036_gst_invoice_compliance_snapshots.ts#39-55</code></p>
+      <p>Customer entity linking principal_id with structured billing address and optional validated B2B customer_gstin.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>subscriptions</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/index.ts#schema</code></p>
+      <p>Stores user subscriptions with gateway ID, status (active, cancelled, pending, refunded), current period dates, plan tier, fulfilled cycle, and metadata containing billingAnchorDay.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>credit_grants</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/index.ts#schema</code></p>
+      <p>Entitlement grant ledger recording total and remaining credits per subscription cycle with grant isolation and expiry timestamps (3,000 for Plus, 7,500 for Pro).</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>credit_accounts</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/index.ts#schema</code></p>
+      <p>Customer credit account balances tracking available balance_credits and currently reserved_credits.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>credit_reservations</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/index.ts#schema</code></p>
+      <p>Tracks active credit holds with 15-minute TTL, status (HELD, SETTLED, CANCELLED), and reservation tokens.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>credit_transactions</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/index.ts#schema</code></p>
+      <p>Immutable ledger of all credit balance changes (grants, reservations, settlements, expiries, refunds).</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>subscription_cancellation_outbox</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/index.ts#schema</code></p>
+      <p>Outbox table managing asynchronous cancellation retries, CAS claims, and late payment reconciliation on cancelled subscriptions.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>payment_gateway_events</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/index.ts#schema</code></p>
+      <p>Audit and deduplication table recording incoming raw gateway webhooks with unique event_id index preventing replay.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>billing_audit_events</h3>
+      <p><strong>Type:</strong> <code>database_table</code> | <strong>Domain:</strong> <code>database_schema</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/index.ts#schema</code></p>
+      <p>Immutable audit ledger recording all financial transitions, invoice issuances, reconciliation steps, and refunds.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>VIREXA AI VENTURES PRIVATE LIMITED</h3>
+      <p><strong>Type:</strong> <code>supplier_identity</code> | <strong>Domain:</strong> <code>legal_entity</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/tax-determination.ts#92-99</code></p>
+      <p>Registered company in Uttar Pradesh (09). PAN: AAMCV4678C, CIN: U58201UP2026PTC250225, GSTIN: 09AAMCV4678C1ZV. Registered address: 2/290, Gomti Nagar, Virat Khand, Lucknow, UP 226010.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>Cashfree Payments India Pvt. Ltd.</h3>
+      <p><strong>Type:</strong> <code>payment_gateway</code> | <strong>Domain:</strong> <code>payment_gateway</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/payment-gateway-service.ts#1320-1630</code></p>
+      <p>Domestic INR recurring UPI/e-mandate provider. Cycle 0 mandate authorization + Cycle 1 immediate payment. Webhook signature verified via HMAC-SHA256.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>Razorpay Software Pvt. Ltd.</h3>
+      <p><strong>Type:</strong> <code>payment_gateway</code> | <strong>Domain:</strong> <code>payment_gateway</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/payment-gateway-service.ts#1213-1310</code></p>
+      <p>Domestic INR & International USD card recurring provider. Webhook invoice.paid and subscription.charged verified via webhook secret.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>37 Indian GST Jurisdictions</h3>
+      <p><strong>Type:</strong> <code>statutory_model</code> | <strong>Domain:</strong> <code>gst_compliance</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/tax-determination.ts#19-90</code></p>
+      <p>Complete map of 28 states, 3 UTs with legislature (JK 01, DL 07, PY 34), 5 UTs without legislature with UTGST flag (CH 04, DNHDD 26, LD 31, AN 35, LA 38), and Other Territory 97. Merged code 25 is explicitly rejected.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-provisional">PENDING_APPROVAL</span>
+      <h3>Provisional SAC 998315 Fixture (Hosting & IT Infrastructure)</h3>
+      <p><strong>Type:</strong> <code>statutory_fixture</code> | <strong>Domain:</strong> <code>gst_compliance</code></p>
+      <p><strong>Source:</strong> <code>apps/api/src/billing/tax-determination.ts#100-103</code></p>
+      <p>Hosting and IT infrastructure provisioning services (18% GST). Configured provisionally in staging. Production commercial activation is PENDING_APPROVAL subject to GST portal non-core amendment filing and approval (reported draft completion deadline 13 Dec 2026).</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-superseded">SUPERSEDED</span>
+      <h3>Historical SAC 998431 Classification (OIDAR)</h3>
+      <p><strong>Type:</strong> <code>statutory_fixture</code> | <strong>Domain:</strong> <code>gst_compliance</code></p>
+      <p><strong>Source:</strong> <code>docs/GST_INVOICE_PRODUCTION_SPECIFICATION.md#15-30</code></p>
+      <p>Historical OIDAR / internet telecommunication services classification (SAC 998431) considered during initial research, now superseded/unresolved in favor of SAC 998315.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>Authoritative Staging Database</h3>
+      <p><strong>Type:</strong> <code>database_instance</code> | <strong>Domain:</strong> <code>infrastructure</code></p>
+      <p><strong>Source:</strong> <code>docs/BILLING_SANDBOX_ACCEPTANCE_LEDGER.md#18-25</code></p>
+      <p>Neon Project mute-frost-50372225, branch br-snowy-bonus-b32thjlz, endpoint ep-twilight-cherry-b3iz2oqv. Contains 36 applied migrations (Migration 036 applied), 55 public tables (billing_document_sequences created), and preserved historical invoices INV-2026-0001..0005. Runtime canonical staging SHA is 5da4a4d1c0987de68e75eaddd24d60fab7c51264 (dpl_4gu8wqpQssa6rFp82s5PYKzpVmGF on https://staging.virexaaiventures.com).</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>Staging Pre-Migration 036 Recovery Checkpoint</h3>
+      <p><strong>Type:</strong> <code>database_instance</code> | <strong>Domain:</strong> <code>infrastructure</code></p>
+      <p><strong>Source:</strong> <code>scripts/apply-staging-migration-036.ts#checkpoint</code></p>
+      <p>Neon branch br-jolly-dust-b32gx2qo (staging-backup-pre-migration-036-20261128), created from parent br-snowy-bonus-b32thjlz at LSN 0/93FF550 in ready state.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>Isolated Migration Rehearsal Branch</h3>
+      <p><strong>Type:</strong> <code>database_instance</code> | <strong>Domain:</strong> <code>infrastructure</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/migrations/036_gst_invoice_compliance_snapshots.ts#rehearsal</code></p>
+      <p>Neon branch br-calm-meadow-b35e9ahs used for dry-run rehearsal of Migration 036 (36 migrations successfully applied and verified).</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-blocked">STRICT_HOLD</span>
+      <h3>Production Database & Application</h3>
+      <p><strong>Type:</strong> <code>database_instance</code> | <strong>Domain:</strong> <code>infrastructure</code></p>
+      <p><strong>Source:</strong> <code>AGENTS.md#1-50</code></p>
+      <p>Neon project old-sky-50952395 and Vercel project aira-ai-2026. On STRICT HOLD under PR #215.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>INV-2026-0001 (Razorpay Pro ₹999)</h3>
+      <p><strong>Type:</strong> <code>historical_invoice</code> | <strong>Domain:</strong> <code>invoicing</code></p>
+      <p><strong>Source:</strong> <code>docs/BILLING_SANDBOX_ACCEPTANCE_LEDGER.md#28-45</code></p>
+      <p>First sandbox invoice: Razorpay Pro ₹999.00 (cust_9e1e096ced03407aba9db0a71f6c3253, pur_8150add7f93743e38138b5617f727188, subscription sub_RiyQ4X7s4w1z6f). 7,500 credits granted. Staging HTML download verified.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>INV-2026-0002 (Cashfree Plus ₹399)</h3>
+      <p><strong>Type:</strong> <code>historical_invoice</code> | <strong>Domain:</strong> <code>invoicing</code></p>
+      <p><strong>Source:</strong> <code>docs/BILLING_SANDBOX_ACCEPTANCE_LEDGER.md#47-75</code></p>
+      <p>Immediate-payment Cashfree Plus ₹399.00 (cust_2a79b54106e04c9ab491e5be3aed6b97, pur_411d4e047dd041dc8e7a61f705c3ce27, cf_payment_id 1479479837022321152). Exactly 3,000 monthly credits granted (wallet balance 3,100 including 100 welcome grant). Operator HTML download verified PASS.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>INV-2026-0003 (Cashfree Pro ₹999)</h3>
+      <p><strong>Type:</strong> <code>historical_invoice</code> | <strong>Domain:</strong> <code>invoicing</code></p>
+      <p><strong>Source:</strong> <code>docs/BILLING_SANDBOX_ACCEPTANCE_LEDGER.md#77-100</code></p>
+      <p>Cashfree Pro ₹999.00 (cust_dbfaef1d12024ea99ee860ee4bfc5b77, pur_b19205cdaa624b82ac99d4cc1150c484, subscription sub_1479261895046664192). Exactly 7,500 credits granted. Scheduled cancellation retains paid-period access until 26 Dec 2026.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>INV-2026-0004 (Razorpay Plus ₹399)</h3>
+      <p><strong>Type:</strong> <code>historical_invoice</code> | <strong>Domain:</strong> <code>invoicing</code></p>
+      <p><strong>Source:</strong> <code>docs/BILLING_SANDBOX_ACCEPTANCE_LEDGER.md#102-125</code></p>
+      <p>Razorpay Plus ₹399.00 (cust_546b027724104cd094ee756b72d6051c, pur_ad3ac94100294b6192c41e10cb29fa9b, subscription sub_Rk4R4H7N7d6Q4N). Exactly 3,000 credits granted. Scheduled cancellation retains paid-period access.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-verified">VERIFIED</span>
+      <h3>INV-2026-0005 (Razorpay Pro ₹999 — Active Subscription, NOT a Refund)</h3>
+      <p><strong>Type:</strong> <code>historical_invoice</code> | <strong>Domain:</strong> <code>invoicing</code></p>
+      <p><strong>Source:</strong> <code>docs/BILLING_SANDBOX_ACCEPTANCE_LEDGER.md#127-150</code></p>
+      <p>Razorpay Pro ₹999.00 (cust_d6c10d8b7bc343bc9c648cb372403baa, pur_9dff97f99a434153bdf698c7c548b2cc, subscription sub_Rk4Y7Q3M5m1P9L). Exactly 7,500 credits granted. Verified on staging. NOT a refund; active subscription.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-blocked">BLOCKED</span>
+      <h3>U1: GST Non-Core Amendment for SAC 998315</h3>
+      <p><strong>Type:</strong> <code>release_blocker</code> | <strong>Domain:</strong> <code>release_governance</code></p>
+      <p><strong>Source:</strong> <code>docs/GST_INVOICE_PRODUCTION_SPECIFICATION.md#22-26</code></p>
+      <p>Statutory amendment on GST portal adding SAC 998315 (Hosting and IT infrastructure provisioning services) to GSTIN 09AAMCV4678C1ZV. Statutory draft completion deadline: 13 December 2026.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-blocked">BLOCKED</span>
+      <h3>U2: Written Tax Advisor (CA) Sign-off</h3>
+      <p><strong>Type:</strong> <code>release_blocker</code> | <strong>Domain:</strong> <code>release_governance</code></p>
+      <p><strong>Source:</strong> <code>docs/GST_INVOICE_PRODUCTION_SPECIFICATION.md#27-33</code></p>
+      <p>Formal written attestation from company CA approving 18% GST classification, intra-state Pro rounding rule (±1 paisa), IT Act 2000 electronic authentication, statutory invoice timing, and e-invoicing applicability (AATO <= ₹5 Cr exemption per Notification No. 10/2023-CT).</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-blocked">BLOCKED</span>
+      <h3>U3: Owner Reconfirmation of Zero Commercial Invoices</h3>
+      <p><strong>Type:</strong> <code>release_blocker</code> | <strong>Domain:</strong> <code>release_governance</code></p>
+      <p><strong>Source:</strong> <code>docs/GST_INVOICE_PRODUCTION_SPECIFICATION.md#34-37</code></p>
+      <p>Owner reconfirmation immediately prior to GO LIVE that zero external commercial invoices have been issued since incorporation, confirming 00001 as exact starting serial in FY 2026-27.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-blocked">BLOCKED</span>
+      <h3>U4: Live Merchant Provisioning & Explicit GO LIVE</h3>
+      <p><strong>Type:</strong> <code>release_blocker</code> | <strong>Domain:</strong> <code>release_governance</code></p>
+      <p><strong>Source:</strong> <code>docs/GST_INVOICE_PRODUCTION_SPECIFICATION.md#38-44</code></p>
+      <p>Future production environment provisioning (live Razorpay/Cashfree KYC + live API keys/plan IDs + production Vercel tax env vars) and final explicit owner GO LIVE authorization.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-provisional">PENDING_REVISION</span>
+      <h3>Engineering Dependency: Production Neon Migration 036 Unapplied</h3>
+      <p><strong>Type:</strong> <code>engineering_dependency</code> | <strong>Domain:</strong> <code>release_governance</code></p>
+      <p><strong>Source:</strong> <code>packages/db/src/migrations/036_gst_invoice_compliance_snapshots.ts#1-20</code></p>
+      <p>Production Neon database old-sky-50952395 has not received Migration 036. Must precede production application cutover.</p>
+    </div>
+
+    <div class="card">
+      <span class="badge badge-blocked">STRICT_HOLD</span>
+      <h3>Engineering Dependency: Production PR #215 STRICT HOLD</h3>
+      <p><strong>Type:</strong> <code>engineering_dependency</code> | <strong>Domain:</strong> <code>release_governance</code></p>
+      <p><strong>Source:</strong> <code>AGENTS.md#1-50</code></p>
+      <p>Production candidate PR #215 remains in DRAFT / STRICT HOLD until staging release is certified and U1–U4 blockers are satisfied.</p>
+    </div>
+
+  </div>
+
+  <h2>Canonical Knowledge Edges (52 Total)</h2>
+  <div class="card">
+    <ul class="edge-list">
+      <li><strong>routes_billing_api</strong> &rarr; <em>invokes</em> &rarr; <strong>srv_payment_gateway</strong>: Delegates checkout, invoice retrieval, downloads, and webhook handling</li>
+      <li><strong>routes_billing_api</strong> &rarr; <em>invokes</em> &rarr; <strong>srv_commercial_billing</strong>: Delegates customer lookups, tax profile management, and chat quotas</li>
+      <li><strong>routes_billing_api</strong> &rarr; <em>invokes</em> &rarr; <strong>srv_production_readiness</strong>: Calls audit() for /api/billing/readiness endpoint</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>invokes</em> &rarr; <strong>srv_tax_determination</strong>: Calculates GST rates, CGST/SGST/IGST breakdown, and FY sequence partitions</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>invokes</em> &rarr; <strong>srv_gst_renderer</strong>: Renders HTML documents for invoices and credit notes</li>
+      <li><strong>srv_commercial_billing</strong> &rarr; <em>invokes</em> &rarr; <strong>srv_tax_determination</strong>: Validates customer B2B GSTIN and normalizes billing state codes</li>
+      <li><strong>srv_production_readiness</strong> &rarr; <em>invokes</em> &rarr; <strong>srv_tax_determination</strong>: Verifies supplier GSTIN and UP 09 location validity</li>
+      <li><strong>mig_036_gst_snapshots</strong> &rarr; <em>creates</em> &rarr; <strong>tbl_billing_doc_seq</strong>: Creates atomic FY sequence counter table</li>
+      <li><strong>mig_036_gst_snapshots</strong> &rarr; <em>modifies</em> &rarr; <strong>tbl_billing_invoices</strong>: Adds snapshot columns and JSONB snapshot storage</li>
+      <li><strong>mig_036_gst_snapshots</strong> &rarr; <em>modifies</em> &rarr; <strong>tbl_billing_credit_notes</strong>: Adds Rule 53(1A) credit note tax reversal columns</li>
+      <li><strong>mig_036_gst_snapshots</strong> &rarr; <em>modifies</em> &rarr; <strong>tbl_billing_customers</strong>: Adds structured billing address and customer_gstin</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>upserts_atomic</em> &rarr; <strong>tbl_billing_doc_seq</strong>: Performs atomic UPSERT RETURNING last_number under savepoints</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>writes_and_reads</em> &rarr; <strong>tbl_billing_invoices</strong>: Inserts immutable tax invoices and queries historical invoices</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>writes_and_reads</em> &rarr; <strong>tbl_billing_credit_notes</strong>: Inserts credit notes on subscription refunds</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>writes_and_reads</em> &rarr; <strong>tbl_subscriptions</strong>: Manages subscription status, cycles, billingAnchorDay metadata, and period dates</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>writes_and_reads</em> &rarr; <strong>tbl_credit_grants</strong>: Creates entitlement grants upon payment settlement</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>writes_dedup</em> &rarr; <strong>tbl_payment_gateway_events</strong>: Deduplicates webhook events using unique event_id index</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>appends_audit</em> &rarr; <strong>tbl_billing_audit_events</strong>: Appends immutable financial and reconciliation audit entries</li>
+      <li><strong>srv_payment_gateway</strong> &rarr; <em>manages_outbox</em> &rarr; <strong>tbl_sub_cancellation_outbox</strong>: Routes cancellation retries and records late payment reconciliations</li>
+      <li><strong>srv_commercial_billing</strong> &rarr; <em>writes_and_reads</em> &rarr; <strong>tbl_billing_customers</strong>: Manages customer tax profile and principal mapping</li>
+      <li><strong>srv_commercial_billing</strong> &rarr; <em>reads_and_debits</em> &rarr; <strong>tbl_credit_grants</strong>: Checks balance, holds chat compute units, and settles quotas</li>
+      <li><strong>srv_commercial_billing</strong> &rarr; <em>maintains_balance</em> &rarr; <strong>tbl_credit_accounts</strong>: Maintains available balance_credits and reserved_credits</li>
+      <li><strong>srv_commercial_billing</strong> &rarr; <em>manages_holds</em> &rarr; <strong>tbl_credit_reservations</strong>: Creates holds with 15-min TTL and settles across expiry</li>
+      <li><strong>srv_commercial_billing</strong> &rarr; <em>records_ledger</em> &rarr; <strong>tbl_credit_transactions</strong>: Records all credit balance modifications in immutable ledger</li>
+      <li><strong>ent_provider_cashfree</strong> &rarr; <em>sends_webhooks</em> &rarr; <strong>srv_payment_gateway</strong>: Delivers payment and subscription status webhooks</li>
+      <li><strong>ent_provider_razorpay</strong> &rarr; <em>sends_webhooks</em> &rarr; <strong>srv_payment_gateway</strong>: Delivers invoice.paid and payment.captured webhooks</li>
+      <li><strong>srv_tax_determination</strong> &rarr; <em>binds_supplier</em> &rarr; <strong>ent_supplier_virexa</strong>: Uses registered PAN, CIN, Lucknow UP 09 address, and trade name</li>
+      <li><strong>srv_tax_determination</strong> &rarr; <em>enforces_statute</em> &rarr; <strong>stat_tax_jurisdictions</strong>: Determines Place of Supply across 37 jurisdictions per IGST Act Sec 12(2)</li>
+      <li><strong>srv_tax_determination</strong> &rarr; <em>uses_fixture</em> &rarr; <strong>stat_provisional_sac</strong>: Applies SAC 998315 provisionally in non-production environments (PENDING_APPROVAL)</li>
+      <li><strong>stat_historical_sac_998431</strong> &rarr; <em>superseded_by</em> &rarr; <strong>stat_provisional_sac</strong>: OIDAR classification SAC 998431 replaced by Hosting SAC 998315</li>
+      <li><strong>env_staging_recovery_checkpoint</strong> &rarr; <em>snapshots_branch</em> &rarr; <strong>env_staging_authoritative</strong>: Branch br-jolly-dust-b32gx2qo created from parent br-snowy-bonus-b32thjlz at LSN 0/93FF550 as pre-migration 036 recovery checkpoint</li>
+      <li><strong>hist_inv_2026_0001</strong> &rarr; <em>stored_in</em> &rarr; <strong>tbl_billing_invoices</strong>: Persisted in staging database under billing_invoices</li>
+      <li><strong>hist_inv_2026_0002</strong> &rarr; <em>stored_in</em> &rarr; <strong>tbl_billing_invoices</strong>: Persisted in staging database under billing_invoices</li>
+      <li><strong>hist_inv_2026_0003</strong> &rarr; <em>stored_in</em> &rarr; <strong>tbl_billing_invoices</strong>: Persisted in staging database under billing_invoices</li>
+      <li><strong>hist_inv_2026_0004</strong> &rarr; <em>stored_in</em> &rarr; <strong>tbl_billing_invoices</strong>: Persisted in staging database under billing_invoices</li>
+      <li><strong>hist_inv_2026_0005</strong> &rarr; <em>stored_in</em> &rarr; <strong>tbl_billing_invoices</strong>: Persisted in staging database under billing_invoices</li>
+      <li><strong>hist_inv_2026_0001</strong> &rarr; <em>preserved_on</em> &rarr; <strong>env_staging_authoritative</strong>: Preserved on Neon branch br-snowy-bonus-b32thjlz</li>
+      <li><strong>hist_inv_2026_0002</strong> &rarr; <em>preserved_on</em> &rarr; <strong>env_staging_authoritative</strong>: Preserved on Neon branch br-snowy-bonus-b32thjlz</li>
+      <li><strong>hist_inv_2026_0003</strong> &rarr; <em>preserved_on</em> &rarr; <strong>env_staging_authoritative</strong>: Preserved on Neon branch br-snowy-bonus-b32thjlz</li>
+      <li><strong>hist_inv_2026_0004</strong> &rarr; <em>preserved_on</em> &rarr; <strong>env_staging_authoritative</strong>: Preserved on Neon branch br-snowy-bonus-b32thjlz</li>
+      <li><strong>hist_inv_2026_0005</strong> &rarr; <em>preserved_on</em> &rarr; <strong>env_staging_authoritative</strong>: Preserved on Neon branch br-snowy-bonus-b32thjlz</li>
+      <li><strong>hist_inv_2026_0002</strong> &rarr; <em>paid_via</em> &rarr; <strong>ent_provider_cashfree</strong>: Paid via Cashfree immediate UPI checkout (cf_payment_id 1479479837022321152)</li>
+      <li><strong>hist_inv_2026_0003</strong> &rarr; <em>paid_via</em> &rarr; <strong>ent_provider_cashfree</strong>: Paid via Cashfree Pro checkout (sub_1479261895046664192)</li>
+      <li><strong>hist_inv_2026_0001</strong> &rarr; <em>paid_via</em> &rarr; <strong>ent_provider_razorpay</strong>: Paid via Razorpay Pro recurring checkout (sub_RiyQ4X7s4w1z6f)</li>
+      <li><strong>hist_inv_2026_0004</strong> &rarr; <em>paid_via</em> &rarr; <strong>ent_provider_razorpay</strong>: Paid via Razorpay Plus recurring checkout (sub_Rk4R4H7N7d6Q4N)</li>
+      <li><strong>hist_inv_2026_0005</strong> &rarr; <em>paid_via</em> &rarr; <strong>ent_provider_razorpay</strong>: Paid via Razorpay Pro recurring checkout (sub_Rk4Y7Q3M5m1P9L) — active subscription</li>
+      <li><strong>blk_u1_gst_amendment</strong> &rarr; <em>blocks_activation</em> &rarr; <strong>srv_production_readiness</strong>: Blocks commercial production release until GST portal amendment approved</li>
+      <li><strong>blk_u2_ca_signoff</strong> &rarr; <em>blocks_activation</em> &rarr; <strong>srv_production_readiness</strong>: Blocks commercial production release until CA written attestation obtained</li>
+      <li><strong>blk_u3_zero_invoices_reconfirmation</strong> &rarr; <em>blocks_activation</em> &rarr; <strong>srv_production_readiness</strong>: Blocks commercial production release until owner reconfirms zero historical commercial invoices</li>
+      <li><strong>blk_u4_live_merchant_go_live</strong> &rarr; <em>blocks_activation</em> &rarr; <strong>srv_production_readiness</strong>: Blocks commercial production release until live merchant keys and final owner GO LIVE granted</li>
+      <li><strong>dep_prod_migration_036</strong> &rarr; <em>blocks_cutover</em> &rarr; <strong>env_production_locked</strong>: Prevents production cutover while Migration 036 unapplied on old-sky-50952395</li>
+      <li><strong>dep_prod_pr215_hold</strong> &rarr; <em>blocks_cutover</em> &rarr; <strong>env_production_locked</strong>: Maintains production PR #215 in DRAFT / STRICT HOLD</li>
+
+    </ul>
+  </div>
+</body>
+</html>

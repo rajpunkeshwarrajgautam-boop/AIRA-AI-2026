@@ -27,12 +27,14 @@ import {
   TrendingUp,
   Shield,
   Lightbulb,
+  Globe,
+  FileText,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { AppSettings, Conversation, Project } from '../types';
 import { AVAILABLE_MODELS } from '../utils/constants';
 import { neonAuth, authenticatedApiFetch } from '../lib/neonAuth';
-import { COMMERCIAL_PLANS, PlanTier } from '../types/commercial-types';
+import { COMMERCIAL_PLANS, PlanTier, PaymentMethodSummary, GlobalBillingProfile } from '../types/commercial-types';
 import { resetDismissedAnnouncements } from '../utils/announcements';
 import { agentMemory } from '../utils/agentMemoryEngine';
 import { createWorkspaceBackup, validateAndParseBackup } from '../utils/workspaceBackup';
@@ -268,6 +270,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     activeSubscription: ActiveSubscriptionSummary | null;
     pendingSubscription: PendingSubscriptionSummary | null;
     subscriptionLifecycle: SubscriptionLifecycleSummary | null;
+    paymentMethods?: PaymentMethodSummary[];
+    billingProfile?: GlobalBillingProfile | null;
     supplierIdentity?: {
       legalName?: string;
       tradeName?: string;
@@ -346,6 +350,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         activeSubscription: summary?.activeSubscription || null,
         pendingSubscription: summary?.pendingSubscription || null,
         subscriptionLifecycle: summary?.subscriptionLifecycle || null,
+        paymentMethods: Array.isArray(summary?.paymentMethods) ? summary.paymentMethods : [],
+        billingProfile: summary?.billingProfile || null,
         supplierIdentity: summary?.supplierIdentity
       });
     } catch (err) {
@@ -367,11 +373,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isCancellingPending, setIsCancellingPending] = useState(false);
   const [reconcileMessage, setReconcileMessage] = useState<string | null>(null);
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
+  const [downloadingPdfNum, setDownloadingPdfNum] = useState<string | null>(null);
   const [downloadingCnNum, setDownloadingCnNum] = useState<string | null>(null);
+  const [countriesList, setCountriesList] = useState<Array<{ code: string; name: string; defaultCurrency: string }>>([
+    { code: 'US', name: 'United States', defaultCurrency: 'USD' },
+    { code: 'IN', name: 'India', defaultCurrency: 'INR' },
+    { code: 'GB', name: 'United Kingdom', defaultCurrency: 'USD' },
+    { code: 'CA', name: 'Canada', defaultCurrency: 'USD' },
+    { code: 'AU', name: 'Australia', defaultCurrency: 'USD' },
+    { code: 'DE', name: 'Germany', defaultCurrency: 'USD' },
+    { code: 'SG', name: 'Singapore', defaultCurrency: 'USD' }
+  ]);
+  const [taxCountry, setTaxCountry] = useState<string>('IN');
+  const [taxAccountType, setTaxAccountType] = useState<'individual' | 'business'>('individual');
   const [taxJurisdictions, setTaxJurisdictions] = useState<Array<{ code: string; name: string }>>([]);
   const [taxStateCode, setTaxStateCode] = useState<string>('');
   const [taxLegalName, setTaxLegalName] = useState<string>('');
   const [taxGstin, setTaxGstin] = useState<string>('');
+  const [taxIdValue, setTaxIdValue] = useState<string>('');
   const [taxAddress, setTaxAddress] = useState<string>('');
   const [taxProfileSaving, setTaxProfileSaving] = useState<boolean>(false);
   const [taxProfileMsg, setTaxProfileMsg] = useState<string | null>(null);
@@ -407,40 +426,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const fetchTaxProfile = useCallback(async () => {
     if (isGuestUser) {
+      setTaxCountry('IN');
+      setTaxAccountType('individual');
       setTaxStateCode('');
       setTaxLegalName('');
       setTaxGstin('');
+      setTaxIdValue('');
       setTaxAddress('');
       return;
     }
     try {
-      const res = await authenticatedApiFetch('/api/billing/tax-profile');
+      let res = await authenticatedApiFetch('/api/billing/profile');
+      if (!res.ok) {
+        res = await authenticatedApiFetch('/api/billing/tax-profile');
+      }
       if (!res.ok) {
         setTaxStateCode('');
         setTaxLegalName('');
         setTaxGstin('');
+        setTaxIdValue('');
         setTaxAddress('');
         return;
       }
       const data = await res.json().catch(() => ({} as Record<string, any>));
+      if (Array.isArray(data?.countries) && data.countries.length > 0) {
+        setCountriesList(data.countries);
+      }
       if (Array.isArray(data?.jurisdictions)) {
         setTaxJurisdictions(data.jurisdictions);
       }
       if (data?.profile) {
+        setTaxCountry(String(data.profile.country || 'IN').toUpperCase());
+        setTaxAccountType(data.profile.accountType === 'business' || data.profile.customerGstin ? 'business' : 'individual');
         setTaxStateCode(String(data.profile.stateCode || ''));
         setTaxLegalName(String(data.profile.legalName || ''));
         setTaxGstin(String(data.profile.customerGstin || ''));
+        setTaxIdValue(String(data.profile.taxId || ''));
         setTaxAddress(String(data.profile.addressLine1 || ''));
       } else {
         setTaxStateCode('');
         setTaxLegalName('');
         setTaxGstin('');
+        setTaxIdValue('');
         setTaxAddress('');
       }
     } catch {
       setTaxStateCode('');
       setTaxLegalName('');
       setTaxGstin('');
+      setTaxIdValue('');
       setTaxAddress('');
     }
   }, [isGuestUser]);
@@ -450,7 +484,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTaxProfileMsg(null);
     setTaxProfileError(null);
 
-    const trimmedGstin = taxGstin.trim().toUpperCase();
+    const isIndia = taxCountry === 'IN';
+    const trimmedGstin = isIndia && taxAccountType === 'business' ? taxGstin.trim().toUpperCase() : '';
     if (trimmedGstin) {
       if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(trimmedGstin) || trimmedGstin.startsWith('25')) {
         setTaxProfileError('Enter a valid 15-character Indian GSTIN (or clear the field).');
@@ -465,26 +500,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
 
     try {
-      const res = await authenticatedApiFetch('/api/billing/tax-profile', {
+      const res = await authenticatedApiFetch('/api/billing/profile', {
         method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          country: taxCountry,
+          accountType: taxAccountType,
           stateCode: taxStateCode || undefined,
-          country: 'IN',
           legalName: taxLegalName.trim() || undefined,
-          customerGstin: trimmedGstin || undefined,
+          customerGstin: isIndia ? (trimmedGstin || '') : '',
+          taxId: !isIndia && taxAccountType === 'business' ? (taxIdValue.trim() || '') : '',
           addressLine1: taxAddress.trim() || undefined
         })
       });
       const data = await res.json().catch(() => ({} as Record<string, any>));
       if (!res.ok) {
-        setTaxProfileError(data?.message || data?.error || 'Failed to save GST billing profile.');
+        setTaxProfileError(data?.message || data?.error || 'Failed to save billing information.');
         return;
       }
-      if (data?.profile?.stateCode) setTaxStateCode(String(data.profile.stateCode));
+      if (data?.profile?.country) setTaxCountry(String(data.profile.country).toUpperCase());
+      if (data?.profile?.stateCode !== undefined) setTaxStateCode(String(data.profile.stateCode || ''));
       if (data?.profile?.customerGstin !== undefined) setTaxGstin(String(data.profile.customerGstin || ''));
-      setTaxProfileMsg('GST billing profile saved.');
+      if (data?.profile?.taxId !== undefined) setTaxIdValue(String(data.profile.taxId || ''));
+      setTaxProfileMsg('Billing information saved.');
     } catch (err: any) {
-      setTaxProfileError(err?.message || 'Unable to save GST billing profile.');
+      setTaxProfileError(err?.message || 'Unable to save billing information.');
     } finally {
       setTaxProfileSaving(false);
     }
@@ -496,6 +536,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(subscriptionId)}/reconcile`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({})
       });
       const data = await res.json().catch(() => ({} as Record<string, any>));
@@ -515,6 +556,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       const res = await authenticatedApiFetch(`/api/billing/subscriptions/${encodeURIComponent(subscriptionId)}/cancel-pending`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reason: allowCancelAuthorizedMandate ? 'user_cancel_authorized_mandate' : 'user_cancel_pending',
           allowCancelAuthorizedMandate
@@ -531,57 +573,74 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleDownloadInvoice = async (invoiceNumber: string) => {
-    setDownloadingInvoiceNum(invoiceNumber);
+  const downloadBillingDocument = async (params: {
+    endpoint: string;
+    filename: string;
+    mimeType: string;
+    errorLabel: string;
+    setBusy: (busy: boolean) => void;
+  }) => {
+    params.setBusy(true);
     try {
-      const res = await authenticatedApiFetch(`/api/billing/invoices/${encodeURIComponent(invoiceNumber)}/download`);
+      const res = await authenticatedApiFetch(params.endpoint);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({} as any));
-        alert(errData.error || 'Failed to load A4 invoice.');
+        alert(errData.error || params.errorLabel);
         return;
       }
-      const html = await res.text();
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const blob = params.mimeType.includes('pdf')
+        ? await res.blob()
+        : new Blob([await res.text()], { type: params.mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `AIRA-GST-Invoice-${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
+      a.download = params.filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
     } catch (err: any) {
-      alert(err?.message || 'Unable to open A4 invoice.');
+      alert(err?.message || params.errorLabel);
     } finally {
-      setDownloadingInvoiceNum(null);
+      params.setBusy(false);
     }
   };
 
-  const handleDownloadCreditNote = async (creditNoteNumber: string) => {
-    setDownloadingCnNum(creditNoteNumber);
-    try {
-      const res = await authenticatedApiFetch(`/api/billing/credit-notes/${encodeURIComponent(creditNoteNumber)}/download`);
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({} as any));
-        alert(errData.error || 'Failed to load A4 credit note.');
-        return;
-      }
-      const html = await res.text();
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `AIRA-GST-Credit-Note-${creditNoteNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err: any) {
-      alert(err?.message || 'Unable to open A4 credit note.');
-    } finally {
-      setDownloadingCnNum(null);
-    }
-  };
+  const handleDownloadInvoice = (invoiceNumber: string) =>
+    downloadBillingDocument({
+      endpoint: `/api/billing/invoices/${encodeURIComponent(invoiceNumber)}/download`,
+      filename: `AIRA-GST-Invoice-${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`,
+      mimeType: 'text/html;charset=utf-8',
+      errorLabel: 'Failed to load A4 invoice.',
+      setBusy: (busy) => setDownloadingInvoiceNum(busy ? invoiceNumber : null)
+    });
+
+  const handleDownloadInvoicePdf = (invoiceNumber: string) =>
+    downloadBillingDocument({
+      endpoint: `/api/billing/invoices/${encodeURIComponent(invoiceNumber)}/pdf`,
+      filename: `AIRA-Invoice-${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.pdf`,
+      mimeType: 'application/pdf',
+      errorLabel: 'Failed to download PDF invoice.',
+      setBusy: (busy) => setDownloadingPdfNum(busy ? invoiceNumber : null)
+    });
+
+  const handleDownloadCreditNotePdf = (creditNoteNumber: string) =>
+    downloadBillingDocument({
+      endpoint: `/api/billing/credit-notes/${encodeURIComponent(creditNoteNumber)}/pdf`,
+      filename: `AIRA-Credit-Note-${creditNoteNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.pdf`,
+      mimeType: 'application/pdf',
+      errorLabel: 'Failed to download PDF credit note.',
+      setBusy: (busy) => setDownloadingPdfNum(busy ? creditNoteNumber : null)
+    });
+
+  const handleDownloadCreditNote = (creditNoteNumber: string) =>
+    downloadBillingDocument({
+      endpoint: `/api/billing/credit-notes/${encodeURIComponent(creditNoteNumber)}/download`,
+      filename: `AIRA-GST-Credit-Note-${creditNoteNumber.replace(/[^a-zA-Z0-9_-]/g, '-')}.html`,
+      mimeType: 'text/html;charset=utf-8',
+      errorLabel: 'Failed to load A4 credit note.',
+      setBusy: (busy) => setDownloadingCnNum(busy ? creditNoteNumber : null)
+    });
 
   const handleCancelSubscription = async () => {
     if (!window.confirm('Are you sure you want to cancel your recurring subscription? Your entitlements will remain active until the end of the current billing cycle.')) {
@@ -1591,81 +1650,217 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     );
                   })()}
 
-                  {/* Billing & GST Tax Profile */}
+                  {/* Payment Methods */}
+                  {!isGuestUser && (
+                    <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/20 space-y-2.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <CreditCard className="w-4 h-4 text-claude-accentInk shrink-0" />
+                          <h4 className="font-semibold text-claude-text-light dark:text-white">Payment methods</h4>
+                        </div>
+                        {onOpenPricing && (
+                          <button
+                            type="button"
+                            onClick={onOpenPricing}
+                            className="text-[11px] font-semibold text-claude-accentInk hover:underline"
+                          >
+                            {activePlanId === 'free' ? 'Add via Plan Checkout' : 'Change Plan'}
+                          </button>
+                        )}
+                      </div>
+                      {Array.isArray(usageData?.paymentMethods) && usageData.paymentMethods.length > 0 ? (
+                        <div className="space-y-2">
+                          {usageData.paymentMethods.map((pm) => (
+                            <div
+                              key={pm.id}
+                              className="flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border border-claude-border-light dark:border-white/10 bg-claude-surface-light dark:bg-claude-surface2-dark"
+                            >
+                              <div className="space-y-0.5">
+                                <div className="font-semibold text-claude-text-light dark:text-white">{pm.displayLabel}</div>
+                                <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark capitalize">
+                                  {pm.methodType} · Status: {pm.mandateStatus || 'active'}
+                                </div>
+                              </div>
+                              {pm.isDefault && (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-700 dark:text-emerald-300 text-[10px] font-semibold">
+                                  Default
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
+                          No saved payment method on file yet. Verified card or mandate details appear automatically after subscription checkout.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Billing Information (Global Country, Account Type & Tax ID / GSTIN) */}
                   {!isGuestUser && (
                     <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/20 space-y-3 text-xs">
-                      <div className="flex items-center justify-between gap-2">
-                        <div>
-                          <h4 className="font-semibold text-claude-text-light dark:text-white">
-                            Billing &amp; Indian GST Tax Profile
-                          </h4>
-                          <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
-                            Determines Place of Supply (CGST/SGST vs IGST) and optional B2B GSTIN on future invoices.
-                          </p>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-start gap-2">
+                          <Globe className="w-4 h-4 text-claude-accentInk shrink-0 mt-0.5" />
+                          <div>
+                            <h4 className="font-semibold text-claude-text-light dark:text-white">
+                              Billing information
+                            </h4>
+                            <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
+                              Controls your default checkout currency, invoices, and optional business tax identification.
+                            </p>
+                          </div>
                         </div>
                         <button
                           type="button"
                           onClick={() => void handleSaveTaxProfile()}
                           disabled={taxProfileSaving}
-                          className="px-3 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-semibold transition-colors disabled:opacity-50 shrink-0"
+                          className="px-3 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-semibold transition-colors disabled:opacity-50 shrink-0 self-start sm:self-center"
                         >
-                          {taxProfileSaving ? 'Saving…' : 'Save Tax Profile'}
+                          {taxProfileSaving ? 'Saving…' : 'Save Billing Info'}
                         </button>
                       </div>
+
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         <div>
-                          <label htmlFor="settings-gst-state" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
-                            State / Union Territory *
+                          <label htmlFor="settings-billing-country" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                            Country / Region
                           </label>
                           <select
-                            id="settings-gst-state"
-                            value={taxStateCode}
+                            id="settings-billing-country"
+                            value={taxCountry}
                             onChange={(e) => {
-                              setTaxStateCode(e.target.value);
+                              const next = e.target.value.toUpperCase();
+                              setTaxCountry(next);
+                              if (next !== 'IN') setTaxStateCode('');
                               setTaxProfileError(null);
                               setTaxProfileMsg(null);
                             }}
                             className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
                           >
-                            <option value="">Select State / UT…</option>
-                            {taxJurisdictions.map((j) => (
-                              <option key={j.code} value={j.code}>
-                                {j.code} - {j.name}
+                            {countriesList.map((c) => (
+                              <option key={c.code} value={c.code}>
+                                {c.name} ({c.defaultCurrency})
                               </option>
                             ))}
                           </select>
                         </div>
+
                         <div>
-                          <label htmlFor="settings-gst-gstin" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
-                            B2B Recipient GSTIN (Optional)
-                          </label>
-                          <input
-                            id="settings-gst-gstin"
-                            type="text"
-                            maxLength={15}
-                            placeholder="e.g. 09AAMCV4678C1ZV"
-                            value={taxGstin}
-                            onChange={(e) => {
-                              const val = e.target.value.toUpperCase();
-                              setTaxGstin(val);
-                              setTaxProfileError(null);
-                              setTaxProfileMsg(null);
-                              if (val.length >= 2 && /^[0-9]{2}/.test(val) && val.slice(0, 2) !== '25') {
-                                const match = taxJurisdictions.find((j) => j.code === val.slice(0, 2));
-                                if (match) setTaxStateCode(match.code);
-                              }
-                            }}
-                            className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs font-mono text-claude-text-light dark:text-white"
-                          />
+                          <span className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                            Account Type
+                          </span>
+                          <div className="grid grid-cols-2 gap-1.5 bg-claude-surface-light dark:bg-claude-surface2-dark p-1 rounded-lg border border-claude-border-light dark:border-claude-border-dark">
+                            <button
+                              type="button"
+                              aria-pressed={taxAccountType === 'individual'}
+                              onClick={() => setTaxAccountType('individual')}
+                              className={`py-1 rounded-md text-[11px] font-semibold transition-colors ${taxAccountType === 'individual' ? 'bg-claude-terracotta text-white' : 'text-claude-muted-light dark:text-claude-muted-dark'}`}
+                            >
+                              Individual
+                            </button>
+                            <button
+                              type="button"
+                              aria-pressed={taxAccountType === 'business'}
+                              onClick={() => setTaxAccountType('business')}
+                              className={`py-1 rounded-md text-[11px] font-semibold transition-colors ${taxAccountType === 'business' ? 'bg-claude-terracotta text-white' : 'text-claude-muted-light dark:text-claude-muted-dark'}`}
+                            >
+                              Business
+                            </button>
+                          </div>
                         </div>
+
+                        {taxCountry === 'IN' ? (
+                          <div>
+                            <label htmlFor="settings-gst-state" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                              State / Union Territory *
+                            </label>
+                            <select
+                              id="settings-gst-state"
+                              value={taxStateCode}
+                              onChange={(e) => {
+                                setTaxStateCode(e.target.value);
+                                setTaxProfileError(null);
+                                setTaxProfileMsg(null);
+                              }}
+                              className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
+                            >
+                              <option value="">Select State / UT…</option>
+                              {taxJurisdictions.map((j) => (
+                                <option key={j.code} value={j.code}>
+                                  {j.code} - {j.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <div>
+                            <label htmlFor="settings-global-region" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                              State / Province / Region (Optional)
+                            </label>
+                            <input
+                              id="settings-global-region"
+                              type="text"
+                              placeholder="e.g. California, London, ON"
+                              value={taxStateCode}
+                              onChange={(e) => setTaxStateCode(e.target.value)}
+                              className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
+                            />
+                          </div>
+                        )}
+
+                        {taxAccountType === 'business' && (
+                          taxCountry === 'IN' ? (
+                            <div>
+                              <label htmlFor="settings-gst-gstin" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                                B2B Recipient GSTIN (Optional)
+                              </label>
+                              <input
+                                id="settings-gst-gstin"
+                                type="text"
+                                maxLength={15}
+                                placeholder="e.g. 09AAMCV4678C1ZV"
+                                value={taxGstin}
+                                onChange={(e) => {
+                                  const val = e.target.value.toUpperCase();
+                                  setTaxGstin(val);
+                                  setTaxProfileError(null);
+                                  setTaxProfileMsg(null);
+                                  if (val.length >= 2 && /^[0-9]{2}/.test(val) && val.slice(0, 2) !== '25') {
+                                    const match = taxJurisdictions.find((j) => j.code === val.slice(0, 2));
+                                    if (match) setTaxStateCode(match.code);
+                                  }
+                                }}
+                                className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs font-mono text-claude-text-light dark:text-white"
+                              />
+                            </div>
+                          ) : (
+                            <div>
+                              <label htmlFor="settings-global-taxid" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
+                                Business Tax / VAT / EIN ID (Optional)
+                              </label>
+                              <input
+                                id="settings-global-taxid"
+                                type="text"
+                                maxLength={64}
+                                placeholder="e.g. EIN-88-9911223 or GB123456789"
+                                value={taxIdValue}
+                                onChange={(e) => setTaxIdValue(e.target.value)}
+                                className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
+                              />
+                            </div>
+                          )
+                        )}
+
                         <div>
                           <label htmlFor="settings-gst-legal-name" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
-                            Legal / Business Name (Optional)
+                            {taxAccountType === 'business' ? 'Registered Business Name' : 'Full Name on Invoices (Optional)'}
                           </label>
                           <input
                             id="settings-gst-legal-name"
                             type="text"
-                            placeholder="Subscriber or registered business name"
+                            placeholder={taxAccountType === 'business' ? 'Registered company name' : 'Your full name'}
                             value={taxLegalName}
                             onChange={(e) => setTaxLegalName(e.target.value)}
                             className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
@@ -1678,7 +1873,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           <input
                             id="settings-gst-address"
                             type="text"
-                            placeholder="Street, City, PIN"
+                            placeholder="Street, City, Postal Code"
                             value={taxAddress}
                             onChange={(e) => setTaxAddress(e.target.value)}
                             className="w-full px-3 py-2 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-xs text-claude-text-light dark:text-white"
@@ -1694,15 +1889,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   )}
 
-                  {/* Tax-Compliant Invoices, Credit Notes & Billing History */}
+                  {/* Billing History (PDF & Printable A4 Documents) */}
                   {!isGuestUser && (
                     <div className="space-y-3 pt-2">
                       <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
-                          Billing History &amp; Printable A4 GST Documents
+                        <h4 className="text-xs font-semibold text-claude-text-light dark:text-white">
+                          Billing history
                         </h4>
-                        <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
-                          SAC 998315 (Provisional) · Uttar Pradesh (09)
+                        <span className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
+                          PDF &amp; A4 receipts
                         </span>
                       </div>
 
@@ -1725,14 +1920,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ) : (invoices.length === 0 && creditNotes.length === 0) ? (
                         <div className="p-4 rounded-xl border border-dashed border-claude-border-light dark:border-claude-border-dark text-xs text-claude-muted-light dark:text-claude-muted-dark text-center space-y-1">
                           <p className="font-medium">No billing history or invoices yet.</p>
-                          <p className="text-[10px]">When you purchase a subscription or credits, GST invoices will appear here.</p>
+                          <p className="text-[10px]">When you activate a subscription, downloadable PDF and A4 receipts will appear here.</p>
                         </div>
                       ) : (
                         <div className="space-y-2">
                           {invoices.map((inv: any, idx: number) => (
                             <div
                               key={inv.invoiceNumber || idx}
-                              className="p-3 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/30 flex items-center justify-between gap-3 text-xs"
+                              className="p-3 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
                             >
                               <div className="space-y-0.5 min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap">
@@ -1747,29 +1942,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   )}
                                 </div>
                                 <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
-                                  {inv.plan} · {inv.date} · SAC {inv.sacCode} · PoS {inv.placeOfSupply || 'UNKNOWN'}
+                                  {inv.plan} · {inv.date}{inv.paymentMethod ? ` · ${inv.paymentMethod}` : ''}
                                 </div>
                               </div>
-                              <div className="flex items-center gap-3 shrink-0">
-                                <div className="text-right">
+                              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                <div className="text-right mr-1">
                                   <div className="font-mono font-bold text-claude-text-light dark:text-white">
                                     {inv.currency === 'INR' ? '₹' : '$'}{inv.totalAmount.toFixed(2)}
                                   </div>
-                                  <div className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
-                                    Incl. {inv.currency === 'INR' ? '₹' : '$'}{inv.gstAmount.toFixed(2)} GST
-                                  </div>
+                                  {Number(inv.gstAmount || 0) > 0 && (
+                                    <div className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
+                                      Incl. {inv.currency === 'INR' ? '₹' : '$'}{inv.gstAmount.toFixed(2)} GST
+                                    </div>
+                                  )}
                                 </div>
                                 {inv.invoiceNumber && inv.invoiceNumber !== 'INV-PENDING-RECONCILIATION' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => void handleDownloadInvoice(inv.invoiceNumber)}
-                                    disabled={downloadingInvoiceNum === inv.invoiceNumber}
-                                    aria-label={`View or Print A4 Invoice ${inv.invoiceNumber}`}
-                                    className="px-2.5 py-1.5 rounded-lg border border-claude-border-light dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/10 text-[11px] font-semibold text-claude-text-light dark:text-white inline-flex items-center gap-1 transition-colors disabled:opacity-50"
-                                  >
-                                    <Download className="w-3.5 h-3.5" />
-                                    <span>{downloadingInvoiceNum === inv.invoiceNumber ? 'Opening…' : 'View / Print A4'}</span>
-                                  </button>
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDownloadInvoicePdf(inv.invoiceNumber)}
+                                      disabled={downloadingPdfNum === inv.invoiceNumber}
+                                      aria-label={`Download PDF Invoice ${inv.invoiceNumber}`}
+                                      className="px-2.5 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-semibold inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+                                    >
+                                      <FileText className="w-3.5 h-3.5" />
+                                      <span>{downloadingPdfNum === inv.invoiceNumber ? 'Generating…' : 'Download PDF'}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => void handleDownloadInvoice(inv.invoiceNumber)}
+                                      disabled={downloadingInvoiceNum === inv.invoiceNumber}
+                                      aria-label={`View or Print A4 Invoice ${inv.invoiceNumber}`}
+                                      className="px-2.5 py-1.5 rounded-lg border border-claude-border-light dark:border-white/15 hover:bg-black/5 dark:hover:bg-white/10 text-[11px] font-semibold text-claude-text-light dark:text-white inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+                                    >
+                                      <Download className="w-3.5 h-3.5" />
+                                      <span>{downloadingInvoiceNum === inv.invoiceNumber ? 'Opening…' : 'View / Print A4'}</span>
+                                    </button>
+                                  </>
                                 )}
                               </div>
                             </div>
@@ -1778,7 +1987,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           {creditNotes.map((cn: any, idx: number) => (
                             <div
                               key={cn.creditNoteNumber || idx}
-                              className="p-3 rounded-xl border border-amber-500/25 bg-amber-500/5 flex items-center justify-between gap-3 text-xs"
+                              className="p-3 rounded-xl border border-amber-500/25 bg-amber-500/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
                             >
                               <div className="space-y-0.5 min-w-0">
                                 <div className="flex items-center gap-2 flex-wrap">
@@ -1791,10 +2000,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   Against {cn.originalInvoiceNumber} · {cn.date}
                                 </div>
                               </div>
-                              <div className="flex items-center gap-3 shrink-0">
-                                <div className="text-right font-mono font-bold text-claude-text-light dark:text-white">
+                              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                                <div className="text-right font-mono font-bold text-claude-text-light dark:text-white mr-1">
                                   -{cn.currency === 'INR' ? '₹' : '$'}{Number(cn.refundAmount || 0).toFixed(2)}
                                 </div>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDownloadCreditNotePdf(cn.creditNoteNumber)}
+                                  disabled={downloadingPdfNum === cn.creditNoteNumber}
+                                  aria-label={`Download PDF Credit Note ${cn.creditNoteNumber}`}
+                                  className="px-2.5 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-semibold inline-flex items-center gap-1 transition-colors disabled:opacity-50"
+                                >
+                                  <FileText className="w-3.5 h-3.5" />
+                                  <span>{downloadingPdfNum === cn.creditNoteNumber ? 'Generating…' : 'Download PDF'}</span>
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => void handleDownloadCreditNote(cn.creditNoteNumber)}
@@ -1811,10 +2030,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                           <div className="pt-2 border-t border-claude-border-light/40 dark:border-white/5 flex flex-col sm:flex-row sm:items-center justify-between text-[10px] text-claude-muted-light dark:text-claude-muted-dark gap-1">
                             <span>
-                              Computer-generated electronic document issued under CGST Rules (Rule 46 / Rule 53). Informational record; subject to formal electronic authentication sign-off (U2).
+                              All paid receipts include complete tax &amp; payment snapshot records.
                             </span>
                             <span>
-                              Supplier: {usageData?.supplierIdentity?.legalName || 'VIREXA AI VENTURES PRIVATE LIMITED'} · Uttar Pradesh ({usageData?.supplierIdentity?.stateCode || '09'}) · {usageData?.supplierIdentity?.supportEmail || 'virexaiventures@gmail.com'}
+                              Billing support: {usageData?.supplierIdentity?.supportEmail || 'virexaiventures@gmail.com'}
                             </span>
                           </div>
                         </div>
