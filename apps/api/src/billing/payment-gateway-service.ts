@@ -2365,16 +2365,19 @@ export class PaymentGatewayService {
           return;
         }
 
-        // Fast duplicate check against previously recorded billing period end
-        if (explicitPeriodEnd !== undefined && explicitPeriodEnd <= Number(purchaseRecord.current_period_end)) {
+        // Fast duplicate check against previously recorded billing period end (only when no new payment or cycle evidence)
+        const hasAuthoritativePaymentEvidence = Boolean(
+          (actualPaymentId && actualPaymentId !== meta.lastPaymentId && actualPaymentId !== meta.initialPaymentId) ||
+          (cycleNumber !== undefined && cycleNumber > (meta.fulfilledCycle || 1))
+        );
+        if (explicitPeriodEnd !== undefined && explicitPeriodEnd <= Number(purchaseRecord.current_period_end) && !hasAuthoritativePaymentEvidence) {
           return;
         }
 
         // Authoritative renewal evidence verification
         const hasRenewalEvidence = Boolean(
           (explicitPeriodEnd && explicitPeriodEnd > Number(purchaseRecord.current_period_end)) ||
-          (cycleNumber !== undefined && cycleNumber > (meta.fulfilledCycle || 1)) ||
-          (actualPaymentId && actualPaymentId !== meta.lastPaymentId && actualPaymentId !== meta.initialPaymentId)
+          hasAuthoritativePaymentEvidence
         );
 
         if (!hasRenewalEvidence) {
@@ -2385,9 +2388,24 @@ export class PaymentGatewayService {
           return;
         }
 
+        const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+        const anchorDay = (typeof meta.billingAnchorDay === 'number' && meta.billingAnchorDay >= 1 && meta.billingAnchorDay <= 31)
+          ? meta.billingAnchorDay
+          : (purchaseRecord.created_at
+              ? new Date(Number(purchaseRecord.created_at) + istOffsetMs).getUTCDate()
+              : new Date(Number(purchaseRecord.current_period_start) + istOffsetMs).getUTCDate());
+        meta.billingAnchorDay = anchorDay;
+
         // Legitimate Renewal: anchor period strictly to previous current_period_end (never Date.now() + 30 days)
         const periodStart = explicitPeriodStart || Number(purchaseRecord.current_period_end);
-        const periodEnd = explicitPeriodEnd || (Number(purchaseRecord.current_period_end) + 30 * 24 * 60 * 60 * 1000);
+        const isExplicitPeriodEndValid = Boolean(
+          explicitPeriodEnd !== undefined &&
+          Number.isFinite(explicitPeriodEnd) &&
+          explicitPeriodEnd > periodStart
+        );
+        const periodEnd = isExplicitPeriodEndValid
+          ? explicitPeriodEnd!
+          : this.addOneMonthEpochMs(periodStart, anchorDay);
 
         const newFulfilledCycle = cycleNumber !== undefined ? cycleNumber : ((meta.fulfilledCycle || 1) + 1);
         meta.fulfilledCycle = newFulfilledCycle;
@@ -3477,6 +3495,7 @@ export class PaymentGatewayService {
             reconciliationStatus: 'INITIATING',
             isSandbox,
             rehearsal: isRehearsal,
+            billingAnchorDay: new Date(now + (5 * 60 + 30) * 60 * 1000).getUTCDate(),
             createdAt: now
           }),
           created_at: now,
@@ -4106,11 +4125,12 @@ export class PaymentGatewayService {
    * Computes the next monthly cycle boundary anchored to +1 calendar month in IST (+05:30),
    * clamping month-end dates (e.g., Jan 31 -> Feb 28/29) so immediate Cycle 1 activation aligns
    * cleanly with Cashfree subscription_first_charge_time and Razorpay billing cycles.
+   * Preserves contractual billing anniversary day (1-31) across subsequent renewals after month-end clamping.
    */
-  private addOneMonthEpochMs(startMs: number): number {
+  private addOneMonthEpochMs(startMs: number, anchorDay?: number): number {
     const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
     const d = new Date(startMs + istOffsetMs);
-    const origDay = d.getUTCDate();
+    const origDay = (typeof anchorDay === 'number' && anchorDay >= 1 && anchorDay <= 31) ? anchorDay : d.getUTCDate();
     const targetMonth = d.getUTCMonth() + 1;
     d.setUTCDate(1);
     d.setUTCMonth(targetMonth);
@@ -4325,10 +4345,21 @@ export class PaymentGatewayService {
     }
 
     const initialPeriodStart = explicitPeriodStart || now;
+    const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+    const initialAnchorDay = (typeof meta.billingAnchorDay === 'number' && meta.billingAnchorDay >= 1 && meta.billingAnchorDay <= 31)
+      ? meta.billingAnchorDay
+      : new Date(initialPeriodStart + istOffsetMs).getUTCDate();
+    meta.billingAnchorDay = initialAnchorDay;
+
     const expectedRenewalMs = Number(meta.expectedNextRenewalAt || 0);
-    const initialPeriodEnd =
-      explicitPeriodEnd ||
-      (expectedRenewalMs > initialPeriodStart ? expectedRenewalMs : this.addOneMonthEpochMs(initialPeriodStart));
+    const isExplicitInitialEndValid = Boolean(
+      explicitPeriodEnd !== undefined &&
+      Number.isFinite(explicitPeriodEnd) &&
+      explicitPeriodEnd > initialPeriodStart
+    );
+    const initialPeriodEnd = isExplicitInitialEndValid
+      ? explicitPeriodEnd!
+      : (expectedRenewalMs > initialPeriodStart ? expectedRenewalMs : this.addOneMonthEpochMs(initialPeriodStart, initialAnchorDay));
 
     meta.fulfilledCycle = cycleNumber || 1;
     meta.activatedAt = meta.activatedAt || now;
