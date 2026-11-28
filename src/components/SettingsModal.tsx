@@ -1811,7 +1811,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                           <div className="pt-2 border-t border-claude-border-light/40 dark:border-white/5 flex flex-col sm:flex-row sm:items-center justify-between text-[10px] text-claude-muted-light dark:text-claude-muted-dark gap-1">
                             <span>
-                              Electronic document issued under Rule 48(1) / Rule 53 of CGST Rules &amp; Section 65B of Information Technology Act, 2000.
+                              Computer-generated electronic document issued under CGST Rules (Rule 46 / Rule 53). Informational record; subject to formal electronic authentication sign-off (U2).
                             </span>
                             <span>
                               Supplier: {usageData?.supplierIdentity?.legalName || 'VIREXA AI VENTURES PRIVATE LIMITED'} · Uttar Pradesh ({usageData?.supplierIdentity?.stateCode || '09'}) · {usageData?.supplierIdentity?.supportEmail || 'virexaiventures@gmail.com'}
