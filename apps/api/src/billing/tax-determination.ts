@@ -650,16 +650,22 @@ export class TaxDeterminationService {
     const taxRateVersion = (input.taxRateVersion || config.rateVersion).trim();
 
     const rawLutNumber = (input.lutNumber || process.env.AIRA_LUT_NUMBER || '').trim() || undefined;
-    const lutNumber = rawLutNumber || (!isProdRuntime ? 'AD0903260012345' : undefined);
+    // Provisional sandbox LUT is only surfaced when the caller explicitly opts in via lutNumber or
+    // lutAvailable:true — it must NEVER auto-inject for every foreign transaction in non-prod,
+    // because that would cause COMPLIANT_ZERO_RATED_EXPORT to appear without a real LUT (test 7).
+    const lutNumber = rawLutNumber || ((!isProdRuntime && input.lutAvailable === true) ? 'AD0903260012345' : undefined);
     const lutApproved = Boolean(
-      (rawLutNumber || (!isProdRuntime && lutNumber)) &&
+      lutNumber &&
       (input.lutAvailable !== undefined
         ? input.lutAvailable
         : process.env.AIRA_LUT_AVAILABLE !== 'false')
     );
+    // Provisional zero-tax export shortcut requires explicit opt-in: caller must pass lutAvailable:true
+    // AND environment must not suppress it. Without explicit opt-in the transaction stays in the
+    // PROVISIONAL_PENDING_TAX_APPROVAL path so test 7 assertions remain valid.
     const allowProvisionalZeroTaxExport = Boolean(
       !isProdRuntime &&
-      input.lutAvailable !== false &&
+      input.lutAvailable === true &&
       process.env.AIRA_LUT_AVAILABLE !== 'false'
     );
     const lutAvailable = lutApproved || allowProvisionalZeroTaxExport;

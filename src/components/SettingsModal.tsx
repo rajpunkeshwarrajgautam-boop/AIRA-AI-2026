@@ -384,6 +384,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     { code: 'DE', name: 'Germany', defaultCurrency: 'USD' },
     { code: 'SG', name: 'Singapore', defaultCurrency: 'USD' }
   ]);
+  // Collapsed/expanded billing info pattern:
+  // By default show summary only; editing reveals the full form.
+  const [editingBillingInfo, setEditingBillingInfo] = useState(false);
   const [taxCountry, setTaxCountry] = useState<string>('IN');
   const [taxAccountType, setTaxAccountType] = useState<'individual' | 'business'>('individual');
   const [taxJurisdictions, setTaxJurisdictions] = useState<Array<{ code: string; name: string }>>([]);
@@ -1758,21 +1761,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             <h4 className="font-semibold text-claude-text-light dark:text-white">
                               Billing information
                             </h4>
-                            <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">
-                              Controls your default checkout currency, invoices, and optional business tax identification.
-                            </p>
+                            {!editingBillingInfo && (
+                              <p className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark mt-0.5">
+                                {taxCountry === 'IN' ? 'India (INR)' : taxCountry} · {taxAccountType === 'business' ? 'Business' : 'Individual'}
+                                {taxGstin ? ` · GSTIN ••••${taxGstin.slice(-4)}` : taxIdValue ? ` · Tax ID saved` : ''}
+                              </p>
+                            )}
                           </div>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => void handleSaveTaxProfile()}
-                          disabled={taxProfileSaving}
-                          className="px-3 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-semibold transition-colors disabled:opacity-50 shrink-0 self-start sm:self-center"
-                        >
-                          {taxProfileSaving ? 'Saving…' : 'Save Billing Info'}
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                          {editingBillingInfo && (
+                            <button
+                              type="button"
+                              onClick={() => void handleSaveTaxProfile()}
+                              disabled={taxProfileSaving}
+                              className="px-3 py-1.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-[11px] font-semibold transition-colors disabled:opacity-50"
+                            >
+                              {taxProfileSaving ? 'Saving…' : 'Save'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingBillingInfo((v) => !v);
+                              setTaxProfileError(null);
+                              setTaxProfileMsg(null);
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark text-[11px] font-semibold text-claude-text-light dark:text-stone-300 hover:text-claude-text-light dark:hover:text-white transition-colors"
+                          >
+                            {editingBillingInfo ? 'Cancel' : 'Edit'}
+                          </button>
+                        </div>
                       </div>
 
+                      {editingBillingInfo && (
+                        <>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         <div>
                           <label htmlFor="settings-billing-country" className="block text-[11px] text-claude-muted-light dark:text-claude-muted-dark mb-1">
@@ -1966,6 +1989,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       )}
                       {taxProfileMsg && (
                         <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">{taxProfileMsg}</p>
+                      )}
+                        </>
                       )}
                     </div>
                   )}

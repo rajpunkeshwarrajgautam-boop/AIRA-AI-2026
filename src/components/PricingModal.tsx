@@ -345,6 +345,12 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     : null;
 
   const setLoadingPlan = (tier: PlanTier | null) => setActivePlanTier(tier);
+  // Stage A/B: plan_selection shows ONLY plan cards + currency toggle.
+  // Stage B (checkout) shows billing fields, gateway, pricing disclosure.
+  const [uiStage, setUiStage] = useState<'plan_selection' | 'checkout'>('plan_selection');
+  // Which plan was selected in Stage A before entering Stage B
+  const [selectedPlanTier, setSelectedPlanTier] = useState<PlanTier | null>(null);
+
   const [checkoutNotice, setCheckoutNotice] = useState<string | null>(null);
   const [activatedSummary, setActivatedSummary] = useState<ActivatedConfirmationSummary | null>(null);
   const [downloadingInvoiceNum, setDownloadingInvoiceNum] = useState<string | null>(null);
@@ -425,6 +431,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     isDismissedRef.current = true;
     setActivePlanTier(null);
     setWatchdogRecoveryUrl(null);
+    setUiStage('plan_selection');
+    setSelectedPlanTier(null);
 
     // Modal dismissal must NOT erase unresolved financial operation identity.
     // Preserve AMBIGUOUS_OUTCOME, RECONCILIATION_REQUIRED, or AWAITING_CONFIRMATION.
@@ -1499,8 +1507,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         )}
 
-        {/* Global Country / Region Alignment */}
-        <div className="px-4 sm:px-6 md:px-8 pt-3 sm:pt-4 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 text-xs">
+        {/* Global Country / Region Alignment — only shown in checkout stage */}
+        {uiStage === 'checkout' && <div className="px-4 sm:px-6 md:px-8 pt-3 sm:pt-4 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3 text-xs">
           <div className="flex items-center gap-2">
             <label htmlFor="pricing-billing-country" className="text-claude-muted-light dark:text-stone-400 whitespace-nowrap">
               Country / Region:
@@ -1536,10 +1544,10 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               ? 'Global Card Checkout (Visa / Mastercard / Amex) · Billed in USD'
               : 'India Domestic Billing (UPI / Card / NetBanking) · GST-inclusive pricing'}
           </span>
-        </div>
+        </div>}
 
-        {/* Payment Method & Optional Tax Disclosure (Global USD) */}
-        {currency === 'USD' && (
+        {/* Payment Method & Optional Tax Disclosure (Global USD) — checkout stage only */}
+        {uiStage === 'checkout' && currency === 'USD' && (
           <div className="px-4 sm:px-6 md:px-8 pt-3 space-y-2 text-xs">
             <div className="rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/70 dark:bg-stone-950/60 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="text-claude-text-light dark:text-stone-300">
@@ -1607,8 +1615,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         )}
 
-        {/* Payment Gateway Selector & Customer Phone for INR */}
-        {currency === 'INR' && (
+        {/* Payment Gateway Selector & Customer Phone for INR — checkout stage only */}
+        {uiStage === 'checkout' && currency === 'INR' && (
           <div className="px-4 sm:px-6 md:px-8 pt-3 pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 text-xs">
             <div className="flex items-center gap-2">
               <span className="text-claude-muted-light dark:text-stone-400">Payment method:</span>
@@ -1671,8 +1679,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         )}
 
-        {/* Indian GST Place of Supply & Optional B2B GSTIN */}
-        {currency === 'INR' && (
+        {/* Indian GST Place of Supply & Optional B2B GSTIN — checkout stage only */}
+        {uiStage === 'checkout' && currency === 'INR' && (
           <div className="px-4 sm:px-6 md:px-8 pt-2.5 sm:pt-3 space-y-2 text-xs">
             <div className="rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/70 dark:bg-stone-950/60 p-2.5 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-1">
@@ -1782,7 +1790,30 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           </div>
         )}
 
-        <div className="px-4 sm:px-6 md:px-8 pt-2">
+        {/* Pricing Cards — Stage A: Back button + plan cards. Stage B: plan cards + billing fields above */}
+        {uiStage === 'checkout' && (
+          <div className="px-4 sm:px-6 md:px-8 pt-2 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setUiStage('plan_selection');
+                setSelectedPlanTier(null);
+              }}
+              className="flex items-center gap-1.5 text-xs text-claude-muted-light dark:text-stone-400 hover:text-claude-text-light dark:hover:text-white transition-colors"
+              aria-label="Back to plan selection"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
+              Back to plans
+            </button>
+            {selectedPlanTier && (
+              <span className="text-[11px] text-claude-muted-light dark:text-stone-400">
+                Selected: <strong className="text-claude-text-light dark:text-white">{selectedPlanTier === 'plus' ? 'AIRA Plus' : 'AIRA Pro'}</strong>
+              </span>
+            )}
+          </div>
+        )}
+
+        {uiStage === 'checkout' && <div className="px-4 sm:px-6 md:px-8 pt-2">
           {activeSubSummary?.cancelAtPeriodEnd && (currentPlan === 'plus' || currentPlan === 'pro') && (
             <div className="mb-3 rounded-xl border border-amber-500/35 bg-amber-500/10 px-4 py-3 text-xs text-amber-950 dark:text-amber-100 space-y-1">
               <div className="font-bold text-claude-text-light dark:text-white flex flex-wrap items-center gap-2">
@@ -1821,7 +1852,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
               Monthly auto-debits follow card / mandate rules · Cancel anytime
             </span>
           </div>
-        </div>
+        </div>}
 
         {/* Pricing Cards Grid */}
         <div className="p-4 sm:p-6 md:p-8 grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
@@ -1915,12 +1946,21 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             ) : (
               <button
                 type="button"
-                onClick={() => handleSubscribe('plus')}
+                onClick={() => {
+                  if (uiStage === 'plan_selection') {
+                    setSelectedPlanTier('plus');
+                    setUiStage('checkout');
+                  } else {
+                    handleSubscribe('plus');
+                  }
+                }}
                 disabled={loadingPlan !== null}
                 className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-claude-terracotta hover:bg-claude-terracotta-hover text-white transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {activePlanTier === 'plus' && isCheckoutBusy
                   ? 'Initiating Checkout…'
+                  : uiStage === 'plan_selection'
+                  ? (currentPlan === 'pro' ? 'Select Plus' : 'Get Plus')
                   : (currentPlan === 'pro' ? 'Downgrade to Plus' : 'Upgrade to Plus')}
               </button>
             )}
@@ -1979,11 +2019,22 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             ) : (
               <button
                 type="button"
-                onClick={() => handleSubscribe('pro')}
+                onClick={() => {
+                  if (uiStage === 'plan_selection') {
+                    setSelectedPlanTier('pro');
+                    setUiStage('checkout');
+                  } else {
+                    handleSubscribe('pro');
+                  }
+                }}
                 disabled={loadingPlan !== null}
                 className="mt-8 w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-claude-terracotta hover:bg-claude-terracotta-hover text-white transition-colors motion-reduce:transition-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-claude-terracotta active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {activePlanTier === 'pro' && isCheckoutBusy ? 'Initiating Checkout…' : 'Upgrade to Pro'}
+                {activePlanTier === 'pro' && isCheckoutBusy
+                  ? 'Initiating Checkout…'
+                  : uiStage === 'plan_selection'
+                  ? 'Get Pro'
+                  : 'Upgrade to Pro'}
               </button>
             )}
           </div>
