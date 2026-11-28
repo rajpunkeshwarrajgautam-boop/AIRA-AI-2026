@@ -240,6 +240,8 @@ export interface InvoiceRecord {
   placeOfSupply?: string;
   placeOfSupplyName?: string;
   posBasis?: string;
+  lutNumber?: string;
+  lutApproved?: boolean;
   billingPeriodStart?: number;
   billingPeriodEnd?: number;
   invoiceTimingBasis?: string;
@@ -7429,11 +7431,15 @@ export class PaymentGatewayService {
         customerRow?.billing_state_code ||
         customerTaxInfo.stateCode ||
         undefined;
-      const resolvedCustomerGstin =
-        meta.customerGstin ||
-        customerRow?.customer_gstin ||
-        customerTaxInfo.gstin ||
-        undefined;
+      const effectiveAccountType = meta.accountType || customerTaxInfo.accountType;
+      const resolvedCustomerGstin = effectiveAccountType === 'individual'
+        ? undefined
+        : (
+            meta.customerGstin ||
+            customerRow?.customer_gstin ||
+            customerTaxInfo.gstin ||
+            undefined
+          );
 
       const supplierCfg = taxDeterminationService.getSupplierTaxConfig();
       if (isProductionRuntime() && !isSandboxDoc) {
@@ -7635,12 +7641,16 @@ export class PaymentGatewayService {
           ? customerJurisdiction?.name
           : (typeof resolvedCustomerState === 'string' ? resolvedCustomerState.trim().slice(0, 120) : undefined),
         customerGstin: taxResult.customerGstin,
-        isB2b: Boolean(taxResult.isB2b || (!isIndiaCustomer && customerTaxInfo?.accountType === 'business')),
+        isB2b: effectiveAccountType === 'individual'
+          ? false
+          : Boolean(taxResult.isB2b || (!isIndiaCustomer && customerTaxInfo?.accountType === 'business')),
         reverseCharge: false,
         taxComplianceStatus: isSandboxDoc ? 'SANDBOX_REHEARSAL' : (taxResult.taxComplianceStatus as any),
         placeOfSupply: taxResult.placeOfSupply,
         placeOfSupplyName: taxResult.placeOfSupplyName,
         posBasis: taxResult.posBasis,
+        ...(taxResult.lutNumber ? { lutNumber: taxResult.lutNumber } : {}),
+        lutApproved: taxResult.lutApproved,
         billingPeriodStart,
         billingPeriodEnd,
         invoiceTimingBasis: cycle > 1 ? 'CONTINUOUS_SUPPLY_RENEWAL_SETTLEMENT' : 'IMMEDIATE_PAYMENT_SETTLEMENT',

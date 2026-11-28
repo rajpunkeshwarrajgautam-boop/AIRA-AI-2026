@@ -8,168 +8,323 @@ import {
   DEFAULT_SUPPLIER_STATE_CODE
 } from './tax-determination.js';
 
+const WIN_ANSI_EXT_MAP: Record<string, number> = {
+  '\u20AC': 0x80,
+  '\u201A': 0x82,
+  '\u0192': 0x83,
+  '\u201E': 0x84,
+  '\u2026': 0x85,
+  '\u2020': 0x86,
+  '\u2021': 0x87,
+  '\u02C6': 0x88,
+  '\u2030': 0x89,
+  '\u0160': 0x8A,
+  '\u2039': 0x8B,
+  '\u0152': 0x8C,
+  '\u017D': 0x8E,
+  '\u2018': 0x91,
+  '\u2019': 0x92,
+  '\u201C': 0x93,
+  '\u201D': 0x94,
+  '\u2022': 0x95,
+  '\u2013': 0x96,
+  '\u2014': 0x97,
+  '\u02DC': 0x98,
+  '\u2122': 0x99,
+  '\u0161': 0x9A,
+  '\u203A': 0x9B,
+  '\u0153': 0x9C,
+  '\u017E': 0x9E,
+  '\u0178': 0x9F
+};
+
+/**
+ * Escapes and encodes text safely into single-byte WinAnsi / Latin-1 PDF string literals.
+ */
 function sanitizePdfText(input: unknown): string {
-  return String(input ?? '')
-    .replace(/₹/g, 'INR ')
-    .replace(/•/g, '*')
-    .replace(/—/g, '-')
-    .replace(/–/g, '-')
-    .replace(/·/g, '|')
-    .replace(/[^\x20-\x7E]/g, ' ')
-    .replace(/\\/g, '\\\\')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const raw = String(input ?? '').normalize('NFC').replace(/\u20B9/g, 'Rs. ');
+  let out = '';
+
+  for (const ch of raw) {
+    const code = ch.charCodeAt(0);
+    if (code >= 0x20 && code <= 0x7E) {
+      if (ch === '\\' || ch === '(' || ch === ')') {
+        out += `\\${ch}`;
+      } else {
+        out += ch;
+      }
+      continue;
+    }
+
+    if (code >= 0xA0 && code <= 0xFF) {
+      out += String.fromCharCode(code);
+      continue;
+    }
+
+    const extByte = WIN_ANSI_EXT_MAP[ch];
+    if (extByte !== undefined) {
+      out += String.fromCharCode(extByte);
+      continue;
+    }
+
+    const folded = ch.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+    let appended = false;
+    for (const fc of folded) {
+      const fCode = fc.charCodeAt(0);
+      if (fCode >= 0x20 && fCode <= 0x7E) {
+        out += (fc === '\\' || fc === '(' || fc === ')') ? `\\${fc}` : fc;
+        appended = true;
+      } else if (fCode >= 0xA0 && fCode <= 0xFF) {
+        out += String.fromCharCode(fCode);
+        appended = true;
+      }
+    }
+    if (!appended && (ch === '\n' || ch === '\r' || ch === '\t')) {
+      out += ' ';
+    } else if (!appended) {
+      out += '?';
+    }
+  }
+
+  return out;
 }
 
 function wrapLine(text: string, maxChars: number): string[] {
-  const clean = sanitizePdfText(text);
-  if (clean.length <= maxChars) return [clean];
-  const words = clean.split(' ');
+  const words = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
   const lines: string[] = [];
-  let cur = '';
-  for (const w of words) {
-    if (!cur) {
-      cur = w;
-    } else if (cur.length + 1 + w.length <= maxChars) {
-      cur += ` ${w}`;
+  let current = '';
+
+  for (const word of words) {
+    if (!current) {
+      if (word.length <= maxChars) {
+        current = word;
+      } else {
+        for (let i = 0; i < word.length; i += maxChars) {
+          const chunk = word.slice(i, i + maxChars);
+          if (chunk.length === maxChars) lines.push(chunk);
+          else current = chunk;
+        }
+      }
+    } else if (current.length + 1 + word.length <= maxChars) {
+      current = `${current} ${word}`;
     } else {
-      lines.push(cur);
-      cur = w;
+      lines.push(current);
+      if (word.length <= maxChars) {
+        current = word;
+      } else {
+        current = '';
+        for (let i = 0; i < word.length; i += maxChars) {
+          const chunk = word.slice(i, i + maxChars);
+          if (chunk.length === maxChars) lines.push(chunk);
+          else current = chunk;
+        }
+      }
     }
   }
-  if (cur) lines.push(cur);
+  if (current) lines.push(current);
   return lines;
 }
 
 function sanitizeBuyerEmail(email?: string): string | undefined {
   if (!email) return undefined;
-  const t = email.trim();
-  if (!t || t.endsWith('@aira.internal')) return undefined;
-  return t;
+  const trimmed = email.trim();
+  if (!trimmed || trimmed.endsWith('@aira.internal')) return undefined;
+  return trimmed;
 }
 
 function formatIstDate(epochMs?: number): string | null {
   if (!epochMs || !Number.isFinite(epochMs)) return null;
-  return new Date(epochMs).toLocaleDateString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit'
-  });
-}
-
-function assembleSinglePageA4Pdf(contentStream: string): Buffer {
-  const objects: string[] = [
-    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
-    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
-    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>\nendobj\n',
-    `4 0 obj\n<< /Length ${Buffer.byteLength(contentStream, 'latin1')} >>\nstream\n${contentStream}\nendstream\nendobj\n`,
-    '5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
-    '6 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\nendobj\n'
-  ];
-
-  const header = '%PDF-1.4\n%\xE2\xE3\xCF\xD3\n';
-  const chunks: Buffer[] = [Buffer.from(header, 'latin1')];
-  const offsets: number[] = [0];
-  let byteCursor = Buffer.byteLength(header, 'latin1');
-
-  for (const obj of objects) {
-    offsets.push(byteCursor);
-    const buf = Buffer.from(obj, 'latin1');
-    chunks.push(buf);
-    byteCursor += buf.length;
-  }
-
-  const xrefOffset = byteCursor;
-  const xrefLines = [`xref\n0 ${objects.length + 1}\n`, '0000000000 65535 f \n'];
-  for (let i = 1; i < offsets.length; i++) {
-    xrefLines.push(`${String(offsets[i]).padStart(10, '0')} 00000 n \n`);
-  }
-  const trailer =
-    `${xrefLines.join('')}` +
-    `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\n` +
-    `startxref\n${xrefOffset}\n%%EOF\n`;
-  chunks.push(Buffer.from(trailer, 'latin1'));
-  return Buffer.concat(chunks);
-}
-
-class PdfCursor {
-  private cmds: string[] = [];
-  private y = 800;
-
-  drawBanner(text: string, r: number, g: number, b: number): void {
-    const clean = sanitizePdfText(text);
-    this.cmds.push(`q ${r} ${g} ${b} rg 42 ${this.y - 18} 511 22 re f Q`);
-    this.cmds.push(`BT /F2 9.5 Tf 1 1 1 rg 52 ${this.y - 10} Td (${clean}) Tj ET`);
-    this.y -= 30;
-  }
-
-  heading(text: string, rightText?: string): void {
-    this.cmds.push(`BT /F2 15 Tf 0.11 0.10 0.09 rg 42 ${this.y} Td (${sanitizePdfText(text)}) Tj ET`);
-    if (rightText) {
-      this.cmds.push(`BT /F2 12 Tf 0.11 0.10 0.09 rg 360 ${this.y} Td (${sanitizePdfText(rightText)}) Tj ET`);
-    }
-    this.y -= 20;
-  }
-
-  line(text: string, opts?: { bold?: boolean; size?: number; indent?: number; color?: [number, number, number]; rightText?: string }): void {
-    const font = opts?.bold ? '/F2' : '/F1';
-    const size = opts?.size ?? 9.5;
-    const x = 42 + (opts?.indent ?? 0);
-    const [r, g, b] = opts?.color ?? [0.18, 0.17, 0.16];
-    const maxChars = Math.max(40, Math.floor((opts?.rightText ? 340 - x : 510 - x) / (size * 0.5)));
-    const wrapped = wrapLine(text, maxChars);
-
-    wrapped.forEach((part, idx) => {
-      this.cmds.push(`BT ${font} ${size} Tf ${r} ${g} ${b} rg ${x} ${this.y} Td (${part}) Tj ET`);
-      if (idx === 0 && opts?.rightText) {
-        this.cmds.push(`BT ${font} ${size} Tf ${r} ${g} ${b} rg 430 ${this.y} Td (${sanitizePdfText(opts.rightText)}) Tj ET`);
-      }
-      this.y -= size + 5;
-    });
-  }
-
-  divider(): void {
-    this.cmds.push(`q 0.85 0.84 0.82 RG 0.8 w 42 ${this.y + 4} m 553 ${this.y + 4} l S Q`);
-    this.y -= 12;
-  }
-
-  gap(points = 8): void {
-    this.y -= points;
-  }
-
-  toStream(): string {
-    return this.cmds.join('\n');
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(new Date(epochMs));
+  } catch {
+    return null;
   }
 }
 
 /**
- * Generates a deterministic A4 binary PDF (%PDF-1.4) invoice document strictly
- * from persisted invoice snapshot data without ever including internal user IDs.
+ * Serializes a valid multi-page A4 PDF (595x842 pt) with WinAnsiEncoding core fonts
+ * and exact byte-offset cross-reference table.
  */
-export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
-  const pdf = new PdfCursor();
-  const isSandboxDoc = Boolean(
-    inv.isSandbox ||
-    inv.taxComplianceStatus === 'SANDBOX_REHEARSAL' ||
-    inv.invoiceNumber.startsWith('SBX/')
-  );
-  const isVoided = inv.documentStatus === 'VOIDED';
-  const currencyPrefix = inv.currency === 'INR' ? 'INR ' : `${inv.currency} `;
-  const isExportZeroRated = inv.currency !== 'INR' && Number(inv.gstAmount || 0) === 0;
+function assembleMultiPageA4Pdf(pages: string[]): Buffer {
+  const pageList = pages.length > 0 ? pages : [''];
+  const pageCount = pageList.length;
+  const objects: Array<{ id: number; body: string }> = [];
 
-  if (isVoided) {
+  const pageObjIds: number[] = [];
+  for (let i = 0; i < pageCount; i += 1) {
+    pageObjIds.push(5 + i * 2);
+  }
+
+  objects.push({ id: 1, body: '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' });
+  objects.push({
+    id: 2,
+    body: `2 0 obj\n<< /Type /Pages /Kids [${pageObjIds.map(id => `${id} 0 R`).join(' ')}] /Count ${pageCount} >>\nendobj\n`
+  });
+  objects.push({
+    id: 3,
+    body: '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n'
+  });
+  objects.push({
+    id: 4,
+    body: '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n'
+  });
+
+  for (let i = 0; i < pageCount; i += 1) {
+    const pageId = 5 + i * 2;
+    const streamId = 6 + i * 2;
+    const stream = pageList[i];
+    const streamLen = Buffer.byteLength(stream, 'latin1');
+
+    objects.push({
+      id: pageId,
+      body: `${pageId} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${streamId} 0 R >>\nendobj\n`
+    });
+    objects.push({
+      id: streamId,
+      body: `${streamId} 0 obj\n<< /Length ${streamLen} >>\nstream\n${stream}\nendstream\nendobj\n`
+    });
+  }
+
+  const header = '%PDF-1.4\n';
+  const offsets: number[] = [0];
+  let byteCursor = Buffer.byteLength(header, 'latin1');
+  const rawParts: string[] = [header];
+
+  for (const obj of objects) {
+    offsets.push(byteCursor);
+    rawParts.push(obj.body);
+    byteCursor += Buffer.byteLength(obj.body, 'latin1');
+  }
+
+  const totalEntries = objects.length + 1;
+  const xrefOffset = byteCursor;
+  const xrefLines = [`xref\n0 ${totalEntries}\n0000000000 65535 f \n`];
+  for (let i = 1; i < offsets.length; i += 1) {
+    xrefLines.push(`${String(offsets[i]).padStart(10, '0')} 00000 n \n`);
+  }
+
+  const trailer = `trailer\n<< /Size ${totalEntries} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  rawParts.push(xrefLines.join(''), trailer);
+
+  return Buffer.from(rawParts.join(''), 'latin1');
+}
+
+class PdfCursor {
+  private pages: string[][] = [[]];
+  private y = 800;
+  private continuationHeader: string;
+
+  constructor(continuationHeader = 'AIRA AI 2026 - Billing Document') {
+    this.continuationHeader = continuationHeader;
+  }
+
+  private currentCmds(): string[] {
+    return this.pages[this.pages.length - 1];
+  }
+
+  private ensureSpace(neededPts: number): void {
+    if (this.y - neededPts >= 58) return;
+    this.pages.push([]);
+    const pageNumber = this.pages.length;
+    this.currentCmds().push(
+      `BT /F2 9 Tf 0.45 0.43 0.40 rg 42 814 Td (${sanitizePdfText(`${this.continuationHeader} (Page ${pageNumber})`)}) Tj ET`
+    );
+    this.currentCmds().push('0.88 0.85 0.81 RG 0.6 w 42 806 m 553 806 l S');
+    this.y = 788;
+  }
+
+  private pushLine(
+    lineText: string,
+    opts?: { bold?: boolean; size?: number; color?: [number, number, number]; rightText?: string; isFirstLine?: boolean }
+  ): void {
+    const size = opts?.size ?? 9.5;
+    const font = opts?.bold ? '/F2' : '/F1';
+    const [r, g, b] = opts?.color ?? [0.15, 0.14, 0.13];
+    const lineAdvance = Math.round(size * 1.48);
+
+    this.ensureSpace(lineAdvance);
+    this.currentCmds().push(`BT ${font} ${size} Tf ${r} ${g} ${b} rg 42 ${this.y} Td (${sanitizePdfText(lineText)}) Tj ET`);
+    if (opts?.rightText && opts.isFirstLine) {
+      this.currentCmds().push(`BT ${font} ${size} Tf ${r} ${g} ${b} rg 430 ${this.y} Td (${sanitizePdfText(opts.rightText)}) Tj ET`);
+    }
+    this.y -= lineAdvance;
+  }
+
+  heading(text: string, rightText?: string): void {
+    this.ensureSpace(24);
+    this.currentCmds().push(`BT /F2 15 Tf 0.11 0.10 0.09 rg 42 ${this.y} Td (${sanitizePdfText(text)}) Tj ET`);
+    if (rightText) {
+      this.currentCmds().push(`BT /F2 12 Tf 0.11 0.10 0.09 rg 360 ${this.y} Td (${sanitizePdfText(rightText)}) Tj ET`);
+    }
+    this.y -= 20;
+  }
+
+  drawBanner(text: string, r: number, g: number, b: number): void {
+    this.ensureSpace(22);
+    this.currentCmds().push(`${r} ${g} ${b} rg 42 ${this.y - 4} 511 16 re f`);
+    this.currentCmds().push(`BT /F2 8.5 Tf 1 1 1 rg 50 ${this.y} Td (${sanitizePdfText(text)}) Tj ET`);
+    this.y -= 22;
+  }
+
+  line(text: string, opts?: { bold?: boolean; size?: number; color?: [number, number, number]; rightText?: string; maxChars?: number }): void {
+    const maxChars = opts?.maxChars ?? (opts?.rightText ? 60 : 88);
+    const wrapped = wrapLine(text, maxChars);
+    if (wrapped.length === 0) return;
+
+    for (let i = 0; i < wrapped.length; i += 1) {
+      this.pushLine(wrapped[i], {
+        ...opts,
+        isFirstLine: i === 0
+      });
+    }
+  }
+
+  divider(): void {
+    this.ensureSpace(12);
+    this.currentCmds().push('0.86 0.83 0.78 RG 0.6 w 42 ' + (this.y + 4) + ' m 553 ' + (this.y + 4) + ' l S');
+    this.y -= 8;
+  }
+
+  gap(pts = 8): void {
+    if (this.y - pts >= 58) {
+      this.y -= pts;
+    }
+  }
+
+  toPages(): string[] {
+    return this.pages.map(cmds => cmds.join('\n'));
+  }
+}
+
+export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
+  const isSandboxDoc = Boolean(inv.isSandbox);
+  const isVoidedDoc = String(inv.documentStatus || '').toUpperCase() === 'VOIDED';
+  const currencyPrefix = inv.currency === 'INR' ? 'INR ' : `${inv.currency} `;
+  const isExportDoc = inv.posBasis === 'EXPORT_OUTSIDE_INDIA';
+  const isVerifiedLutExport = isExportDoc && (
+    inv.taxComplianceStatus === 'COMPLIANT_ZERO_RATED_EXPORT' ||
+    Boolean(inv.lutApproved && inv.lutNumber)
+  );
+
+  const pdf = new PdfCursor(`AIRA AI 2026 - Invoice ${inv.invoiceNumber}`);
+
+  if (isVoidedDoc) {
     pdf.drawBanner(`VOIDED DOCUMENT - NOT VALID FOR INPUT TAX CREDIT`, 0.72, 0.14, 0.14);
   } else if (isSandboxDoc) {
     pdf.drawBanner(`SANDBOX REHEARSAL RECEIPT - NOT A VALID TAX INVOICE`, 0.76, 0.42, 0.05);
   }
 
-  pdf.heading(
-    isSandboxDoc ? 'Sandbox Receipt' : (isExportZeroRated ? 'Commercial Export Invoice' : 'Tax Invoice'),
-    inv.invoiceNumber
-  );
+  const docTitle = isSandboxDoc
+    ? (isExportDoc ? 'Sandbox Export Receipt' : 'Sandbox Tax Invoice')
+    : (isExportDoc ? (isVerifiedLutExport ? 'Commercial Export Invoice' : 'Provisional Export Statement') : 'Tax Invoice');
+
+  pdf.heading(docTitle, inv.invoiceNumber);
 
   const supplierLegal = inv.supplierName || DEFAULT_SUPPLIER_LEGAL_NAME;
   const supplierAddr = inv.supplierAddress || DEFAULT_SUPPLIER_ADDRESS;
@@ -181,7 +336,7 @@ export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
   pdf.line(supplierLegal, { bold: true, size: 10.5 });
   pdf.line(supplierAddr, { size: 9, color: [0.35, 0.34, 0.32] });
   pdf.line(
-    `${inv.supplierGstin ? `GSTIN: ${inv.supplierGstin} | ` : ''}State: ${supplierState} | PAN: ${supplierPan} | CIN: ${supplierCin}`,
+    `GSTIN: ${inv.supplierGstin || 'Provisional (Pending Registration)'} | PAN: ${supplierPan} | CIN: ${supplierCin} | State: ${supplierState}`,
     { size: 8.5, color: [0.35, 0.34, 0.32] }
   );
   pdf.line(`Support: ${supplierEmail}`, { size: 8.5, color: [0.35, 0.34, 0.32] });
@@ -190,8 +345,8 @@ export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
   pdf.divider();
 
   pdf.line(`Invoice Date (IST): ${inv.date}`, {
-    rightText: `Status: ${isVoided ? 'VOIDED' : inv.status}`,
-    bold: true
+    size: 9,
+    rightText: `Status: ${isVoidedDoc ? 'VOIDED' : inv.status}`
   });
   if (inv.financialYear) {
     pdf.line(`Financial Year: ${inv.financialYear}`, { size: 9 });
@@ -213,9 +368,9 @@ export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
   const buyerEmail = sanitizeBuyerEmail(inv.customerEmail);
   if (buyerEmail) pdf.line(buyerEmail, { size: 9 });
   if (inv.customerAddress) pdf.line(inv.customerAddress, { size: 9 });
-  if (inv.customerGstin) {
-    pdf.line(`Customer GSTIN (B2B): ${inv.customerGstin}`, { size: 9, bold: true });
-  } else if (isExportZeroRated) {
+  if (inv.customerStateCode) pdf.line(`Region / State: ${inv.customerStateName || inv.customerStateCode}`, { size: 9 });
+  if (inv.customerGstin) pdf.line(`Customer GSTIN (B2B): ${inv.customerGstin}`, { size: 9, bold: true });
+  if (isExportDoc) {
     pdf.line(`Destination / Place of Supply: ${inv.placeOfSupplyName || inv.placeOfSupply || 'Outside India'} (Export of Services)`, { size: 9 });
   } else if (inv.placeOfSupply) {
     pdf.line(`Place of Supply: ${inv.placeOfSupplyName ? `${inv.placeOfSupplyName} (${inv.placeOfSupply})` : inv.placeOfSupply}`, { size: 9 });
@@ -227,20 +382,25 @@ export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
   pdf.line(`Description (SAC ${inv.sacCode || '998315'})`, { bold: true, size: 9.5, rightText: `Amount (${inv.currency})` });
   pdf.gap(2);
   pdf.line(
-    `${inv.plan} Monthly Subscription${startStr && endStr ? ` (${startStr} - ${endStr})` : ''}`,
+    `${inv.plan} Subscription - 30 Days AI Workspace Access`,
     { rightText: `${currencyPrefix}${Number(inv.taxableBase || 0).toFixed(2)}` }
   );
 
-  if (inv.cgstAmount !== undefined && inv.utgstAmount !== undefined && inv.utgstAmount > 0) {
+  if (isExportDoc && Number(inv.gstAmount ?? 0) === 0) {
+    if (isVerifiedLutExport) {
+      const lutSuffix = inv.lutNumber ? ` (${inv.lutNumber})` : '';
+      pdf.line(`Zero-Rated Export (IGST Act Sec 2(6) / LUT${lutSuffix})`, { rightText: `${currencyPrefix}0.00` });
+    } else {
+      pdf.line('Export of Services (Outside India - LUT Pending Verification)', { rightText: `${currencyPrefix}0.00` });
+    }
+  } else if (inv.cgstAmount !== undefined && (inv.utgstRate !== undefined || (inv.utgstAmount !== undefined && inv.utgstAmount > 0))) {
     pdf.line('CGST', { rightText: `${currencyPrefix}${Number(inv.cgstAmount).toFixed(2)}` });
     pdf.line('UTGST', { rightText: `${currencyPrefix}${Number(inv.utgstAmount).toFixed(2)}` });
   } else if (inv.cgstAmount !== undefined && inv.sgstAmount !== undefined) {
     pdf.line('CGST (9%)', { rightText: `${currencyPrefix}${Number(inv.cgstAmount).toFixed(2)}` });
     pdf.line('SGST (9%)', { rightText: `${currencyPrefix}${Number(inv.sgstAmount).toFixed(2)}` });
-  } else if (inv.igstAmount !== undefined && inv.igstAmount > 0) {
+  } else if (inv.igstAmount !== undefined) {
     pdf.line('IGST (18%)', { rightText: `${currencyPrefix}${Number(inv.igstAmount).toFixed(2)}` });
-  } else if (isExportZeroRated) {
-    pdf.line('Zero-Rated Export of Services (0% Tax)', { rightText: `${currencyPrefix}0.00` });
   } else {
     pdf.line('Applicable Tax', { rightText: `${currencyPrefix}${Number(inv.gstAmount || 0).toFixed(2)}` });
   }
@@ -255,26 +415,26 @@ export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
   pdf.gap(12);
   pdf.line(`Compliance Status: ${inv.taxComplianceStatus || 'COMPLIANT'} | Reverse Charge: ${inv.reverseCharge ? 'Yes' : 'No'}`, {
     size: 8.5,
-    color: [0.40, 0.39, 0.37]
+    color: [0.4, 0.39, 0.37]
   });
+  if (inv.irn) {
+    pdf.line(`e-Invoice IRN: ${inv.irn}`, { size: 8, color: [0.4, 0.39, 0.37] });
+  }
   pdf.line('Computer-generated electronic invoice document issued by VIREXA AI VENTURES PRIVATE LIMITED.', {
-    size: 8.5,
-    color: [0.40, 0.39, 0.37]
+    size: 8,
+    color: [0.45, 0.44, 0.42]
   });
 
-  return assembleSinglePageA4Pdf(pdf.toStream());
+  return assembleMultiPageA4Pdf(pdf.toPages());
 }
 
-/**
- * Generates a deterministic A4 binary PDF (%PDF-1.4) credit note document.
- */
 export function buildCreditNotePdfBuffer(cn: GstCreditNoteRenderInput): Buffer {
-  const pdf = new PdfCursor();
-  const isSandboxDoc = Boolean(cn.isSandbox || cn.creditNoteNumber.startsWith('SCN/'));
-  const isVoided = cn.documentStatus === 'VOIDED';
+  const isSandboxDoc = Boolean(cn.isSandbox);
+  const isVoidedDoc = String(cn.documentStatus || '').toUpperCase() === 'VOIDED';
   const currencyPrefix = cn.currency === 'INR' ? 'INR ' : `${cn.currency} `;
+  const pdf = new PdfCursor(`AIRA AI 2026 - Credit Note ${cn.creditNoteNumber}`);
 
-  if (isVoided) {
+  if (isVoidedDoc) {
     pdf.drawBanner('VOIDED CREDIT NOTE', 0.72, 0.14, 0.14);
   } else if (isSandboxDoc) {
     pdf.drawBanner('SANDBOX REHEARSAL RECEIPT - NOT A VALID TAX CREDIT NOTE', 0.76, 0.42, 0.05);
@@ -286,16 +446,16 @@ export function buildCreditNotePdfBuffer(cn: GstCreditNoteRenderInput): Buffer {
   pdf.divider();
 
   pdf.line(`Original Invoice: ${cn.originalInvoiceNumber}`, {
-    bold: true,
-    rightText: `Status: ${isVoided ? 'VOIDED' : cn.status}`
+    size: 9,
+    rightText: `Status: ${cn.status}`
   });
   pdf.line(`Credit Note Date (IST): ${cn.date}`, { size: 9 });
   if (cn.reason) pdf.line(`Reason: ${cn.reason}`, { size: 9 });
   pdf.gap(4);
   pdf.divider();
 
-  const buyerEmail = sanitizeBuyerEmail(cn.customerEmail);
   pdf.line(`Issued To: ${cn.customerName || 'AIRA Subscriber'}`, { bold: true });
+  const buyerEmail = sanitizeBuyerEmail(cn.customerEmail);
   if (buyerEmail) pdf.line(buyerEmail, { size: 9 });
   if (cn.customerGstin) pdf.line(`Customer GSTIN: ${cn.customerGstin}`, { size: 9 });
   pdf.gap(4);
@@ -307,7 +467,7 @@ export function buildCreditNotePdfBuffer(cn: GstCreditNoteRenderInput): Buffer {
   if (cn.cgstAmount !== undefined && cn.sgstAmount !== undefined) {
     pdf.line('CGST Reversal', { rightText: `${currencyPrefix}${Number(cn.cgstAmount).toFixed(2)}` });
     pdf.line('SGST Reversal', { rightText: `${currencyPrefix}${Number(cn.sgstAmount).toFixed(2)}` });
-  } else if (cn.igstAmount !== undefined && cn.igstAmount > 0) {
+  } else if (cn.igstAmount !== undefined) {
     pdf.line('IGST Reversal', { rightText: `${currencyPrefix}${Number(cn.igstAmount).toFixed(2)}` });
   }
   pdf.divider();
@@ -317,5 +477,5 @@ export function buildCreditNotePdfBuffer(cn: GstCreditNoteRenderInput): Buffer {
     rightText: `${currencyPrefix}${Number(cn.refundAmount || 0).toFixed(2)}`
   });
 
-  return assembleSinglePageA4Pdf(pdf.toStream());
+  return assembleMultiPageA4Pdf(pdf.toPages());
 }

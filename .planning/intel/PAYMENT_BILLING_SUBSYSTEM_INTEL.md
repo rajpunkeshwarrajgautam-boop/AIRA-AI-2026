@@ -1,8 +1,8 @@
 # AIRA AI 2026 — Payment & Commercial Billing Subsystem Intel (V2 Synchronized)
-**Recorded At:** `2026-11-28T20:42:00+05:30`
+**Recorded At:** `2026-11-28T22:45:00+05:30`
 **Staging Baseline SHA:** `5da4a4d1c0987de68e75eaddd24d60fab7c51264` (`https://staging.virexaaiventures.com`)
 **V2 Candidate Branch:** `feat/global-payments-billing-v2` (`SPEC-GLOBAL-BILLING-V2-2026-01`)
-**Knowledge Graph:** `52` nodes, `64` edges (`SHA-256: 3399aa9ef44e1886b33bdfaf01890ab516f0c84f040c8101bc854e8b215e4904`)
+**Knowledge Graph:** `53` nodes, `65` edges (`SHA-256: 02e7cc90bb6ed84663ebe143d550d0a4c2fac45e7c2ac8b31c84e827f0f67c49`)
 
 ## 1. Global Payments & Billing V2 Architecture Additions
 - **Country & Capability Catalog (`apps/api/src/billing/global-billing-catalog.ts`):**

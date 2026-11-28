@@ -392,6 +392,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [taxGstin, setTaxGstin] = useState<string>('');
   const [taxIdValue, setTaxIdValue] = useState<string>('');
   const [taxAddress, setTaxAddress] = useState<string>('');
+  const [hasSavedBusinessProfile, setHasSavedBusinessProfile] = useState<boolean>(false);
+  const [savedBusinessProfile, setSavedBusinessProfile] = useState<Record<string, any> | null>(null);
   const [taxProfileSaving, setTaxProfileSaving] = useState<boolean>(false);
   const [taxProfileMsg, setTaxProfileMsg] = useState<string | null>(null);
   const [taxProfileError, setTaxProfileError] = useState<string | null>(null);
@@ -463,12 +465,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setTaxGstin(String(data.profile.customerGstin || ''));
         setTaxIdValue(String(data.profile.taxId || ''));
         setTaxAddress(String(data.profile.addressLine1 || ''));
+        setHasSavedBusinessProfile(Boolean(data.profile.hasSavedBusinessProfile));
+        setSavedBusinessProfile(data.profile.savedBusinessProfile || null);
       } else {
         setTaxStateCode('');
         setTaxLegalName('');
         setTaxGstin('');
         setTaxIdValue('');
         setTaxAddress('');
+        setHasSavedBusinessProfile(false);
+        setSavedBusinessProfile(null);
       }
     } catch {
       setTaxStateCode('');
@@ -476,8 +482,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setTaxGstin('');
       setTaxIdValue('');
       setTaxAddress('');
+      setHasSavedBusinessProfile(false);
+      setSavedBusinessProfile(null);
     }
   }, [isGuestUser]);
+
+  const applySavedBusinessFields = useCallback((saved: Record<string, any> | null) => {
+    if (!saved) return;
+    if (saved.country) setTaxCountry(String(saved.country).toUpperCase());
+    if (saved.stateCode) setTaxStateCode(String(saved.stateCode));
+    if (saved.legalName) setTaxLegalName(String(saved.legalName));
+    if (saved.customerGstin) setTaxGstin(String(saved.customerGstin));
+    if (saved.taxId) setTaxIdValue(String(saved.taxId));
+    if (saved.addressLine1) setTaxAddress(String(saved.addressLine1));
+    setTaxAccountType('business');
+  }, []);
+
+  const handleClearSavedBusiness = async () => {
+    setTaxProfileSaving(true);
+    setTaxProfileMsg(null);
+    setTaxProfileError(null);
+    try {
+      const res = await authenticatedApiFetch('/api/billing/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          country: taxCountry,
+          accountType: taxAccountType,
+          stateCode: taxStateCode || undefined,
+          clearSavedBusinessDetails: true
+        })
+      });
+      const data = await res.json().catch(() => ({} as Record<string, any>));
+      if (!res.ok) {
+        setTaxProfileError(data?.message || data?.error || 'Failed to clear saved business details.');
+        return;
+      }
+      setHasSavedBusinessProfile(false);
+      setSavedBusinessProfile(null);
+      if (taxAccountType === 'business') {
+        setTaxGstin('');
+        setTaxIdValue('');
+      }
+      setTaxProfileMsg('Saved business details removed.');
+    } catch (err: any) {
+      setTaxProfileError(err?.message || 'Unable to clear saved business details.');
+    } finally {
+      setTaxProfileSaving(false);
+    }
+  };
 
   const handleSaveTaxProfile = async () => {
     setTaxProfileSaving(true);
@@ -522,6 +575,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       if (data?.profile?.stateCode !== undefined) setTaxStateCode(String(data.profile.stateCode || ''));
       if (data?.profile?.customerGstin !== undefined) setTaxGstin(String(data.profile.customerGstin || ''));
       if (data?.profile?.taxId !== undefined) setTaxIdValue(String(data.profile.taxId || ''));
+      if (data?.profile?.hasSavedBusinessProfile !== undefined) {
+        setHasSavedBusinessProfile(Boolean(data.profile.hasSavedBusinessProfile));
+      }
+      if (data?.profile?.savedBusinessProfile !== undefined) {
+        setSavedBusinessProfile(data.profile.savedBusinessProfile || null);
+      }
       setTaxProfileMsg('Billing information saved.');
     } catch (err: any) {
       setTaxProfileError(err?.message || 'Unable to save billing information.');
@@ -1763,7 +1822,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             <button
                               type="button"
                               aria-pressed={taxAccountType === 'business'}
-                              onClick={() => setTaxAccountType('business')}
+                              onClick={() => {
+                                if (savedBusinessProfile) {
+                                  applySavedBusinessFields(savedBusinessProfile);
+                                } else {
+                                  setTaxAccountType('business');
+                                }
+                              }}
                               className={`py-1 rounded-md text-[11px] font-semibold transition-colors ${taxAccountType === 'business' ? 'bg-claude-terracotta text-white' : 'text-claude-muted-light dark:text-claude-muted-dark'}`}
                             >
                               Business
@@ -1820,7 +1885,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 id="settings-gst-gstin"
                                 type="text"
                                 maxLength={15}
-                                placeholder="e.g. 09AAMCV4678C1ZV"
+                                placeholder="e.g. 27AABCU9603R1ZM"
                                 value={taxGstin}
                                 onChange={(e) => {
                                   const val = e.target.value.toUpperCase();
@@ -1880,6 +1945,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           />
                         </div>
                       </div>
+                      {taxAccountType === 'individual' && hasSavedBusinessProfile && savedBusinessProfile && (
+                        <div className="p-2.5 rounded-lg bg-claude-surface-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-claude-border-dark flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                          <span className="text-claude-muted-light dark:text-claude-muted-dark">
+                            Business details ({savedBusinessProfile.legalName || savedBusinessProfile.customerGstin || savedBusinessProfile.taxId || 'Saved'}) are preserved while using Personal mode.
+                          </span>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => applySavedBusinessFields(savedBusinessProfile)}
+                              className="px-2 py-1 rounded-md bg-claude-terracotta/10 text-claude-accentInk font-semibold hover:bg-claude-terracotta/20 transition-colors"
+                            >
+                              Restore business details
+                            </button>
+                            <button
+                              type="button"
+                              disabled={taxProfileSaving}
+                              onClick={() => void handleClearSavedBusiness()}
+                              className="px-2 py-1 rounded-md border border-claude-border-light dark:border-white/15 text-claude-muted-light dark:text-stone-300 hover:text-red-600 dark:hover:text-red-400 transition-colors disabled:opacity-50"
+                            >
+                              Clear saved business info
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {taxProfileError && (
                         <p className="text-[11px] text-red-600 dark:text-red-400 font-medium">{taxProfileError}</p>
                       )}
@@ -2030,7 +2119,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                           <div className="pt-2 border-t border-claude-border-light/40 dark:border-white/5 flex flex-col sm:flex-row sm:items-center justify-between text-[10px] text-claude-muted-light dark:text-claude-muted-dark gap-1">
                             <span>
-                              All paid receipts include complete tax &amp; payment snapshot records.
+                              All paid receipts include complete tax &amp; payment snapshot records. Email delivery is unavailable in this release — download PDF or Print A4 directly.
                             </span>
                             <span>
                               Billing support: {usageData?.supplierIdentity?.supportEmail || 'virexaiventures@gmail.com'}

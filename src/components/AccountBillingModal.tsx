@@ -214,12 +214,12 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="aira-account-billing-title"
-        className="relative w-full max-w-4xl rounded-2xl bg-aira-navy border border-white/10 text-white shadow-lg overflow-hidden my-2 sm:my-6 flex flex-col max-h-[90dvh]"
+        className="relative w-full max-w-4xl rounded-2xl bg-claude-surface-light dark:bg-claude-surface-dark border border-claude-border-light dark:border-white/10 text-claude-text-light dark:text-white shadow-2xl overflow-hidden my-2 sm:my-6 flex flex-col max-h-[90dvh]"
       >
         {/* Header */}
-        <div className="p-5 md:p-6 border-b border-white/10 flex items-center justify-between shrink-0 bg-stone-900/50">
+        <div className="p-5 md:p-6 border-b border-claude-border-light dark:border-white/10 flex items-center justify-between shrink-0 bg-claude-surface2-light dark:bg-claude-surface2-dark">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-aira-blue flex items-center justify-center text-white font-bold text-sm overflow-hidden">
+            <div className="w-10 h-10 rounded-lg bg-claude-terracotta flex items-center justify-center text-white font-bold text-sm overflow-hidden">
               {sessionVerified && user?.image ? (
                 <img src={user.image} alt={user.name || 'User'} className="w-full h-full object-cover" />
               ) : sessionVerified && user ? (
@@ -229,10 +229,10 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               )}
             </div>
             <div>
-              <h2 id="aira-account-billing-title" className="text-xl font-medium tracking-tight text-white flex items-center gap-2">
+              <h2 id="aira-account-billing-title" className="text-xl font-medium tracking-tight text-claude-text-light dark:text-white flex items-center gap-2">
                 Account & Billing Center
               </h2>
-              <p className="text-xs text-stone-400">
+              <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark">
                 {sessionVerified ? (user?.email || user?.name || 'Signed-in account') : 'Guest or unconfirmed session'} · AIRA Account
               </p>
             </div>
@@ -244,7 +244,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               type="button"
               aria-label="Refresh billing data"
               disabled={loading}
-              className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-white/10 transition-colors"
+              className="p-2 rounded-xl text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
               title="Refresh Billing Data"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin motion-reduce:animate-none' : ''}`} />
@@ -253,7 +253,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               onClick={onClose}
               type="button"
               aria-label="Close Account and Billing Center"
-              className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-white/10 transition-colors"
+              className="p-2 rounded-xl text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -261,7 +261,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div role="tablist" aria-label="Billing sections" className="flex shrink-0 overflow-x-auto border-b border-white/10 bg-black/20 px-2 sm:px-6">
+        <div role="tablist" aria-label="Billing sections" className="flex shrink-0 overflow-x-auto border-b border-claude-border-light dark:border-white/10 bg-claude-surface2-light/60 dark:bg-black/20 px-2 sm:px-6">
           <button
             onClick={() => setActiveTab('overview')}
             type="button"
@@ -271,8 +271,8 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             id="aira-billing-tab-overview"
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'overview'
-                ? 'border-claude-terracotta text-white'
-                : 'border-transparent text-stone-400 hover:text-white'
+                ? 'border-claude-terracotta text-claude-accentInk dark:text-white'
+                : 'border-transparent text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
@@ -287,8 +287,8 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             id="aira-billing-tab-usage"
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'usage'
-                ? 'border-claude-terracotta text-white'
-                : 'border-transparent text-stone-400 hover:text-white'
+                ? 'border-claude-terracotta text-claude-accentInk dark:text-white'
+                : 'border-transparent text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
             }`}
           >
             <TrendingUp className="w-3.5 h-3.5" />
@@ -303,8 +303,8 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             id="aira-billing-tab-topup"
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'topup'
-                ? 'border-claude-terracotta text-white'
-                : 'border-transparent text-stone-400 hover:text-white'
+                ? 'border-claude-terracotta text-claude-accentInk dark:text-white'
+                : 'border-transparent text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
             }`}
           >
             <CreditCard className="w-3.5 h-3.5" />
@@ -319,8 +319,8 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             id="aira-billing-tab-security"
             className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-colors duration-150 ${
               activeTab === 'security'
-                ? 'border-claude-terracotta text-white'
-                : 'border-transparent text-stone-400 hover:text-white'
+                ? 'border-claude-terracotta text-claude-accentInk dark:text-white'
+                : 'border-transparent text-claude-muted-light dark:text-claude-muted-dark hover:text-claude-text-light dark:hover:text-white'
             }`}
           >
             <Shield className="w-3.5 h-3.5" />
@@ -331,7 +331,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
         {/* Content Area */}
         <div id="aira-billing-panel" role="tabpanel" aria-label="Billing details" className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
           {(activeTab === 'overview' || activeTab === 'usage') && !confirmedBilling && (
-            <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100 flex items-center justify-between gap-3">
+            <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-950 dark:text-amber-100 flex items-center justify-between gap-3">
               <span>{loading ? 'Loading your billing information…' : billingError || 'Billing information unavailable.'}</span>
               {!loading && <button onClick={() => void fetchBillingData()} className="underline underline-offset-2 shrink-0">Retry</button>}
             </div>
@@ -339,15 +339,15 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           {activeTab === 'overview' && confirmedBilling && (
             <div className="space-y-6">
               {/* Active Plan Card */}
-              <div className="p-6 rounded-2xl bg-gradient-to-br from-stone-900 to-stone-900/60 border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <div className="p-6 rounded-2xl bg-claude-surface2-light dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div>
-                  <h3 className="text-2xl font-serif text-white flex items-center gap-3">
+                  <h3 className="text-2xl font-serif text-claude-text-light dark:text-white flex items-center gap-3">
                     {confirmedBilling.planName}
-                    <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 capitalize font-sans">
+                    <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 capitalize font-sans">
                       {confirmedBilling.subscriptionStatus}
                     </span>
                   </h3>
-                  <p className="text-xs text-stone-400 mt-2 max-w-md">
+                  <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark mt-2 max-w-md">
                     Your current plan, usage and available credits are shown from the live account ledger below.
                   </p>
                 </div>
@@ -358,7 +358,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                       onClose();
                       onOpenPricing();
                     }}
-                    className="px-5 py-2.5 rounded-lg bg-aira-blue hover:opacity-90 text-white text-xs font-medium transition-opacity duration-150 flex items-center justify-center gap-2"
+                    className="px-5 py-2.5 rounded-lg bg-claude-terracotta hover:bg-claude-terracotta-hover text-white text-xs font-medium transition-colors duration-150 flex items-center justify-center gap-2"
                   >
                     <Zap className="w-3.5 h-3.5" />
                     Change or Upgrade Plan
@@ -368,43 +368,43 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
 
               {/* Credit Wallet Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-4 rounded-xl bg-stone-900/60 border border-white/10">
-                  <div className="text-[11px] text-stone-400">Available Premium Credits</div>
-                  <div className="text-2xl font-bold text-emerald-400 mt-1">
+                <div className="p-4 rounded-xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10">
+                  <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Available Premium Credits</div>
+                  <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
                     {confirmedBilling.availableCredits.toLocaleString()}
                   </div>
-                  <div className="text-[10px] text-stone-500 mt-1">
+                  <div className="text-[10px] text-claude-muted-light dark:text-stone-400 mt-1">
                     Balance reported by your account ledger
                   </div>
                 </div>
 
-                <div className="p-4 rounded-xl bg-stone-900/60 border border-white/10">
-                  <div className="text-[11px] text-stone-400">Daily Standard Allowance</div>
-                  <div className="text-2xl font-bold text-white mt-1">
+                <div className="p-4 rounded-xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10">
+                  <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Daily Standard Allowance</div>
+                  <div className="text-2xl font-bold text-claude-text-light dark:text-white mt-1">
                     {Math.max(0, confirmedBilling.dailyChatLimit - confirmedBilling.dailyChatsUsed)} / {confirmedBilling.dailyChatLimit}
                   </div>
-                  <div className="text-[10px] text-stone-500 mt-1">Resets automatically at midnight UTC</div>
+                  <div className="text-[10px] text-claude-muted-light dark:text-stone-400 mt-1">Resets automatically at midnight UTC</div>
                 </div>
 
-                <div className="p-4 rounded-xl bg-stone-900/60 border border-white/10">
-                  <div className="text-[11px] text-stone-400">Monthly Reasoning Boosts</div>
-                  <div className="text-2xl font-bold text-amber-400 mt-1">
+                <div className="p-4 rounded-xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10">
+                  <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Monthly Reasoning Boosts</div>
+                  <div className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
                     {Math.max(0, confirmedBilling.reasoningBoostLimit - confirmedBilling.reasoningBoostsUsed)} / {confirmedBilling.reasoningBoostLimit}
                   </div>
-                  <div className="text-[10px] text-stone-500 mt-1">Complimentary deep thinking passes</div>
+                  <div className="text-[10px] text-claude-muted-light dark:text-stone-400 mt-1">Complimentary deep thinking passes</div>
                 </div>
               </div>
 
               {/* Payment Method & Account Protection Notice */}
-              <div className="p-4 rounded-xl bg-stone-900/40 border border-white/10 text-xs text-stone-400 space-y-2">
+              <div className="p-4 rounded-xl bg-claude-surface2-light/50 dark:bg-stone-900/40 border border-claude-border-light dark:border-white/10 text-xs text-claude-muted-light dark:text-claude-muted-dark space-y-2">
                 {Array.isArray(confirmedBilling.paymentMethods) && confirmedBilling.paymentMethods.length > 0 && (
-                  <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-white/10">
-                    <span className="text-stone-300 font-medium">Payment Method</span>
-                    <span className="text-white font-semibold">{confirmedBilling.paymentMethods[0].displayLabel}</span>
+                  <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-claude-border-light dark:border-white/10">
+                    <span className="text-claude-muted-light dark:text-stone-300 font-medium">Payment Method</span>
+                    <span className="text-claude-text-light dark:text-white font-semibold">{confirmedBilling.paymentMethods[0].displayLabel}</span>
                   </div>
                 )}
-                <div className="font-semibold text-white flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-indigo-400" />
+                <div className="font-semibold text-claude-text-light dark:text-white flex items-center gap-2">
+                  <Shield className="w-4 h-4 text-claude-accentInk dark:text-indigo-400" />
                   Financial Ledger Protection
                 </div>
                 <p>
@@ -416,17 +416,17 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
 
           {activeTab === 'usage' && confirmedBilling && (
             <div className="space-y-6">
-              <h4 className="text-sm font-semibold text-white">Compute & Quota Breakdown</h4>
+              <h4 className="text-sm font-semibold text-claude-text-light dark:text-white">Compute & Quota Breakdown</h4>
               <div className="space-y-4">
                 {/* Daily Progress */}
-                <div className="p-4 rounded-xl bg-stone-900/60 border border-white/10 space-y-2">
+                <div className="p-4 rounded-xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10 space-y-2">
                   <div className="flex justify-between text-xs">
-                    <span className="text-stone-300">Daily Standard Chat Limit</span>
-                    <span className="text-stone-400">
+                    <span className="text-claude-text-light dark:text-stone-300">Daily Standard Chat Limit</span>
+                    <span className="text-claude-muted-light dark:text-claude-muted-dark">
                       {confirmedBilling.dailyChatsUsed} / {confirmedBilling.dailyChatLimit} chats
                     </span>
                   </div>
-                  <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
+                  <div className="h-2 rounded-full bg-claude-border-light dark:bg-stone-800 overflow-hidden">
                     <div
                       className="h-full bg-claude-terracotta"
                       style={{
@@ -437,14 +437,14 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                 </div>
 
                 {/* Monthly Progress */}
-                <div className="p-4 rounded-xl bg-stone-900/60 border border-white/10 space-y-2">
+                <div className="p-4 rounded-xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10 space-y-2">
                   <div className="flex justify-between text-xs">
-                    <span className="text-stone-300">Monthly Standard Chat Units</span>
-                    <span className="text-stone-400">
+                    <span className="text-claude-text-light dark:text-stone-300">Monthly Standard Chat Units</span>
+                    <span className="text-claude-muted-light dark:text-claude-muted-dark">
                       {confirmedBilling.monthlyUnitsUsed} / {confirmedBilling.monthlyUnitLimit} units
                     </span>
                   </div>
-                  <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
+                  <div className="h-2 rounded-full bg-claude-border-light dark:bg-stone-800 overflow-hidden">
                     <div
                       className="h-full bg-claude-terracotta"
                       style={{
@@ -455,14 +455,14 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                 </div>
 
                 {/* Reasoning Boost Progress */}
-                <div className="p-4 rounded-xl bg-stone-900/60 border border-white/10 space-y-2">
+                <div className="p-4 rounded-xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10 space-y-2">
                   <div className="flex justify-between text-xs">
-                    <span className="text-stone-300">Complimentary Auto Reasoning Boosts</span>
-                    <span className="text-stone-400">
+                    <span className="text-claude-text-light dark:text-stone-300">Complimentary Auto Reasoning Boosts</span>
+                    <span className="text-claude-muted-light dark:text-claude-muted-dark">
                       {confirmedBilling.reasoningBoostsUsed} / {confirmedBilling.reasoningBoostLimit} used
                     </span>
                   </div>
-                  <div className="h-2 rounded-full bg-stone-800 overflow-hidden">
+                  <div className="h-2 rounded-full bg-claude-border-light dark:bg-stone-800 overflow-hidden">
                     <div
                       className="h-full bg-amber-500"
                       style={{
@@ -476,7 +476,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
           )}
 
           {activeTab === 'topup' && !sessionVerified && (
-            <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+            <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-950 dark:text-amber-100">
               Verify your sign-in session to view account credit purchases.
             </div>
           )}
@@ -484,19 +484,19 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h4 className="text-sm font-semibold text-white">Purchase Credit Top-Up Packs</h4>
-                  <p className="text-xs text-stone-400">Credits never expire and roll over indefinitely.</p>
+                  <h4 className="text-sm font-semibold text-claude-text-light dark:text-white">Purchase Credit Top-Up Packs</h4>
+                  <p className="text-xs text-claude-muted-light dark:text-claude-muted-dark">Credits never expire and roll over indefinitely.</p>
                 </div>
-                <div className="flex items-center p-1 bg-stone-900 rounded-lg border border-white/10">
+                <div className="flex items-center p-1 bg-claude-surface2-light dark:bg-stone-900 rounded-lg border border-claude-border-light dark:border-white/10">
                   <button
                     onClick={() => setTopUpCurrency('INR')}
-                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'INR' ? 'bg-aira-blue text-white' : 'text-stone-400'}`}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'INR' ? 'bg-claude-terracotta text-white' : 'text-claude-muted-light dark:text-claude-muted-dark'}`}
                   >
                     ₹ INR
                   </button>
                   <button
                     onClick={() => setTopUpCurrency('USD')}
-                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'USD' ? 'bg-aira-blue text-white' : 'text-stone-400'}`}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold ${topUpCurrency === 'USD' ? 'bg-claude-terracotta text-white' : 'text-claude-muted-light dark:text-claude-muted-dark'}`}
                   >
                     $ USD
                   </button>
@@ -504,66 +504,66 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
               </div>
 
               {topUpNotice && (
-                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs">
+                <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300 text-xs">
                   {topUpNotice}
                 </div>
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="p-5 rounded-2xl bg-stone-900/60 border border-white/10 flex flex-col justify-between">
+                <div className="p-5 rounded-2xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10 flex flex-col justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-stone-300">Starter Top-Up</div>
-                    <div className="text-2xl font-bold text-white mt-1">1,000</div>
-                    <div className="text-[11px] text-stone-400">Credits</div>
+                    <div className="text-xs font-semibold text-claude-muted-light dark:text-stone-300">Starter Top-Up</div>
+                    <div className="text-2xl font-bold text-claude-text-light dark:text-white mt-1">1,000</div>
+                    <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Credits</div>
                   </div>
-                  <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-sm font-bold text-stone-400">
+                  <div className="mt-4 pt-4 border-t border-claude-border-light dark:border-white/10 flex items-center justify-between">
+                    <span className="text-sm font-bold text-claude-muted-light dark:text-claude-muted-dark">
                       Preview Only
                     </span>
                     <button
                       disabled
-                      className="px-3 py-1.5 rounded-lg bg-stone-800 text-stone-400 text-xs font-semibold cursor-not-allowed border border-white/5"
+                      className="px-3 py-1.5 rounded-lg bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-400 text-xs font-semibold cursor-not-allowed border border-claude-border-light dark:border-white/5"
                     >
                       Checkout Inactive
                     </button>
                   </div>
                 </div>
 
-                <div className="p-5 rounded-xl bg-gradient-to-b from-claude-terracotta/10 to-stone-900/60 border border-claude-terracotta/30 flex flex-col justify-between">
+                <div className="p-5 rounded-xl bg-gradient-to-b from-claude-terracotta/10 to-claude-surface2-light dark:to-claude-surface2-dark border border-claude-terracotta/40 flex flex-col justify-between">
                   <div>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-claude-terracotta/20 text-amber-200">
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-claude-terracotta/15 text-claude-accentInk dark:text-amber-200">
                       Most popular
                     </span>
-                    <div className="text-xs font-semibold text-stone-300 mt-2">Power Top-Up</div>
-                    <div className="text-2xl font-bold text-white mt-1">5,000</div>
-                    <div className="text-[11px] text-stone-400">Credits</div>
+                    <div className="text-xs font-semibold text-claude-muted-light dark:text-stone-300 mt-2">Power Top-Up</div>
+                    <div className="text-2xl font-bold text-claude-text-light dark:text-white mt-1">5,000</div>
+                    <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Credits</div>
                   </div>
-                  <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-sm font-bold text-stone-400">
+                  <div className="mt-4 pt-4 border-t border-claude-border-light dark:border-white/10 flex items-center justify-between">
+                    <span className="text-sm font-bold text-claude-muted-light dark:text-claude-muted-dark">
                       Preview Only
                     </span>
                     <button
                       disabled
-                      className="px-3 py-1.5 rounded-lg bg-stone-800 text-stone-400 text-xs font-semibold cursor-not-allowed border border-white/5"
+                      className="px-3 py-1.5 rounded-lg bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-400 text-xs font-semibold cursor-not-allowed border border-claude-border-light dark:border-white/5"
                     >
                       Checkout Inactive
                     </button>
                   </div>
                 </div>
 
-                <div className="p-5 rounded-2xl bg-stone-900/60 border border-white/10 flex flex-col justify-between">
+                <div className="p-5 rounded-2xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10 flex flex-col justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-stone-300">Studio Top-Up</div>
-                    <div className="text-2xl font-bold text-white mt-1">15,000</div>
-                    <div className="text-[11px] text-stone-400">Credits</div>
+                    <div className="text-xs font-semibold text-claude-muted-light dark:text-stone-300">Studio Top-Up</div>
+                    <div className="text-2xl font-bold text-claude-text-light dark:text-white mt-1">15,000</div>
+                    <div className="text-[11px] text-claude-muted-light dark:text-claude-muted-dark">Credits</div>
                   </div>
-                  <div className="mt-4 pt-4 border-t border-white/10 flex items-center justify-between">
-                    <span className="text-sm font-bold text-stone-400">
+                  <div className="mt-4 pt-4 border-t border-claude-border-light dark:border-white/10 flex items-center justify-between">
+                    <span className="text-sm font-bold text-claude-muted-light dark:text-claude-muted-dark">
                       Preview Only
                     </span>
                     <button
                       disabled
-                      className="px-3 py-1.5 rounded-lg bg-stone-800 text-stone-400 text-xs font-semibold cursor-not-allowed border border-white/5"
+                      className="px-3 py-1.5 rounded-lg bg-stone-200 dark:bg-stone-800 text-stone-600 dark:text-stone-400 text-xs font-semibold cursor-not-allowed border border-claude-border-light dark:border-white/5"
                     >
                       Checkout Inactive
                     </button>
@@ -575,29 +575,29 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
 
           {activeTab === 'security' && (
             <div className="space-y-6">
-              <h4 className="text-sm font-semibold text-white">Session & Identity Integrity</h4>
+              <h4 className="text-sm font-semibold text-claude-text-light dark:text-white">Session & Identity Integrity</h4>
               {!sessionVerified && identity.status !== 'checking' && identity.status !== 'syncing' && (
-                <button type="button" onClick={() => setSessionRefreshCount((count) => count + 1)} className="text-xs text-blue-300 underline underline-offset-2">
+                <button type="button" onClick={() => setSessionRefreshCount((count) => count + 1)} className="text-xs text-claude-accentInk underline underline-offset-2">
                   Recheck session with AIRA
                 </button>
               )}
-              <div className="p-4 rounded-xl bg-stone-900/60 border border-white/10 space-y-3">
+              <div className="p-4 rounded-xl bg-claude-surface2-light/70 dark:bg-claude-surface2-dark border border-claude-border-light dark:border-white/10 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-white">Authenticated Principal ID</div>
-                    <div className="text-xs text-stone-400 font-mono mt-0.5">{sessionVerified ? user?.id : 'Not confirmed'}</div>
+                    <div className="text-xs font-semibold text-claude-text-light dark:text-white">Authenticated Principal ID</div>
+                    <div className="text-xs text-claude-muted-light dark:text-claude-muted-dark font-mono mt-0.5">{sessionVerified ? user?.id : 'Not confirmed'}</div>
                   </div>
-                  <span className={`text-[11px] px-2 py-0.5 rounded-md font-medium ${sessionVerified ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'}`}>
+                  <span className={`text-[11px] px-2 py-0.5 rounded-md font-medium ${sessionVerified ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300' : 'bg-amber-500/15 text-amber-800 dark:text-amber-300'}`}>
                     {sessionVerified ? 'Session verified' : identity.status === 'checking' || identity.status === 'syncing' ? 'Checking session' : 'Not verified'}
                   </span>
                 </div>
 
-                <div className="pt-3 border-t border-white/10 flex items-center justify-between">
+                <div className="pt-3 border-t border-claude-border-light dark:border-white/10 flex items-center justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-white">Account Email</div>
-                    <div className="text-xs text-stone-400">{sessionVerified ? (user?.email || 'No email on account') : 'Not confirmed'}</div>
+                    <div className="text-xs font-semibold text-claude-text-light dark:text-white">Account Email</div>
+                    <div className="text-xs text-claude-muted-light dark:text-claude-muted-dark">{sessionVerified ? (user?.email || 'No email on account') : 'Not confirmed'}</div>
                   </div>
-                  <span className="text-[10px] text-stone-400 text-right">{sessionVerified ? identity.providers === null ? 'Sign-in providers unavailable' : identity.providers.length ? `Linked: ${identity.providers.join(', ')}` : 'No linked OAuth providers' : 'Provider not confirmed'}</span>
+                  <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark text-right">{sessionVerified ? identity.providers === null ? 'Sign-in providers unavailable' : identity.providers.length ? `Linked: ${identity.providers.join(', ')}` : 'No linked OAuth providers' : 'Provider not confirmed'}</span>
                 </div>
               </div>
 
@@ -608,7 +608,7 @@ export const AccountBillingModal: React.FC<AccountBillingModalProps> = ({
                       await neonAuth.signOut();
                       window.location.reload();
                     }}
-                    className="px-4 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-xs font-semibold border border-rose-500/20 transition flex items-center gap-2"
+                    className="px-4 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 text-xs font-semibold border border-rose-500/20 transition flex items-center gap-2"
                   >
                     <LogOut className="w-3.5 h-3.5" />
                     Sign Out & Invalidate Session

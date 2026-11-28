@@ -1,7 +1,7 @@
 {
-  "manifest_version": "2.4.0",
-  "last_refresh": "2026-11-28T15:11:49.021Z",
-  "candidate_commit_sha": "aaf3974bdbbef751d502e569dd32cf2c27014994",
+  "manifest_version": "2.5.0",
+  "last_refresh": "2026-11-28T22:45:00.000Z",
+  "candidate_commit_sha": "cc00bbb40fb07092f90c5085a22afbf31f571fda",
   "predecessor_commit_sha": "32156ace356462e98d025f42af1eab941a450eaf",
   "staging_runtime_sha": "5da4a4d1c0987de68e75eaddd24d60fab7c51264",
   "branch": "staging",
@@ -48,9 +48,9 @@
     "payment_billing_graph.html",
     "manifest.json"
   ],
-  "node_count": 52,
-  "edge_count": 64,
-  "graph_json_sha256": "3399aa9ef44e1886b33bdfaf01890ab516f0c84f040c8101bc854e8b215e4904",
+  "node_count": 53,
+  "edge_count": 65,
+  "graph_json_sha256": "02e7cc90bb6ed84663ebe143d550d0a4c2fac45e7c2ac8b31c84e827f0f67c49",
   "graft_mcp_verified": true,
   "ontoly_status": "UNAVAILABLE_ON_PATH_ENGAGED_GRAPHIFY_FALLBACK",
   "production_verdict": "STRICT_HOLD",

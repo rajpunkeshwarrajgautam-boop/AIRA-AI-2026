@@ -744,6 +744,19 @@ export const GlobalCountryOptionSchema = z.object({
 });
 export type GlobalCountryOption = z.infer<typeof GlobalCountryOptionSchema>;
 
+export const SavedBusinessProfileSnapshotSchema = z.object({
+  legalName: z.string().trim().max(255).nullable().optional(),
+  addressLine1: z.string().trim().max(255).nullable().optional(),
+  addressLine2: z.string().trim().max(255).nullable().optional(),
+  city: z.string().trim().max(120).nullable().optional(),
+  stateCode: z.string().trim().max(64).nullable().optional(),
+  postalCode: z.string().trim().max(32).nullable().optional(),
+  country: z.string().trim().max(8).nullable().optional(),
+  customerGstin: z.string().trim().max(15).nullable().optional(),
+  taxId: z.string().trim().max(64).nullable().optional()
+});
+export type SavedBusinessProfileSnapshot = z.infer<typeof SavedBusinessProfileSnapshotSchema>;
+
 export const GlobalBillingProfileSchema = z.object({
   country: z.string().trim().min(2).max(8).transform(v => v.toUpperCase()).default('US'),
   accountType: BillingAccountTypeSchema.default('individual'),
@@ -756,7 +769,10 @@ export const GlobalBillingProfileSchema = z.object({
   postalCode: z.string().trim().max(32).nullable().optional(),
   customerGstin: z.string().trim().max(15).nullable().optional(),
   taxId: z.string().trim().max(64).nullable().optional(),
-  isB2b: z.boolean().optional()
+  isB2b: z.boolean().optional(),
+  hasSavedBusinessProfile: z.boolean().optional(),
+  savedBusinessProfile: SavedBusinessProfileSnapshotSchema.nullable().optional(),
+  clearSavedBusinessDetails: z.boolean().optional()
 });
 export type GlobalBillingProfile = z.infer<typeof GlobalBillingProfileSchema>;
 

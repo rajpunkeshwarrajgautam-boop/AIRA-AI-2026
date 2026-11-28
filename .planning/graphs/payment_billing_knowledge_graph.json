@@ -1,10 +1,10 @@
 {
-  "version": "2.4.0",
+  "version": "2.5.0",
   "name": "AIRA AI 2026 — Payment & Commercial Billing Knowledge Graph (Reconciled & Synchronized)",
-  "candidate_commit_sha": "aaf3974bdbbef751d502e569dd32cf2c27014994",
+  "candidate_commit_sha": "cc00bbb40fb07092f90c5085a22afbf31f571fda",
   "predecessor_commit_sha": "32156ace356462e98d025f42af1eab941a450eaf",
   "staging_runtime_sha": "5da4a4d1c0987de68e75eaddd24d60fab7c51264",
-  "generated_at": "2026-11-28T15:11:49.021Z",
+  "generated_at": "2026-11-28T22:45:00.000Z",
   "authorities": {
     "coordinating_agent": "agency-agents-orchestrator",
     "knowledge_engineer": "agency-knowledge-graph-engineer",
@@ -18,8 +18,8 @@
     ]
   },
   "stats": {
-    "total_nodes": 52,
-    "total_edges": 64,
+    "total_nodes": 53,
+    "total_edges": 65,
     "domains": [
       "payment_gateway",
       "commercial_billing",
@@ -69,14 +69,14 @@
       "type": "service",
       "domain": "gst_compliance",
       "path": "apps/api/src/billing/tax-determination.ts",
-      "line_anchors": "1-866",
+      "line_anchors": "1-884",
       "provenance": {
         "commit": "aaf3974bdbbef751d502e569dd32cf2c27014994",
         "timestamp": "2026-11-28T18:25:00+05:30",
         "confidence": 1,
         "status": "VERIFIED"
       },
-      "description": "Statutory Indian GST calculation engine implementing IGST Act Sec 12(2), CGST Act Sec 31/34, 37 Indian jurisdictions (UP 09 supplier), B2B/B2C Place of Supply, integer-paise math, and provisional SAC 998315 logic (PENDING_APPROVAL)."
+      "description": "Statutory Indian GST and zero-rated export calculation engine implementing IGST Act Sec 12(2), CGST Act Sec 31/34, 37 Indian jurisdictions (UP 09 supplier), verified non-India export LUT determination (lutApproved), B2B/B2C Place of Supply, integer-paise math, and provisional SAC 998315 logic (PENDING_APPROVAL)."
     },
     {
       "id": "srv_gst_renderer",
@@ -669,14 +669,14 @@
       "type": "service",
       "domain": "invoicing",
       "path": "apps/api/src/billing/pdf-document-renderer.ts",
-      "line_anchors": "1-321",
+      "line_anchors": "1-481",
       "provenance": {
         "commit": "5da4a4d1c0987de68e75eaddd24d60fab7c51264",
         "timestamp": "2026-11-28T15:11:49.021Z",
         "confidence": 1,
         "status": "VERIFIED"
       },
-      "description": "Hermetic pure-TypeScript binary A4 %PDF-1.4 generator for invoices and credit notes with xref table, ASCII/latin1 sanitization, and zero internal principal usr_ leakage."
+      "description": "Hermetic pure-TypeScript binary A4 %PDF-1.4 generator for invoices and credit notes with WinAnsiEncoding font mapping, multi-page continuation header & rule splitting, UTF-8/WinAnsi byte sanitization, and truthful LUT/export metadata."
     },
     {
       "id": "rt_billing_profile",
@@ -751,7 +751,7 @@
         "confidence": 1,
         "status": "VERIFIED"
       },
-      "description": "Country/Region alignment (US->USD vs IN->INR), clean global card flow vs domestic UPI/Cashfree/Razorpay, optional business disclosure, capture-phase Escape isolation, and stripped internal tax fixture footer clutter."
+      "description": "AIRA Atelier Light/Dark harmonized pricing modal with country/region alignment (US->USD vs IN->INR), clean global card flow vs domestic UPI/Cashfree/Razorpay, non-destructive business profile toggle, capture-phase Escape isolation, and stripped internal tax fixture footer clutter."
     },
     {
       "id": "ui_settings_modal",
@@ -766,7 +766,7 @@
         "confidence": 1,
         "status": "VERIFIED"
       },
-      "description": "Four dedicated customer-facing billing cards (Your subscription, Payment methods, Billing information with Individual/Business + global Tax ID, Billing history with Download PDF & View/Print A4) strictly scoped away from guests."
+      "description": "AIRA Atelier Light/Dark harmonized settings modal with four dedicated customer-facing billing cards (Your subscription, Payment methods, Billing information with non-destructive Business <-> Individual toggle & global Tax ID, Billing history with WinAnsi %PDF-1.4 & View/Print A4) strictly scoped away from guests."
     },
     {
       "id": "blk_u5_transactional_email",
@@ -812,6 +812,21 @@
         "status": "VERIFIED"
       },
       "description": "Reconciled staging Neon 122 credit_accounts (38,400) vs 107 remaining credit_grants (38,300); 121/122 sum identically to 0 and 1 legacy test fixture acc_legacy_1794642101513 accounts for the sole +100 delta."
+    },
+    {
+      "id": "ui_account_billing_modal",
+      "name": "AccountBillingModal V2 (Customer Subscriptions & Invoicing View)",
+      "type": "ui_component",
+      "domain": "commercial_billing",
+      "path": "src/components/AccountBillingModal.tsx",
+      "line_anchors": "1-625",
+      "provenance": {
+        "commit": "cc00bbb40fb07092f90c5085a22afbf31f571fda",
+        "timestamp": "2026-11-28T22:45:00.000Z",
+        "confidence": 1,
+        "status": "VERIFIED"
+      },
+      "description": "AIRA Atelier Light/Dark harmonized account billing modal providing dedicated customer subscription management, plan upgrade pathways, payment method overview, and billing history."
     }
   ],
   "edges": [
@@ -1198,6 +1213,12 @@
       "target": "env_staging_authoritative",
       "relation": "verified_on",
       "description": "Verified via READ ONLY SQL reconciliation on staging br-snowy-bonus-b32thjlz"
+    },
+    {
+      "source": "ui_account_billing_modal",
+      "target": "routes_billing_api",
+      "relation": "consumes",
+      "description": "Consumes billing subscriptions, payment methods, and invoices via /api/billing endpoints"
     }
   ]
 }

@@ -11,6 +11,8 @@ import {
   buildInvoicePdfBuffer,
   buildCreditNotePdfBuffer
 } from '../apps/api/src/billing/pdf-document-renderer.js';
+import { taxDeterminationService } from '../apps/api/src/billing/tax-determination.js';
+import { buildInvoiceHtmlDocument } from '../apps/api/src/billing/gst-document-renderer.js';
 
 describe('V2 Slice 2: Global Profile, Payment Methods, PDF Binary Renderer & Route Security (PG18)', () => {
   let appServer: http.Server;
@@ -431,5 +433,137 @@ describe('V2 Slice 2: Global Profile, Payment Methods, PDF Binary Renderer & Rou
       if (prevDefaultGw === undefined) delete process.env.AIRA_PAYMENT_GATEWAY_DEFAULT;
       else process.env.AIRA_PAYMENT_GATEWAY_DEFAULT = prevDefaultGw;
     }
+  });
+
+  it('7. USD currency alone never triggers export/LUT claims & missing LUT never claims IGST Sec 2(6) LUT approval', () => {
+    // Unknown country with USD must stay UNRESOLVED, never EXPORT_OUTSIDE_INDIA
+    const unknownUsd = taxDeterminationService.determineTax({
+      amountMinorUnits: 799,
+      currency: 'USD'
+    });
+    assert.equal(unknownUsd.isExport, false);
+    assert.equal(unknownUsd.posBasis, 'UNRESOLVED');
+
+    // Indian resident paying USD is domestic jurisdiction, never export
+    const indiaUsd = taxDeterminationService.determineTax({
+      amountMinorUnits: 799,
+      currency: 'USD',
+      customerCountry: 'IN',
+      customerState: '09'
+    });
+    assert.equal(indiaUsd.isExport, false);
+    assert.equal(indiaUsd.posBasis, 'RECIPIENT_ADDRESS');
+
+    // Foreign US customer WITHOUT LUT number must NOT claim LUT approval or COMPLIANT_ZERO_RATED_EXPORT
+    const usNoLut = taxDeterminationService.determineTax({
+      amountMinorUnits: 799,
+      currency: 'USD',
+      customerCountry: 'US',
+      supplierGstin: '09AAMCV4678C1ZV',
+      supplierGstinVerified: true,
+      sacApproved: true,
+      financeTaxSignOff: true
+    });
+    assert.equal(usNoLut.isExport, true);
+    assert.notEqual(usNoLut.taxComplianceStatus, 'COMPLIANT_ZERO_RATED_EXPORT');
+
+    const htmlNoLut = buildInvoiceHtmlDocument({
+      invoiceNumber: 'INV/26-27/00101',
+      date: '2026-11-28',
+      plan: 'AIRA Plus',
+      currency: 'USD',
+      totalAmount: 7.99,
+      taxableBase: 7.99,
+      gstAmount: 0,
+      posBasis: 'EXPORT_OUTSIDE_INDIA',
+      taxComplianceStatus: 'PROVISIONAL_PENDING_TAX_APPROVAL',
+      sacCode: '998315',
+      supplierName: 'VIREXA AI VENTURES PRIVATE LIMITED',
+      status: 'Paid',
+      isSandbox: false
+    });
+    assert.doesNotMatch(htmlNoLut, /Zero-Rated Export of Services \(IGST Act Sec 2\(6\) \/ LUT/);
+  });
+
+  it('8. Switching Business -> Individual preserves saved business details cleanly & clears only on explicit delete', async () => {
+    const bizUser = uid('preserve_biz');
+    // Save Indian B2B business profile
+    const saveBiz = await fetch(`${baseUrl}/api/billing/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'x-test-principal': bizUser },
+      body: JSON.stringify({
+        country: 'IN',
+        accountType: 'business',
+        stateCode: '09',
+        legalName: 'Lucknow Neural Systems Pvt Ltd',
+        customerGstin: '09AAMCV4678C1ZV',
+        addressLine1: '100 Gomti Nagar'
+      })
+    });
+    assert.equal(saveBiz.status, 200);
+
+    // Switch to Individual without explicit clear -> personal profile active, savedBusinessProfile preserved!
+    const switchIndiv = await fetch(`${baseUrl}/api/billing/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'x-test-principal': bizUser },
+      body: JSON.stringify({
+        country: 'IN',
+        accountType: 'individual',
+        stateCode: '09',
+        legalName: 'Aarav Sharma'
+      })
+    });
+    assert.equal(switchIndiv.status, 200);
+    const indivBody = await switchIndiv.json();
+    assert.equal(indivBody.profile.accountType, 'individual');
+    assert.equal(indivBody.profile.isB2b, false);
+    assert.equal(indivBody.profile.customerGstin, null);
+    assert.equal(indivBody.profile.hasSavedBusinessProfile, true);
+    assert.equal(indivBody.profile.savedBusinessProfile?.customerGstin, '09AAMCV4678C1ZV');
+    assert.equal(indivBody.profile.savedBusinessProfile?.legalName, 'Lucknow Neural Systems Pvt Ltd');
+
+    // Explicit clearSavedBusinessDetails deletes saved business snapshot permanently
+    const cleared = await fetch(`${baseUrl}/api/billing/profile`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'x-test-principal': bizUser },
+      body: JSON.stringify({
+        country: 'IN',
+        accountType: 'individual',
+        stateCode: '09',
+        clearSavedBusinessDetails: true
+      })
+    });
+    assert.equal(cleared.status, 200);
+    const clearedBody = await cleared.json();
+    assert.equal(clearedBody.profile.hasSavedBusinessProfile, false);
+    assert.equal(clearedBody.profile.savedBusinessProfile, null);
+  });
+
+  it('9. PDF renderer handles international Latin diacritics without space corruption & paginates long addresses across A4 pages', () => {
+    const longAddr = Array.from({ length: 65 }, (_, i) => `District ${i + 1}, Château-d'Œx, Münchenstrasse 99B, Bavaria`).join(', ');
+    const invBuf = buildInvoicePdfBuffer({
+      invoiceNumber: 'INV/26-27/00102',
+      date: '2026-11-28',
+      financialYear: '2026-27',
+      plan: 'AIRA Pro',
+      currency: 'USD',
+      totalAmount: 19.99,
+      taxableBase: 19.99,
+      gstAmount: 0,
+      posBasis: 'EXPORT_OUTSIDE_INDIA',
+      sacCode: '998315',
+      supplierName: 'VIREXA AI VENTURES PRIVATE LIMITED',
+      customerName: 'José François Müller',
+      customerAddress: longAddr,
+      placeOfSupply: 'DE',
+      status: 'Paid',
+      isSandbox: true
+    });
+    const latinText = invBuf.toString('latin1');
+    assert.ok(latinText.startsWith('%PDF-1.4'));
+    assert.ok(latinText.includes('%%EOF'));
+    assert.ok(latinText.includes('WinAnsiEncoding'), 'PDF fonts must declare WinAnsiEncoding for international Latin characters');
+    assert.ok(latinText.includes('Jos\xe9 Fran\xe7ois M\xfcller'), 'International diacritics must render as WinAnsi instead of space-stripped blanks');
+    assert.match(latinText, /\/Count [2-9]\d*/, 'Long international billing address must paginate cleanly across multiple A4 pages');
   });
 });

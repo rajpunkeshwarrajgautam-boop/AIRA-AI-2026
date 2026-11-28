@@ -119,6 +119,18 @@ export interface StandardChatReservation {
   remainingMonthly: number;
 }
 
+export interface SavedBusinessBillingSnapshot {
+  legalName: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  stateCode: string | null;
+  postalCode: string | null;
+  country: string | null;
+  customerGstin: string | null;
+  taxId: string | null;
+}
+
 export interface BillingTaxProfile {
   accountType: 'individual' | 'business';
   legalName: string | null;
@@ -133,6 +145,8 @@ export interface BillingTaxProfile {
   taxId: string | null;
   gstinValidatedAt: number | null;
   isB2b: boolean;
+  hasSavedBusinessProfile?: boolean;
+  savedBusinessProfile?: SavedBusinessBillingSnapshot | null;
 }
 
 export interface BillingTaxProfileInput {
@@ -146,6 +160,7 @@ export interface BillingTaxProfileInput {
   country?: string;
   customerGstin?: string;
   taxId?: string;
+  clearSavedBusinessDetails?: boolean;
 }
 
 export class CommercialBillingService {
@@ -1350,20 +1365,39 @@ export class CommercialBillingService {
     const resolvedStateCode = isIndia
       ? (stateNorm !== 'UNKNOWN' ? stateNorm : null)
       : (rawState ? String(rawState).trim().slice(0, 64) : null);
+    const normalizeSavedBiz = (raw: any): SavedBusinessBillingSnapshot | null => {
+      if (!raw || typeof raw !== 'object') return null;
+      const snap: SavedBusinessBillingSnapshot = {
+        legalName: typeof raw.legalName === 'string' && raw.legalName.trim() ? raw.legalName.trim() : null,
+        addressLine1: typeof raw.addressLine1 === 'string' && raw.addressLine1.trim() ? raw.addressLine1.trim() : null,
+        addressLine2: typeof raw.addressLine2 === 'string' && raw.addressLine2.trim() ? raw.addressLine2.trim() : null,
+        city: typeof raw.city === 'string' && raw.city.trim() ? raw.city.trim() : null,
+        stateCode: typeof raw.stateCode === 'string' && raw.stateCode.trim() ? raw.stateCode.trim() : null,
+        postalCode: typeof raw.postalCode === 'string' && raw.postalCode.trim() ? raw.postalCode.trim() : null,
+        country: typeof raw.country === 'string' && raw.country.trim() ? raw.country.trim().toUpperCase() : null,
+        customerGstin: typeof raw.customerGstin === 'string' && raw.customerGstin.trim() ? raw.customerGstin.trim().toUpperCase() : null,
+        taxId: typeof raw.taxId === 'string' && raw.taxId.trim() ? raw.taxId.trim() : null
+      };
+      return Object.values(snap).some(Boolean) ? snap : null;
+    };
+
     const jurisdiction = isIndia && resolvedStateCode ? taxDeterminationService.getJurisdiction(resolvedStateCode) : undefined;
-    const gstin = (cust.customer_gstin || taxInfo.gstin || null) as string | null;
-    const validatedGstin = Boolean(gstin && validateGstin(gstin).valid);
-    const taxId = typeof taxInfo.taxId === 'string' && taxInfo.taxId.trim()
+    const rawGstin = (cust.customer_gstin || taxInfo.gstin || null) as string | null;
+    const validatedRawGstin = Boolean(rawGstin && validateGstin(rawGstin).valid);
+    const rawTaxId = typeof taxInfo.taxId === 'string' && taxInfo.taxId.trim()
       ? taxInfo.taxId.trim().slice(0, 64)
-      : (validatedGstin ? String(gstin).toUpperCase() : null);
+      : (validatedRawGstin ? String(rawGstin).toUpperCase() : null);
+
     const accountType: 'individual' | 'business' =
-      validatedGstin
-        ? 'business'
-        : taxInfo.accountType === 'business'
+      taxInfo.accountType === 'individual'
+        ? 'individual'
+        : validatedRawGstin || taxInfo.accountType === 'business' || Boolean(!isIndia && rawTaxId)
           ? 'business'
-          : taxInfo.accountType === 'individual'
-            ? 'individual'
-            : (Boolean(!isIndia && taxId) ? 'business' : 'individual');
+          : 'individual';
+
+    const effectiveGstin = accountType === 'individual' ? null : (rawGstin ? String(rawGstin).toUpperCase() : null);
+    const effectiveTaxId = accountType === 'individual' ? null : rawTaxId;
+    const savedBusinessProfile = normalizeSavedBiz(taxInfo.savedBusiness);
 
     return {
       accountType,
@@ -1375,10 +1409,12 @@ export class CommercialBillingService {
       stateName: isIndia ? (jurisdiction?.name || null) : resolvedStateCode,
       postalCode: cust.billing_postal_code || taxInfo.postalCode || null,
       country,
-      customerGstin: gstin ? String(gstin).toUpperCase() : null,
-      taxId,
-      gstinValidatedAt: cust.gstin_validated_at ? Number(cust.gstin_validated_at) : null,
-      isB2b: Boolean(validatedGstin || (!isIndia && accountType === 'business'))
+      customerGstin: effectiveGstin,
+      taxId: effectiveTaxId,
+      gstinValidatedAt: accountType === 'individual' ? null : (cust.gstin_validated_at ? Number(cust.gstin_validated_at) : null),
+      isB2b: accountType === 'business' && Boolean((effectiveGstin && validateGstin(effectiveGstin).valid) || !isIndia),
+      hasSavedBusinessProfile: Boolean(savedBusinessProfile),
+      savedBusinessProfile
     };
   }
 
@@ -1451,44 +1487,143 @@ export class CommercialBillingService {
       return t ? t.slice(0, maxLen) : null;
     };
 
-    const legalName = input.legalName !== undefined
-      ? cleanOpt(input.legalName, 255)
-      : (custRow?.billing_legal_name ?? custRow?.name ?? null);
-    const addressLine1 = input.addressLine1 !== undefined
-      ? cleanOpt(input.addressLine1, 255)
-      : (custRow?.billing_address_line1 ?? null);
-    const addressLine2 = input.addressLine2 !== undefined
-      ? cleanOpt(input.addressLine2, 255)
-      : (custRow?.billing_address_line2 ?? null);
-    const city = input.city !== undefined
-      ? cleanOpt(input.city, 120)
-      : (custRow?.billing_city ?? null);
-    const postalCode = input.postalCode !== undefined
-      ? cleanOpt(input.postalCode, 16)
-      : (custRow?.billing_postal_code ?? null);
+    const normalizeSavedBiz = (raw: any): SavedBusinessBillingSnapshot | null => {
+      if (!raw || typeof raw !== 'object') return null;
+      const snap: SavedBusinessBillingSnapshot = {
+        legalName: cleanOpt(raw.legalName, 255),
+        addressLine1: cleanOpt(raw.addressLine1, 255),
+        addressLine2: cleanOpt(raw.addressLine2, 255),
+        city: cleanOpt(raw.city, 120),
+        stateCode: cleanOpt(raw.stateCode, 64),
+        postalCode: cleanOpt(raw.postalCode, 16),
+        country: typeof raw.country === 'string' && raw.country.trim() ? raw.country.trim().toUpperCase().slice(0, 8) : null,
+        customerGstin: typeof raw.customerGstin === 'string' && raw.customerGstin.trim() ? raw.customerGstin.trim().toUpperCase().slice(0, 15) : null,
+        taxId: cleanOpt(raw.taxId, 64)
+      };
+      return Object.values(snap).some(Boolean) ? snap : null;
+    };
 
-    let effectiveGstin: string | null = validatedGstin;
-    let effectiveGstinValidatedAt: number | null = gstinValidatedAt;
-    if (input.customerGstin === undefined) {
-      const prevGstin = typeof custRow?.customer_gstin === 'string' ? custRow.customer_gstin.trim().toUpperCase() : null;
-      if (isIndia && prevGstin && resolvedStateCode && prevGstin.slice(0, 2) !== resolvedStateCode) {
-        throw new Error(
-          `VALIDATION_ERROR: Saved B2B GSTIN prefix '${prevGstin.slice(0, 2)}' does not match updated billing state '${resolvedStateCode}'. Clear or update GSTIN to switch states.`
-        );
-      }
-      effectiveGstin = prevGstin;
-      effectiveGstinValidatedAt = prevGstin ? (Number(custRow?.gstin_validated_at || 0) || now) : null;
+    const existingSavedBiz = normalizeSavedBiz(prevTaxInfo.savedBusiness);
+    const prevGstin = typeof custRow?.customer_gstin === 'string' && custRow.customer_gstin.trim()
+      ? custRow.customer_gstin.trim().toUpperCase()
+      : (typeof prevTaxInfo.gstin === 'string' && prevTaxInfo.gstin.trim() ? prevTaxInfo.gstin.trim().toUpperCase() : null);
+    const prevTaxId = typeof prevTaxInfo.taxId === 'string' && prevTaxInfo.taxId.trim() ? prevTaxInfo.taxId.trim() : null;
+    const wasBusiness = prevTaxInfo.accountType === 'business' || Boolean(prevGstin) || Boolean(prevTaxId);
+
+    const requestedAccountType: 'individual' | 'business' | undefined = input.accountType;
+    const effectiveAccountType: 'individual' | 'business' = requestedAccountType === 'business'
+      ? 'business'
+      : requestedAccountType === 'individual'
+        ? 'individual'
+        : (validatedGstin || (prevTaxInfo.accountType === 'business' && (prevGstin || !isIndia)) ? 'business' : 'individual');
+
+    // Non-destructively capture previous business profile before switching to Individual.
+    let savedBizSnapshot: SavedBusinessBillingSnapshot | null = existingSavedBiz;
+    if (!input.clearSavedBusinessDetails && effectiveAccountType === 'individual' && wasBusiness) {
+      savedBizSnapshot = normalizeSavedBiz({
+        legalName: prevTaxInfo.legalName ?? custRow?.billing_legal_name,
+        addressLine1: prevTaxInfo.addressLine1 ?? custRow?.billing_address_line1,
+        addressLine2: prevTaxInfo.addressLine2 ?? custRow?.billing_address_line2,
+        city: prevTaxInfo.city ?? custRow?.billing_city,
+        stateCode: prevTaxInfo.stateCode ?? custRow?.billing_state_code,
+        postalCode: prevTaxInfo.postalCode ?? custRow?.billing_postal_code,
+        country: prevTaxInfo.country ?? custRow?.billing_country,
+        customerGstin: prevGstin,
+        taxId: prevTaxId ?? prevGstin
+      }) ?? existingSavedBiz;
     }
 
-    const effectiveTaxId = input.taxId !== undefined
-      ? (rawTaxId ? rawTaxId.slice(0, 64) : null)
-      : (typeof prevTaxInfo.taxId === 'string' ? prevTaxInfo.taxId : (effectiveGstin || null));
+    const switchingBackToBusiness =
+      effectiveAccountType === 'business' &&
+      prevTaxInfo.accountType === 'individual' &&
+      savedBizSnapshot !== null &&
+      !input.clearSavedBusinessDetails;
 
-    const effectiveAccountType: 'individual' | 'business' = input.accountType === 'business'
-      ? 'business'
-      : input.accountType === 'individual'
-        ? (effectiveGstin ? 'business' : 'individual')
-        : (effectiveGstin || (prevTaxInfo.accountType === 'business' && !isIndia && effectiveTaxId) ? 'business' : (prevTaxInfo.accountType === 'business' ? 'business' : 'individual'));
+    const legalName = input.legalName !== undefined
+      ? cleanOpt(input.legalName, 255)
+      : (switchingBackToBusiness && savedBizSnapshot?.legalName
+          ? savedBizSnapshot.legalName
+          : (custRow?.billing_legal_name ?? custRow?.name ?? null));
+    const addressLine1 = input.addressLine1 !== undefined
+      ? cleanOpt(input.addressLine1, 255)
+      : (switchingBackToBusiness && savedBizSnapshot?.addressLine1
+          ? savedBizSnapshot.addressLine1
+          : (custRow?.billing_address_line1 ?? null));
+    const addressLine2 = input.addressLine2 !== undefined
+      ? cleanOpt(input.addressLine2, 255)
+      : (switchingBackToBusiness && savedBizSnapshot?.addressLine2
+          ? savedBizSnapshot.addressLine2
+          : (custRow?.billing_address_line2 ?? null));
+    const city = input.city !== undefined
+      ? cleanOpt(input.city, 120)
+      : (switchingBackToBusiness && savedBizSnapshot?.city
+          ? savedBizSnapshot.city
+          : (custRow?.billing_city ?? null));
+    const postalCode = input.postalCode !== undefined
+      ? cleanOpt(input.postalCode, 16)
+      : (switchingBackToBusiness && savedBizSnapshot?.postalCode
+          ? savedBizSnapshot.postalCode
+          : (custRow?.billing_postal_code ?? null));
+
+    let effectiveGstin: string | null = null;
+    let effectiveGstinValidatedAt: number | null = null;
+    let effectiveTaxId: string | null = null;
+
+    if (effectiveAccountType === 'business') {
+      effectiveGstin = validatedGstin;
+      effectiveGstinValidatedAt = gstinValidatedAt;
+      if (input.customerGstin === undefined) {
+        const candidateGstin = prevGstin || (switchingBackToBusiness ? savedBizSnapshot?.customerGstin || null : null);
+        if (isIndia && candidateGstin && resolvedStateCode && candidateGstin.slice(0, 2) !== resolvedStateCode) {
+          throw new Error(
+            `VALIDATION_ERROR: Saved B2B GSTIN prefix '${candidateGstin.slice(0, 2)}' does not match updated billing state '${resolvedStateCode}'. Clear or update GSTIN to switch states.`
+          );
+        }
+        effectiveGstin = candidateGstin;
+        effectiveGstinValidatedAt = candidateGstin ? (Number(custRow?.gstin_validated_at || 0) || now) : null;
+      }
+
+      effectiveTaxId = input.taxId !== undefined
+        ? (rawTaxId ? rawTaxId.slice(0, 64) : null)
+        : (prevTaxId || (switchingBackToBusiness ? savedBizSnapshot?.taxId || null : null) || effectiveGstin || null);
+
+      if (!input.clearSavedBusinessDetails) {
+        savedBizSnapshot = normalizeSavedBiz({
+          legalName,
+          addressLine1,
+          addressLine2,
+          city,
+          stateCode: resolvedStateCode,
+          postalCode,
+          country: cleanCountry,
+          customerGstin: effectiveGstin,
+          taxId: effectiveTaxId
+        });
+      }
+    }
+
+    if (input.clearSavedBusinessDetails) {
+      savedBizSnapshot = null;
+    }
+
+    const nextTaxInfo: Record<string, any> = {
+      ...prevTaxInfo,
+      accountType: effectiveAccountType,
+      legalName,
+      addressLine1,
+      addressLine2,
+      city,
+      stateCode: resolvedStateCode,
+      postalCode,
+      country: cleanCountry,
+      gstin: effectiveGstin,
+      taxId: effectiveTaxId
+    };
+    if (savedBizSnapshot) {
+      nextTaxInfo.savedBusiness = savedBizSnapshot;
+    } else {
+      delete nextTaxInfo.savedBusiness;
+    }
 
     await executor('billing_customers').where({ id: custRow.id }).update({
       billing_legal_name: legalName,
@@ -1500,19 +1635,7 @@ export class CommercialBillingService {
       billing_country: cleanCountry,
       customer_gstin: isIndia ? effectiveGstin : (effectiveGstin || null),
       gstin_validated_at: effectiveGstinValidatedAt,
-      tax_info: JSON.stringify({
-        ...prevTaxInfo,
-        accountType: effectiveAccountType,
-        legalName,
-        addressLine1,
-        addressLine2,
-        city,
-        stateCode: resolvedStateCode,
-        postalCode,
-        country: cleanCountry,
-        gstin: effectiveGstin,
-        taxId: effectiveTaxId
-      }),
+      tax_info: JSON.stringify(nextTaxInfo),
       updated_at: now
     });
 
@@ -1530,7 +1653,9 @@ export class CommercialBillingService {
       customerGstin: effectiveGstin,
       taxId: effectiveTaxId,
       gstinValidatedAt: effectiveGstinValidatedAt,
-      isB2b: Boolean(effectiveGstin || (!isIndia && effectiveAccountType === 'business'))
+      isB2b: Boolean(effectiveAccountType === 'business' && (effectiveGstin || !isIndia)),
+      hasSavedBusinessProfile: Boolean(savedBizSnapshot),
+      savedBusinessProfile: savedBizSnapshot
     };
   }
 }

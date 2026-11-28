@@ -160,7 +160,19 @@ export function startTestServer(port = 4173, initialState?: Partial<TestServerSt
       res.end(JSON.stringify({
         checkoutAvailable: true,
         billingStatus: 'OPERATIONAL',
+        internationalUsdEnabled: true,
         supportedGateways: ['cashfree', 'razorpay'],
+        countries: [
+          { code: 'IN', name: 'India', defaultCurrency: 'INR', regionLabel: 'South Asia' },
+          { code: 'US', name: 'United States', defaultCurrency: 'USD', regionLabel: 'North America' },
+          { code: 'GB', name: 'United Kingdom', defaultCurrency: 'USD', regionLabel: 'Europe' }
+        ],
+        gstJurisdictions: [
+          { code: '09', name: 'Uttar Pradesh' },
+          { code: '27', name: 'Maharashtra' },
+          { code: '07', name: 'Delhi' },
+          { code: '29', name: 'Karnataka' }
+        ],
         plans: [
           { id: 'plus', name: 'AIRA Plus', priceInr: 399, priceUsd: 7.99 },
           { id: 'pro', name: 'AIRA Pro', priceInr: 999, priceUsd: 19.99 }
@@ -176,7 +188,14 @@ export function startTestServer(port = 4173, initialState?: Partial<TestServerSt
         currency: 'INR',
         credits: state.credits,
         activeSubscription: null,
-        subscriptions: state.subscriptions
+        subscriptions: state.subscriptions,
+        billingProfile: {
+          country: 'IN',
+          accountType: 'individual',
+          stateCode: '09',
+          stateName: 'Uttar Pradesh',
+          isB2b: false
+        }
       }));
       return;
     }

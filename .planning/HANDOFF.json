@@ -1,6 +1,6 @@
 {
   "schema": "handoff/v2",
-  "updated_at": "2026-11-28T20:42:00+05:30",
+  "updated_at": "2026-11-28T22:45:00+05:30",
   "phase": "GLOBAL_PAYMENTS_BILLING_V2_DRAFT_PR_READY",
   "staging_baseline": {
     "runtime_commit": "5da4a4d1c0987de68e75eaddd24d60fab7c51264",
@@ -31,16 +31,23 @@
     }
   },
   "knowledge_graph": {
-    "nodes": 52,
-    "edges": 64,
+    "nodes": 53,
+    "edges": 65,
     "json": ".planning/graphs/payment_billing_knowledge_graph.json",
     "manifest": ".planning/graphs/manifest.json",
-    "sha256": "3399aa9ef44e1886b33bdfaf01890ab516f0c84f040c8101bc854e8b215e4904"
+    "sha256": "02e7cc90bb6ed84663ebe143d550d0a4c2fac45e7c2ac8b31c84e827f0f67c49"
   },
   "production_hold": {
     "pr_215": "STRICT_HOLD",
     "prod_branch": "prod-release",
-    "external_blockers": ["U1_GST_AMENDMENT", "U2_CA_SIGNOFF", "U3_ZERO_INVOICES", "U4_LIVE_MERCHANT_GO_LIVE", "U5_EMAIL_TRANSPORT", "U6_RAZORPAY_INTL_ACTIVATION"]
+    "external_blockers": [
+      "U1_GST_AMENDMENT",
+      "U2_CA_SIGNOFF",
+      "U3_ZERO_INVOICES",
+      "U4_LIVE_MERCHANT_GO_LIVE",
+      "U5_EMAIL_TRANSPORT",
+      "U6_RAZORPAY_INTL_ACTIVATION"
+    ]
   },
   "next_authorized_action": "Review Draft PR targeting staging and verify remote CI checks before any staging merge decision."
 }

@@ -210,7 +210,7 @@ If the production environment lacks verified UP 09 GSTIN configuration, approved
 ---
 
 ## 7. Global Payments & Billing V2 Increment (`SPEC-GLOBAL-BILLING-V2-2026-01`)
-- **Graph Version:** `2.4.0` (`52` nodes, `64` edges, `SHA-256: 3399aa9ef44e1886b33bdfaf01890ab516f0c84f040c8101bc854e8b215e4904`)
+- **Graph Version:** `2.5.0` (`53` nodes, `65` edges, `SHA-256: 02e7cc90bb6ed84663ebe143d550d0a4c2fac45e7c2ac8b31c84e827f0f67c49`)
 - **Staging Baseline:** `5da4a4d1c0987de68e75eaddd24d60fab7c51264` (`dpl_4gu8wqpQssa6rFp82s5PYKzpVmGF`)
-- **New Nodes Added (`12`):** `spec_global_billing_v2`, `srv_global_billing_catalog`, `srv_pdf_document_renderer`, `rt_billing_profile`, `rt_billing_payment_methods`, `rt_billing_invoice_pdf`, `rt_billing_invoice_email`, `ui_pricing_modal`, `ui_settings_modal`, `blk_u5_transactional_email`, `blk_u6_razorpay_intl_activation`, `audit_legacy_wallet_delta`.
-- **New Edges Added (`12`):** Specification contracts, USD Razorpay-only / Cashfree fail-closed routing, `%PDF-1.4` binary generation, masked `PaymentMethodSummary` extraction, `/invoices/:n/email` `503 EMAIL_DELIVERY_NOT_CONFIGURED` blocker, and staging `38,400` vs `38,300` (`+100` legacy fixture) reconciliation audit.
+- **New Nodes Added (`13`):** `spec_global_billing_v2`, `srv_global_billing_catalog`, `srv_pdf_document_renderer`, `rt_billing_profile`, `rt_billing_payment_methods`, `rt_billing_invoice_pdf`, `rt_billing_invoice_email`, `ui_pricing_modal`, `ui_settings_modal`, `ui_account_billing_modal`, `blk_u5_transactional_email`, `blk_u6_razorpay_intl_activation`, `audit_legacy_wallet_delta`.
+- **New Edges Added (`13`):** Specification contracts, USD Razorpay-only / Cashfree fail-closed routing, multi-page WinAnsi `%PDF-1.4` binary generation, masked `PaymentMethodSummary` extraction, `/invoices/:n/email` `503 EMAIL_DELIVERY_NOT_CONFIGURED` blocker, AccountBillingModal endpoint consumption, and staging `38,400` vs `38,300` (`+100` legacy fixture) reconciliation audit.

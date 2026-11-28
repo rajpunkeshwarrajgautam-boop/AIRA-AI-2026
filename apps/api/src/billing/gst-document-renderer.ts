@@ -53,6 +53,8 @@ export interface GstInvoiceRenderInput {
   placeOfSupplyName?: string;
   posBasis?: string;
   taxComplianceStatus?: string;
+  lutNumber?: string;
+  lutApproved?: boolean;
   status: string;
   isSandbox?: boolean;
   billingPeriodStart?: number;
@@ -157,6 +159,8 @@ function buildTaxRowsHtml(params: {
   currency?: string;
   taxComplianceStatus?: string;
   posBasis?: string;
+  lutNumber?: string;
+  lutApproved?: boolean;
   taxRate?: number;
   cgstAmount?: number;
   cgstRate?: number;
@@ -170,13 +174,17 @@ function buildTaxRowsHtml(params: {
   placeOfSupply?: string;
 }): string {
   const { symbol } = params;
-  const isExportZeroRated = Boolean(
-    (params.currency && params.currency.toUpperCase() !== 'INR' && Number(params.gstAmount ?? 0) === 0) ||
+  const isExportSupply = params.posBasis === 'EXPORT_OUTSIDE_INDIA';
+  const isVerifiedLutExport = isExportSupply && (
     params.taxComplianceStatus === 'COMPLIANT_ZERO_RATED_EXPORT' ||
-    params.posBasis === 'EXPORT_OUTSIDE_INDIA'
+    Boolean(params.lutApproved && params.lutNumber)
   );
-  if (isExportZeroRated && Number(params.gstAmount ?? 0) === 0) {
-    return `<tr><td>Zero-Rated Export of Services (IGST Act Sec 2(6) / LUT)</td><td class="num">${symbol}0.00</td></tr>`;
+  if (isExportSupply && Number(params.gstAmount ?? 0) === 0) {
+    if (isVerifiedLutExport) {
+      const lutSuffix = params.lutNumber ? ` (${escapeHtml(params.lutNumber)})` : '';
+      return `<tr><td>Zero-Rated Export of Services (IGST Act Sec 2(6) / LUT${lutSuffix})</td><td class="num">${symbol}0.00</td></tr>`;
+    }
+    return `<tr><td>Export of Services (Outside India &mdash; Tax/LUT Pending Verification)</td><td class="num">${symbol}0.00</td></tr>`;
   }
   if (params.cgstAmount !== undefined && (params.utgstRate !== undefined || (params.utgstAmount !== undefined && params.utgstAmount > 0))) {
     return [
@@ -252,6 +260,8 @@ export function buildInvoiceHtmlDocument(inv: GstInvoiceRenderInput): string {
     currency: inv.currency,
     taxComplianceStatus: inv.taxComplianceStatus,
     posBasis: inv.posBasis,
+    lutNumber: inv.lutNumber,
+    lutApproved: inv.lutApproved,
     taxRate: inv.taxRate,
     cgstAmount: inv.cgstAmount,
     cgstRate: inv.cgstRate,
@@ -264,14 +274,14 @@ export function buildInvoiceHtmlDocument(inv: GstInvoiceRenderInput): string {
     gstAmount: inv.gstAmount,
     placeOfSupply: inv.placeOfSupply
   });
-  const isExportDoc = Boolean(
-    inv.currency?.toUpperCase() !== 'INR' ||
+  const isExportDoc = inv.posBasis === 'EXPORT_OUTSIDE_INDIA';
+  const isVerifiedLutExport = isExportDoc && (
     inv.taxComplianceStatus === 'COMPLIANT_ZERO_RATED_EXPORT' ||
-    inv.posBasis === 'EXPORT_OUTSIDE_INDIA'
+    Boolean(inv.lutApproved && inv.lutNumber)
   );
   const docTitle = isSandboxDoc
-    ? (isExportDoc ? 'Sandbox Export Invoice' : 'Sandbox Tax Invoice')
-    : (isExportDoc ? 'Commercial Export Invoice' : 'Tax Invoice');
+    ? (isExportDoc ? 'Sandbox Export Receipt' : 'Sandbox Tax Invoice')
+    : (isExportDoc ? (isVerifiedLutExport ? 'Commercial Export Invoice' : 'Provisional Export Statement') : 'Tax Invoice');
 
   const bannerHtml = isVoided
     ? `<div class="banner-voided">VOIDED DOCUMENT — NOT VALID FOR INPUT TAX CREDIT${inv.voidReason ? ` (${escapeHtml(inv.voidReason)})` : ''}</div>`
@@ -348,7 +358,7 @@ export function buildInvoiceHtmlDocument(inv: GstInvoiceRenderInput): string {
   </table>
 
   <div class="foot">
-    <div><strong>Compliance Status:</strong> ${escapeHtml(inv.taxComplianceStatus || 'COMPLIANT')} &middot; ${isExportDoc ? 'Zero-rated export of services under LUT (IGST Act Sec 2(6) &amp; Sec 16).' : 'Prices include applicable GST.'}</div>
+    <div><strong>Compliance Status:</strong> ${escapeHtml(inv.taxComplianceStatus || 'COMPLIANT')} &middot; ${isVerifiedLutExport ? `Zero-rated export of services under LUT ${escapeHtml(inv.lutNumber || '')} (IGST Act Sec 2(6) &amp; Sec 16).` : (isExportDoc ? 'Export outside India; LUT verification pending before claiming zero-rated IGST Sec 2(6) status.' : 'Prices include applicable GST.')}</div>
     <div>Printable A4 HTML tax document (use browser Print &rarr; Save as PDF for local archival).</div>
     <div>Notice: Computer-generated document. Electronic signature / authentication under IT Act &amp; CGST Rule 46 requires separate authorized finance/sign-off (U2) before commercial release.</div>
   </div>

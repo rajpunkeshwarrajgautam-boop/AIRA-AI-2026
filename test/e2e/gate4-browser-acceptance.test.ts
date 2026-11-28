@@ -566,7 +566,7 @@ describe('Gate 4 Wave 3: Independent Browser Acceptance Test Suite', () => {
 
       // E2E-06: SDK exception must fail-closed cleanly, display error to user, and NOT trigger automatic Strategy B redirect
       assert.strictEqual(navigatedToHostedCheckout, false, 'Must not execute automatic background redirect when SDK throws synchronously (E2E-06)');
-      const notice = await page.locator('.text-orange-300').textContent();
+      const notice = await page.locator('[data-testid="pricing-checkout-notice"]').textContent();
       assert.ok(notice?.includes('SDK_CRASH') || notice?.includes('failed') || notice?.includes('try again'), 'Must display failure notice');
 
       await page.close();
@@ -606,7 +606,7 @@ describe('Gate 4 Wave 3: Independent Browser Acceptance Test Suite', () => {
       // E2E-06: SDK rejection must fail-closed cleanly without unhandled rejection and without background redirect
       assert.strictEqual(navigatedToHostedCheckout, false, 'Must not execute automatic background redirect on rejected promise (E2E-06)');
       assert.strictEqual(errors.length, 0, 'Must handle promise rejection without unhandled page errors');
-      const notice = await page.locator('.text-orange-300').textContent();
+      const notice = await page.locator('[data-testid="pricing-checkout-notice"]').textContent();
       assert.ok(notice?.includes('USER_DISMISSED') || notice?.includes('failed') || notice?.includes('try again'), 'Must display dismissal notice');
 
       await page.close();
@@ -1021,7 +1021,7 @@ describe('Gate 4 Wave 3: Independent Browser Acceptance Test Suite', () => {
       await page2.locator('button:has-text("Upgrade to Pro")').click();
       await page2.waitForTimeout(1000);
 
-      const notice = await page2.locator('.text-orange-300').textContent();
+      const notice = await page2.locator('[data-testid="pricing-checkout-notice"]').textContent();
       assert.ok(notice?.includes('in progress'), 'Tab 2 must display concurrent checkout notice');
 
       serverState.customerLeaseActive = false;
@@ -1368,7 +1368,7 @@ describe('Gate 4 Wave 3: Independent Browser Acceptance Test Suite', () => {
       await page.locator('button:has-text("Upgrade to Pro")').click();
       await page.waitForTimeout(800);
 
-      const notice = await page.locator('.text-orange-300').textContent();
+      const notice = await page.locator('[data-testid="pricing-checkout-notice"]').textContent();
       assert.ok(notice?.includes('Card authorization failed'), 'Must display failure error message');
 
       await page.close();

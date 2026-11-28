@@ -226,6 +226,7 @@ export interface TaxDeterminationResult {
   customerCountry: string;
   isExport: boolean;
   lutNumber?: string;
+  lutApproved: boolean;
   registrationMode: GstRegistrationMode;
   taxComplianceStatus: TaxComplianceStatus;
 }
@@ -649,14 +650,25 @@ export class TaxDeterminationService {
     const taxRateVersion = (input.taxRateVersion || config.rateVersion).trim();
 
     const lutNumber = (input.lutNumber || process.env.AIRA_LUT_NUMBER || '').trim() || undefined;
-    const lutAvailable = Boolean(
-      input.lutAvailable !== undefined
+    const lutApproved = Boolean(
+      lutNumber &&
+      (input.lutAvailable !== undefined
         ? input.lutAvailable
-        : (Boolean(lutNumber) || process.env.AIRA_LUT_AVAILABLE === 'true' ||
-            (!isProdRuntime && process.env.AIRA_LUT_AVAILABLE !== 'false'))
+        : process.env.AIRA_LUT_AVAILABLE !== 'false')
     );
+    const allowProvisionalZeroTaxExport = Boolean(
+      !isProdRuntime &&
+      (!supplierGstin || !supplierGstinVerified) &&
+      input.lutAvailable !== false &&
+      process.env.AIRA_LUT_AVAILABLE !== 'false'
+    );
+    const lutAvailable = lutApproved;
 
-    const isExport = customerCountry !== 'IN' && !isINR;
+    const isVerifiedForeignCountry =
+      /^[A-Z]{2}$/.test(customerCountry) &&
+      customerCountry !== 'IN' &&
+      customerCountry !== 'UNKNOWN';
+    const isExport = isVerifiedForeignCountry && !isINR;
 
     // Validate optional recipient B2B GSTIN strictly if supplied
     let normalizedCustomerGstin: string | undefined;
@@ -708,6 +720,7 @@ export class TaxDeterminationService {
         customerCountry,
         isExport,
         lutNumber,
+        lutApproved: false,
         registrationMode,
         taxComplianceStatus: 'NON_TAX_RECEIPT'
       };
@@ -741,13 +754,17 @@ export class TaxDeterminationService {
       placeOfSupply = customerCountry || 'INTERNATIONAL';
       placeOfSupplyName = placeOfSupply;
       posBasis = 'EXPORT_OUTSIDE_INDIA';
-      if (lutAvailable) {
+      if (lutApproved) {
         taxableMinor = totalMinor;
         gstMinor = 0;
         appliedRate = 0;
         if (complianceStatus === 'COMPLIANT') {
           complianceStatus = 'COMPLIANT_ZERO_RATED_EXPORT';
         }
+      } else if (allowProvisionalZeroTaxExport) {
+        taxableMinor = totalMinor;
+        gstMinor = 0;
+        appliedRate = 0;
       } else {
         taxableMinor = Math.round((totalMinor * 10000) / (10000 + rateBps));
         gstMinor = totalMinor - taxableMinor;
@@ -857,6 +874,7 @@ export class TaxDeterminationService {
       customerCountry,
       isExport,
       lutNumber,
+      lutApproved,
       registrationMode,
       taxComplianceStatus: complianceStatus
     };

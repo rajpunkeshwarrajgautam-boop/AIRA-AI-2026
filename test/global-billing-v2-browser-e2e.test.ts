@@ -333,13 +333,24 @@ describe('V2 Browser Acceptance: Global Billing UI, PDF Download, Light/Dark & D
     const pricingTextUsd = await page.locator('[aria-labelledby="aira-pricing-title"]').innerText();
     assert.ok(!pricingTextUsd.includes('GST Provisional Fixture'), 'Pricing modal must never show GST Provisional Fixture');
     assert.ok(!pricingTextUsd.includes('Payment Partner'), 'Global USD checkout must hide Indian Payment Partner selector');
+    assert.ok(!pricingTextUsd.includes('Zero Indian GST complexity'), 'Pricing modal must not contain Zero Indian GST complexity copy');
+    assert.ok(!pricingTextUsd.includes('($3 value)') && !pricingTextUsd.includes('($7.50 value)'), 'Pricing modal must not show arbitrary dollar value marketing tags');
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'pricing-global-usd-desktop-dark.png') });
 
-    // Switch to India (INR) -> verifies Razorpay / Cashfree + Billing State progressive disclosure
+    // Switch to India (INR) -> verifies Razorpay / Cashfree + Billing State progressive disclosure in Light mode
     await page.locator('#pricing-billing-country').selectOption('IN');
     await page.getByRole('button', { name: 'Razorpay' }).waitFor({ state: 'visible', timeout: 5000 });
     await page.evaluate(() => document.documentElement.classList.remove('dark'));
     await page.waitForTimeout(250);
+    const pricingLightStats = await page.evaluate(() => {
+      const dlg = document.querySelector('[aria-labelledby="aira-pricing-title"]');
+      const bg = dlg ? getComputedStyle(dlg).backgroundColor : '';
+      return { bg, text: dlg ? (dlg as HTMLElement).innerText : '' };
+    });
+    assert.ok(!pricingLightStats.text.includes('Payment Partner:'), 'Must use neutral Payment method label');
+    assert.ok(!pricingLightStats.text.includes('09AAMCV4678C1ZV'), 'Must not expose supplier GSTIN as dummy placeholder');
+    const bgMatch = pricingLightStats.bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+    assert.ok(bgMatch && Number(bgMatch[1]) > 220 && Number(bgMatch[2]) > 220 && Number(bgMatch[3]) > 210, `Light mode PricingModal must render AIRA light surface background, got ${pricingLightStats.bg}`);
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'pricing-india-inr-desktop-light.png') });
 
     // Switch to Mobile 390x844 & test Escape dismissal leaves underlying SettingsModal intact
