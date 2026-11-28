@@ -1272,12 +1272,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         {/* Header */}
         <div className="p-4 sm:p-6 md:p-8 border-b border-claude-border-light dark:border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-3 sm:gap-4 bg-claude-surface2-light/50 dark:bg-transparent">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-claude-terracotta/10 border border-claude-terracotta/25 text-claude-accentInk dark:text-orange-400 text-xs font-semibold mb-1.5 sm:mb-2">
-              <Shield className="w-3.5 h-3.5" />
-              AIRA AI 2026 Commercial Plans
-            </div>
-            <h2 id="aira-pricing-title" className="text-xl sm:text-2xl font-bold font-serif text-claude-text-light dark:text-white">Choose Your Intelligence Tier</h2>
-            <p className="text-claude-muted-light dark:text-stone-400 text-xs mt-1">Autonomous cognitive workflows, neural memory, and verifiable audit durability.</p>
+            <h2 id="aira-pricing-title" className="text-xl sm:text-2xl font-bold font-serif text-claude-text-light dark:text-white">Choose your plan</h2>
+            <p className="text-claude-muted-light dark:text-stone-400 text-xs mt-1">Choose the plan that fits your needs. Cancel anytime.</p>
           </div>
 
           <div className="flex items-center justify-between sm:justify-end gap-3">
@@ -1579,7 +1575,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 </div>
                 <div>
                   <label htmlFor="global-b2b-taxid" className="block text-[11px] text-claude-muted-light dark:text-stone-400 mb-1">
-                    Business Tax / VAT / EIN (Optional)
+                    {billingCountry === 'GB' ? 'VAT number (Optional)' : billingCountry === 'US' ? 'EIN or Tax ID (Optional)' : billingCountry === 'CA' ? 'Business Number (Optional)' : billingCountry === 'AU' ? 'ABN (Optional)' : 'Tax ID (Optional)'}
                   </label>
                   <input
                     id="global-b2b-taxid"
@@ -1681,7 +1677,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
             <div className="rounded-xl border border-claude-border-light dark:border-white/10 bg-claude-surface2-light/70 dark:bg-stone-950/60 p-2.5 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-3">
               <div className="flex flex-col sm:flex-row sm:items-center gap-2 flex-1">
                 <label htmlFor="gst-billing-state" className="text-claude-text-light dark:text-stone-300 font-medium whitespace-nowrap">
-                  Billing State / UT * (Place of Supply):
+                  Billing state:
                 </label>
                 <select
                   id="gst-billing-state"
@@ -1741,7 +1737,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 </div>
                 <div>
                   <label htmlFor="gst-b2b-gstin" className="block text-[11px] text-claude-muted-light dark:text-stone-400 mb-1">
-                    15-Char Recipient GSTIN (Optional)
+                    15-Char GSTIN (Optional)
                   </label>
                   <input
                     id="gst-b2b-gstin"

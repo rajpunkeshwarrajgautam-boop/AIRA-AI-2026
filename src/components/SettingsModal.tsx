@@ -1268,14 +1268,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <span>
                           Billing: <span className="text-claude-text-light dark:text-white font-medium">
                             {activePlanId === 'guest'
-                              ? 'Guest Trial (No Billing Active)'
+                              ? 'Guest Trial'
                               : (!usageData?.billingStatus || usageData.billingStatus === 'sandbox_rehearsal' || usageData.billingStatus === 'sandbox')
-                                ? 'Sandbox Mode (Isolated)'
+                                ? 'Sandbox Mode'
                                 : (usageData.billingStatus === 'checkout_disabled')
                                   ? 'Checkout Unavailable'
-                                  : (usageData.billingStatus === 'active' || usageData.billingStatus === 'live')
-                                    ? 'Live Billing Active'
-                                    : usageData.billingStatus.replace(/^Billing:\s*/i, '')}
+                                  : (usageData.billingStatus === 'active_subscribed')
+                                    ? `${usageData.planName || 'Plan'} — Active`
+                                    : (usageData.billingStatus === 'active' || usageData.billingStatus === 'live')
+                                      ? (usageData?.activeSubscription
+                                          ? `${usageData.planName || 'Plan'} — Active`
+                                          : 'Billing Active')
+                                      : usageData.billingStatus.replace(/^Billing:\s*/i, '')}
                           </span>
                         </span>
                       </div>
@@ -1361,11 +1365,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
-                        Allowance Meters & Gauges
+                        Usage
                       </h4>
-                      <span className="text-[10px] text-claude-muted-light dark:text-claude-muted-dark">
-                        Real-time atomic tracking
-                      </span>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1483,7 +1484,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="space-y-3 pt-2">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-semibold text-claude-muted-light dark:text-claude-muted-dark">
-                        Plan Comparison Matrix
+                        Compare plans
                       </h4>
                       {onOpenPricing && (
                         <button
@@ -1491,7 +1492,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClick={onOpenPricing}
                           className="text-xs font-semibold text-claude-accentInk hover:underline"
                         >
-                          Full Pricing Table
+                          View plans
                         </button>
                       )}
                     </div>
@@ -1713,19 +1714,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {!isGuestUser && (
                     <div className="p-4 rounded-xl border border-claude-border-light dark:border-claude-border-dark bg-claude-surface2-light/30 dark:bg-claude-surface2-dark/20 space-y-2.5 text-xs">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2">
                           <CreditCard className="w-4 h-4 text-claude-accentInk shrink-0" />
                           <h4 className="font-semibold text-claude-text-light dark:text-white">Payment methods</h4>
                         </div>
-                        {onOpenPricing && (
-                          <button
-                            type="button"
-                            onClick={onOpenPricing}
-                            className="text-[11px] font-semibold text-claude-accentInk hover:underline"
-                          >
-                            {activePlanId === 'free' ? 'Add via Plan Checkout' : 'Change Plan'}
-                          </button>
-                        )}
                       </div>
                       {Array.isArray(usageData?.paymentMethods) && usageData.paymentMethods.length > 0 ? (
                         <div className="space-y-2">

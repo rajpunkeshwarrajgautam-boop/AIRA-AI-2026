@@ -126,6 +126,34 @@ function wrapLine(text: string, maxChars: number): string[] {
   return lines;
 }
 
+/**
+ * Returns true if the text contains characters that cannot be encoded in WinAnsiEncoding
+ * (Basic Latin + Latin-1 Supplement + WIN_ANSI_EXT_MAP). Detects non-Latin scripts such
+ * as Devanagari (Hindi), Arabic, CJK, etc., which would be corrupted or silently dropped
+ * by sanitizePdfText().
+ */
+export function hasUnsupportedUnicodeContent(text: string): boolean {
+  if (!text) return false;
+  for (const ch of text) {
+    const code = ch.charCodeAt(0);
+    if (code <= 0x7E) continue; // Basic Latin
+    if (code >= 0xA0 && code <= 0xFF) continue; // Latin-1 Supplement
+    if (WIN_ANSI_EXT_MAP[ch] !== undefined) continue; // WIN_ANSI extension
+    // Try NFKD fold — if folded chars are all in-range, still safe
+    const folded = ch.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+    let foldedSafe = folded.length > 0;
+    for (const fc of folded) {
+      const fc0 = fc.charCodeAt(0);
+      if (!((fc0 >= 0x20 && fc0 <= 0x7E) || (fc0 >= 0xA0 && fc0 <= 0xFF))) {
+        foldedSafe = false;
+        break;
+      }
+    }
+    if (!foldedSafe) return true;
+  }
+  return false;
+}
+
 function sanitizeBuyerEmail(email?: string): string | undefined {
   if (!email) return undefined;
   const trimmed = email.trim();
@@ -303,6 +331,17 @@ class PdfCursor {
 }
 
 export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
+  // Guard: reject non-Latin customer text that WinAnsiEncoding cannot represent.
+  const nonLatinFields = [inv.buyerName, inv.buyerAddress, inv.buyerAddressLine2].filter(Boolean) as string[];
+  for (const field of nonLatinFields) {
+    if (hasUnsupportedUnicodeContent(field)) {
+      const err: any = new Error('PDF_UNSUPPORTED_CHARACTERS: Customer name or address contains non-Latin characters that cannot be encoded in WinAnsiEncoding. Use the HTML invoice instead.');
+      err.code = 'PDF_UNSUPPORTED_CHARACTERS';
+      err.htmlAlternativeAvailable = true;
+      throw err;
+    }
+  }
+
   const isSandboxDoc = Boolean(inv.isSandbox);
   const isVoidedDoc = String(inv.documentStatus || '').toUpperCase() === 'VOIDED';
   const currencyPrefix = inv.currency === 'INR' ? 'INR ' : `${inv.currency} `;
@@ -429,6 +468,17 @@ export function buildInvoicePdfBuffer(inv: GstInvoiceRenderInput): Buffer {
 }
 
 export function buildCreditNotePdfBuffer(cn: GstCreditNoteRenderInput): Buffer {
+  // Guard: reject non-Latin customer text that WinAnsiEncoding cannot represent.
+  const nonLatinFields = [cn.buyerName, cn.buyerAddress].filter(Boolean) as string[];
+  for (const field of nonLatinFields) {
+    if (hasUnsupportedUnicodeContent(field)) {
+      const err: any = new Error('PDF_UNSUPPORTED_CHARACTERS: Customer name or address contains non-Latin characters that cannot be encoded in WinAnsiEncoding. Use the HTML invoice instead.');
+      err.code = 'PDF_UNSUPPORTED_CHARACTERS';
+      err.htmlAlternativeAvailable = true;
+      throw err;
+    }
+  }
+
   const isSandboxDoc = Boolean(cn.isSandbox);
   const isVoidedDoc = String(cn.documentStatus || '').toUpperCase() === 'VOIDED';
   const currencyPrefix = cn.currency === 'INR' ? 'INR ' : `${cn.currency} `;

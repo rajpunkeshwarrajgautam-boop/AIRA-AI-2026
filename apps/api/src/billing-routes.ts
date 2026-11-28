@@ -264,8 +264,9 @@ export function createBillingRoutes(): Router {
       const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
       const isRehearsal = isStagingSandboxRehearsalActive();
       const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+      // subscription-aware billingStatus: distinguishes active-subscribed from active-checkout-only
       const billingStatus = isCheckoutAvailable
-        ? 'active'
+        ? (entitlements.subscriptionStatus === 'active' ? 'active_subscribed' : 'active')
         : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
       res.json({
@@ -292,8 +293,9 @@ export function createBillingRoutes(): Router {
       const isCheckoutAvailable = process.env.AIRA_COMMERCIAL_BILLING_ENABLED === 'true';
       const isRehearsal = isStagingSandboxRehearsalActive();
       const isSandbox = isRehearsal || process.env.AIRA_ENABLE_TEST_FULFILLMENT === 'true' || process.env.NODE_ENV === 'test';
+      // subscription-aware billingStatus: distinguishes active-subscribed from active-checkout-only
       const billingStatus = isCheckoutAvailable
-        ? 'active'
+        ? (entitlements.subscriptionStatus === 'active' ? 'active_subscribed' : 'active')
         : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
       const lifecycle = await paymentGatewayService.getCustomerBillingLifecycleState(principal.userId);
@@ -560,7 +562,19 @@ export function createBillingRoutes(): Router {
       const safeFileNum = invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '-');
       const wantsPdf = String(req.query?.format || '').toLowerCase() === 'pdf' || req.path.endsWith('/pdf');
       if (wantsPdf) {
-        const pdf = buildInvoicePdfBuffer(invoice);
+        let pdf: Buffer;
+        try {
+          pdf = buildInvoicePdfBuffer(invoice);
+        } catch (pdfErr: any) {
+          if (pdfErr?.code === 'PDF_UNSUPPORTED_CHARACTERS') {
+            return res.status(422).json({
+              error: 'PDF generation is not available for invoices with non-Latin characters in the customer name or address. Please use the HTML invoice instead.',
+              code: 'PDF_UNSUPPORTED_CHARACTERS',
+              htmlAvailable: true
+            });
+          }
+          throw pdfErr;
+        }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="AIRA-Invoice-${safeFileNum}.pdf"`);
         res.setHeader('Cache-Control', 'no-store');
