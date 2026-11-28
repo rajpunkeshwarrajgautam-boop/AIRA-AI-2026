@@ -611,7 +611,7 @@ describe('Billing Superseded Safety, Cashfree Guard & Security Hardening Regress
     const customTax = taxDeterminationService.determineTax({
       amountMinorUnits: 39900,
       currency: 'INR',
-      placeOfSupply: '07',
+      placeOfSupply: '09',
       taxRate: 0.12,
       taxRateVersion: 'GST_TEST_12_v1'
     } as any);
@@ -629,7 +629,7 @@ describe('Billing Superseded Safety, Cashfree Guard & Security Hardening Regress
       const emptyEnvTax = taxDeterminationService.determineTax({
         amountMinorUnits: 39900,
         currency: 'INR',
-        placeOfSupply: '07'
+        placeOfSupply: '09'
       });
       assert.strictEqual(emptyEnvTax.taxRate, 0.18, 'Empty AIRA_GST_RATE env var must safely default to 18% GST');
     } finally {

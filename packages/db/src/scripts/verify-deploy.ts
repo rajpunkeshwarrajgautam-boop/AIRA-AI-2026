@@ -43,7 +43,10 @@ async function main() {
     'conversation_messages',
     'conversation_search_documents',
     'capacity_permits',
-    'capacity_rate_log'
+    'capacity_rate_log',
+    'billing_invoices',
+    'billing_credit_notes',
+    'billing_document_sequences'
   ];
 
   const missingTables: string[] = [];

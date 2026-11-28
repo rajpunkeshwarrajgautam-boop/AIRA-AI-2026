@@ -430,20 +430,31 @@ if (Should-RunStage 7 "S07_CASHFREE_WEBHOOK") {
 # Stage 8: Registered Supplier Identity, GSTIN & State Verification
 # ----------------------------------------------------------------------------
 if (Should-RunStage 8 "S08_SUPPLIER_GSTIN") {
-    Show-StageHeader 8 "Supplier Identity, GSTIN & Supplier State Verification" "Configure verified Virexa AI Ventures Private Limited GST details (SAC 998431)."
-    Write-Host "  • Expected Supplier Legal Name: Virexa AI Ventures Private Limited"
-    $gstin = (Read-Host "  Enter verified 15-character Supplier GSTIN").Trim().ToUpper()
-    if ($gstin -notmatch "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$") {
-        throw "Invalid 15-character Indian GSTIN format."
+    Show-StageHeader 8 "Supplier Identity, GSTIN & Supplier State Verification" "Configure verified VIREXA AI VENTURES PRIVATE LIMITED GST details (Uttar Pradesh 09, SAC 998315)."
+    Write-Host "  • Expected Supplier Legal Name: VIREXA AI VENTURES PRIVATE LIMITED"
+    Write-Host "  • Expected Supplier GSTIN     : 09AAMCV4678C1ZV (State 09 — Uttar Pradesh, PAN AAMCV4678C)"
+    $gstin = (Read-Host "  Enter verified 15-character Supplier GSTIN [09AAMCV4678C1ZV]").Trim().ToUpper()
+    if (-not $gstin) { $gstin = "09AAMCV4678C1ZV" }
+    if ($gstin -notmatch "^09AAMCV4678C[1-9A-Z]{1}Z[0-9A-Z]{1}$") {
+        throw "Invalid Supplier GSTIN. Must match UP (09) + PAN AAMCV4678C format."
     }
     $stateCode = $gstin.Substring(0, 2)
-    Write-Host "  • Derived State Code: $stateCode (override if supplier state differs)"
-    $supplierState = (Read-Host "  Enter AIRA_SUPPLIER_STATE [$stateCode]").Trim()
+    Write-Host "  • Derived State Code: $stateCode (Uttar Pradesh)"
+    $supplierState = (Read-Host "  Enter AIRA_SUPPLIER_STATE_CODE [$stateCode]").Trim()
     if (-not $supplierState) { $supplierState = $stateCode }
-    if (Confirm-Action "Confirm GST registration certificate has been verified offline before marking AIRA_SUPPLIER_GSTIN_VERIFIED=true?") {
-        Set-VercelProdVar -Name "AIRA_SUPPLIER_NAME"           -Value "Virexa AI Ventures Private Limited"
+    if ($supplierState -ne "09") {
+        throw "AIRA_SUPPLIER_STATE_CODE must be 09 (Uttar Pradesh)."
+    }
+    if (Confirm-Action "Confirm GST certificate & non-core SAC 998315 amendment verification before setting production GST env vars?") {
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_NAME"           -Value "VIREXA AI VENTURES PRIVATE LIMITED"
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_TRADE_NAME"     -Value "VIREXA AI VENTURES"
         Set-VercelProdVar -Name "AIRA_SUPPLIER_GSTIN"          -Value $gstin
-        Set-VercelProdVar -Name "AIRA_SUPPLIER_STATE"          -Value $supplierState
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_STATE_CODE"     -Value $supplierState
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_PAN"            -Value "AAMCV4678C"
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_CIN"            -Value "U58201UP2026PTC250225"
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_ADDRESS"        -Value "2/290, Gomti Nagar, Virat Khand, Lucknow, Uttar Pradesh, 226010, India"
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_EMAIL"          -Value "virexaiventures@gmail.com"
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_SAC_CODE"       -Value "998315"
         Set-VercelProdVar -Name "AIRA_SUPPLIER_GSTIN_VERIFIED" -Value "true"
         Save-StageComplete "S08_SUPPLIER_GSTIN" @{ supplierState = $supplierState }
     } else { return }
@@ -453,11 +464,14 @@ if (Should-RunStage 8 "S08_SUPPLIER_GSTIN") {
 # Stage 9: Finance & Tax Sign-Off Approval
 # ----------------------------------------------------------------------------
 if (Should-RunStage 9 "S09_FINANCE_TAX_SIGNOFF") {
-    Show-StageHeader 9 "Applicable Tax & Finance Sign-Off" "Confirm formal Finance sign-off for SAC 998431 (18% GST) and INR-only launch posture."
-    Write-Host "  • Pricing: Plus ₹399 (₹338.14 base + ₹60.86 GST), Pro ₹999 (₹846.61 base + ₹152.39 GST)."
-    Write-Host "  • Scope  : INR-only launch (AIRA_INTERNATIONAL_USD_BILLING_ENABLED=false)."
-    if (Confirm-Action "Has Finance/Tax owner formally signed off on GST compliance and sequential invoicing?") {
+    Show-StageHeader 9 "Applicable Tax, SAC Amendment & Finance Sign-Off" "Confirm formal CA/Finance sign-off for SAC 998315 (18% GST), U2 attestation, and INR-only launch posture."
+    Write-Host "  • Pricing : Plus ₹399 (₹338.14 base + ₹60.86 GST), Pro ₹999 (₹846.61 base + ₹152.39 GST)."
+    Write-Host "  • Scope   : INR-only launch (AIRA_INTERNATIONAL_USD_BILLING_ENABLED=false), e-Invoice IRN not yet crossed ₹5 Cr threshold."
+    Write-Host "  • GST Portal Prerequisite: Non-core SAC 998315 & bank account amendments approved prior to commercial activation."
+    if (Confirm-Action "Has GST non-core amendment (SAC 998315) completed AND Finance/CA owner formally signed off (U2)?") {
+        Set-VercelProdVar -Name "AIRA_SUPPLIER_SAC_APPROVED"             -Value "true"
         Set-VercelProdVar -Name "AIRA_FINANCE_TAX_SIGNOFF"               -Value "true"
+        Set-VercelProdVar -Name "AIRA_EINVOICE_IRN_REQUIRED"             -Value "false"
         Set-VercelProdVar -Name "AIRA_INTERNATIONAL_USD_BILLING_ENABLED" -Value "false"
         Save-StageComplete "S09_FINANCE_TAX_SIGNOFF"
     } else { return }
@@ -521,13 +535,13 @@ if (Should-RunStage 12 "S12_GITHUB_WORKER_SCHEDULE") {
 }
 
 # ----------------------------------------------------------------------------
-# Stage 13: Production Database Backup & Migration 033-035 Authorization Check
+# Stage 13: Production Database Backup & Migration 033-036 Authorization Check
 # ----------------------------------------------------------------------------
 if (Should-RunStage 13 "S13_PROD_BACKUP_MIGRATION_PREP") {
-    Show-StageHeader 13 "Production Neon Checkpoint & Migration 033-035 Preparation" "Verify current Neon production branches without modifying production data."
+    Show-StageHeader 13 "Production Neon Checkpoint & Migration 033-036 Preparation" "Verify current Neon production branches without modifying production data."
     & neon branches list --project-id $PROD_NEON_PROJECT
     if ($LASTEXITCODE -ne 0) { throw "Failed to inspect Neon production branches for project '$PROD_NEON_PROJECT'." }
-    Write-Host "  • Pending migrations: 033_billing_invoice_sequences, 034_unique_active_subscription_per_customer, 035_subscription_cancellation_and_invoice_outbox"
+    Write-Host "  • Pending migrations: 033_billing_invoice_sequences, 034_unique_active_subscription_per_customer, 035_subscription_cancellation_and_invoice_outbox, 036_gst_invoice_compliance_snapshots"
     Write-Host "  • DO NOT run migrations until explicit GO LIVE authorization is given."
     if (Confirm-Action "Confirm you have verified Neon project '$PROD_NEON_PROJECT' access and recovery checkpoint procedure?") {
         Save-StageComplete "S13_PROD_BACKUP_MIGRATION_PREP"
@@ -555,8 +569,8 @@ if (Should-RunStage 15 "S15_GO_LIVE_HOLD") {
     Show-StageHeader 15 "Final GO LIVE Authorization Gate" "Preparation complete. Production remains on STRICT HOLD."
     Write-Host "  Next Authorized GO LIVE Execution Order:" -ForegroundColor Yellow
     Write-Host "    1. Create Neon recovery checkpoint on $PROD_NEON_PROJECT."
-    Write-Host "    2. Apply migrations 033-035 and run npm run db:verify:deploy."
-    Write-Host "    3. Merge certified PR #215 after explicit GO LIVE approval."
+    Write-Host "    2. Apply migrations 033-036 and run npm run db:verify:deploy."
+    Write-Host "    3. Merge certified PR after explicit GO LIVE approval."
     Write-Host "    4. Verify initial deploy health with billing disabled."
     Write-Host "    5. Enable AIRA_ENABLE_PRODUCTION_FINANCIAL_WORKER=true & GitHub worker schedule."
     Write-Host "    6. Enable AIRA_COMMERCIAL_BILLING_ENABLED=true and run controlled INR smoke test."

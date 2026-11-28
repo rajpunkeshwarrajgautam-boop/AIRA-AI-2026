@@ -985,6 +985,25 @@ test('Scenario 16: Spoofed administrator/developer roles and wildcard scopes (no
 test('Scenario 17: Subscription event duplication & replay (idempotent webhook processing prevents duplicate credits/actions)', async () => {
   const user = `usr_adv_s17_webhook_${suiteTag}`;
   const customer = await commercialBillingService.getOrCreateCustomer(user);
+  const gwSubId = `sub_gw_${suiteTag}`;
+  const now = Date.now();
+  await db('subscriptions').insert({
+    id: `pur_adv_s17_${suiteTag}`,
+    customer_id: customer.id,
+    plan_id: 'plus',
+    price_id: 'price_plus_inr',
+    status: 'active',
+    gateway: 'razorpay',
+    gateway_subscription_id: gwSubId,
+    currency: 'INR',
+    amount_minor_units: 39900,
+    current_period_start: now - 1000,
+    current_period_end: now + 30 * 86400000,
+    cancel_at_period_end: false,
+    metadata: JSON.stringify({ principalId: user, customerId: customer.id }),
+    created_at: now - 1000,
+    updated_at: now - 1000
+  });
   const eventId = `evt_adv_replay_${suiteTag}_${Date.now()}`;
 
   const secret = 'test_webhook_secret_razorpay_2026';

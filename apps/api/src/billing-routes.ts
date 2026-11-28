@@ -1,8 +1,16 @@
 import crypto from 'crypto';
 import { Router, Request, Response } from 'express';
 import { commercialBillingService } from './billing/commercial-billing-service.js';
-import { paymentGatewayService, isTerminalError, validateAndNormalizeIndianPhone, extractRawWebhookBody } from './billing/payment-gateway-service.js';
+import {
+  paymentGatewayService,
+  isTerminalError,
+  validateAndNormalizeIndianPhone,
+  extractRawWebhookBody,
+  isInternationalUsdBillingEnabled
+} from './billing/payment-gateway-service.js';
 import { productionReadinessService } from './billing/production-readiness.js';
+import { taxDeterminationService } from './billing/tax-determination.js';
+import { buildInvoiceHtmlDocument, buildCreditNoteHtmlDocument } from './billing/gst-document-renderer.js';
 import { COMMERCIAL_PLANS } from '../../../packages/contracts/src/commercial.js';
 import { isStagingSandboxRehearsalActive } from './billing/staging-sandbox-rehearsal-guard.js';
 
@@ -218,6 +226,8 @@ export function createBillingRoutes(): Router {
       ? 'active'
       : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
+    const supplierTax = taxDeterminationService.getSupplierTaxConfig();
+
     res.json({
       plans: Object.values(COMMERCIAL_PLANS).map(plan => ({
         ...plan,
@@ -226,6 +236,20 @@ export function createBillingRoutes(): Router {
       topupPacks: [],
       billingStatus,
       checkoutAvailable: isCheckoutAvailable || isRehearsal,
+      internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
+      gstJurisdictions: taxDeterminationService.listSupportedStates(),
+      taxConfigSummary: {
+        supplierLegalName: supplierTax.legalName,
+        supplierTradeName: supplierTax.tradeName,
+        supplierStateCode: supplierTax.stateCode,
+        supplierStateName: supplierTax.stateName,
+        supplierAddress: supplierTax.address,
+        supplierEmail: supplierTax.supportEmail,
+        sacCode: supplierTax.sacCode,
+        sacApproved: supplierTax.sacApproved,
+        financeTaxSignOff: supplierTax.financeTaxSignOff,
+        isProvisionalFixture: !supplierTax.sacApproved || !supplierTax.financeTaxSignOff
+      },
       featuresCertified: true
     });
   });
@@ -249,6 +273,7 @@ export function createBillingRoutes(): Router {
       res.json({
         ...entitlements,
         checkoutAvailable: isCheckoutAvailable || isRehearsal,
+        internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
         billingStatus,
         featuresCertified: true
       });
@@ -274,6 +299,8 @@ export function createBillingRoutes(): Router {
         : (isRehearsal ? 'sandbox_rehearsal' : (isSandbox ? 'sandbox' : 'checkout_disabled'));
 
       const lifecycle = await paymentGatewayService.getCustomerBillingLifecycleState(principal.userId);
+      const taxProfile = await commercialBillingService.getBillingTaxProfile(principal.userId).catch(() => null);
+      const supplierTax = taxDeterminationService.getSupplierTaxConfig();
 
       res.json({
         principalId: principal.userId,
@@ -290,8 +317,17 @@ export function createBillingRoutes(): Router {
         reasoningBoostsUsed: entitlements.reasoningBoostsLimit - entitlements.reasoningBoostsRemaining,
         reasoningBoostLimit: entitlements.reasoningBoostsLimit,
         checkoutAvailable: isCheckoutAvailable || isRehearsal,
+        internationalUsdEnabled: isSandbox || isInternationalUsdBillingEnabled(),
         billingStatus,
         featuresCertified: true,
+        taxProfile,
+        supplierIdentity: {
+          legalName: supplierTax.legalName,
+          tradeName: supplierTax.tradeName,
+          stateCode: supplierTax.stateCode,
+          stateName: supplierTax.stateName,
+          supportEmail: supplierTax.supportEmail
+        },
         activeSubscription: lifecycle.activeSubscription,
         pendingSubscription: lifecycle.pendingSubscription,
         subscriptionLifecycle: (lifecycle as any).latestSubscriptionLifecycle || null
@@ -300,6 +336,96 @@ export function createBillingRoutes(): Router {
       res.status(500).json({ error: err.message || 'Failed to fetch billing summary.' });
     }
   });
+
+  /**
+   * Protected: Get and update subscriber's Indian GST billing state / optional B2B GSTIN.
+   */
+  router.get('/tax-profile', async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    try {
+      const profile = await commercialBillingService.getBillingTaxProfile(principal.userId);
+      res.json({
+        profile,
+        jurisdictions: taxDeterminationService.listSupportedStates()
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to fetch billing tax profile.' });
+    }
+  });
+
+  router.put('/tax-profile', async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    try {
+      const profile = await commercialBillingService.upsertBillingTaxProfile(principal.userId, req.body || {});
+      res.json({ profile });
+    } catch (err: any) {
+      const isValidation = err?.message?.startsWith('VALIDATION_ERROR');
+      res.status(isValidation ? 400 : 500).json({
+        error: isValidation ? 'VALIDATION_ERROR' : 'TAX_PROFILE_UPDATE_FAILED',
+        message: err?.message || 'Failed to update billing tax profile.'
+      });
+    }
+  });
+
+  /**
+   * Protected: Get user's credit note history scoped to authenticated principal.
+   */
+  router.get('/credit-notes', async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    try {
+      const creditNotes = await paymentGatewayService.getCreditNotes(principal.userId);
+      res.json({ creditNotes });
+    } catch (err: any) {
+      res.status(500).json({
+        error: err.message || 'Failed to fetch credit notes.'
+      });
+    }
+  });
+
+  /**
+   * Protected: Download a GST Credit Note printable A4 HTML document owned by authenticated principal.
+   */
+  const handleCreditNoteDownload = async (req: Request, res: Response) => {
+    const principal = req.principal;
+    if (!principal) return res.status(401).json({ error: 'Unauthorized' });
+
+    const rawParam = typeof req.params.creditNoteNumber === 'string'
+      ? req.params.creditNoteNumber
+      : (typeof (req.params as any)[0] === 'string' ? (req.params as any)[0] : '');
+    let requested = '';
+    try {
+      requested = decodeURIComponent(rawParam).trim();
+    } catch {
+      return res.status(400).json({ error: 'VALIDATION_ERROR: Invalid credit note number encoding.' });
+    }
+    if (!requested || !/^[a-zA-Z0-9_/-]{3,80}$/.test(requested) || requested.includes('..')) {
+      return res.status(400).json({ error: 'VALIDATION_ERROR: Invalid credit note number format.' });
+    }
+
+    try {
+      const creditNotes = await paymentGatewayService.getCreditNotes(principal.userId);
+      const cn = creditNotes.find((c) => c.creditNoteNumber === requested);
+      if (!cn) {
+        return res.status(404).json({ error: 'NOT_FOUND: Credit note not found for this account.' });
+      }
+      const html = buildCreditNoteHtmlDocument(cn);
+      const safeFileNum = cn.creditNoteNumber.replace(/[^a-zA-Z0-9_-]/g, '-');
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="AIRA-GST-Credit-Note-${safeFileNum}.html"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).send(html);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to generate credit note download.' });
+    }
+  };
+  router.get('/credit-notes/:creditNoteNumber/download', handleCreditNoteDownload);
+  router.get(/^\/credit-notes\/(.+)\/download$/, handleCreditNoteDownload);
 
   /**
    * Protected: Get user's invoice history with GST details.
@@ -322,13 +448,23 @@ export function createBillingRoutes(): Router {
 
   /**
    * Protected: Download a GST-compliant tax invoice HTML receipt owned by the authenticated principal.
+   * Supports URL-encoded slashes (`INV%2F26-27%2F00001`), multi-segment paths (`INV/26-27/00001`),
+   * and historical sandbox identifiers (`INV-2026-0001`).
    */
-  router.get('/invoices/:invoiceNumber/download', async (req: Request, res: Response) => {
+  const handleInvoiceDownload = async (req: Request, res: Response) => {
     const principal = req.principal;
     if (!principal) return res.status(401).json({ error: 'Unauthorized' });
 
-    const requested = typeof req.params.invoiceNumber === 'string' ? req.params.invoiceNumber.trim() : '';
-    if (!requested || !/^[a-zA-Z0-9_-]{3,80}$/.test(requested)) {
+    const rawParam = typeof req.params.invoiceNumber === 'string'
+      ? req.params.invoiceNumber
+      : (typeof (req.params as any)[0] === 'string' ? (req.params as any)[0] : '');
+    let requested = '';
+    try {
+      requested = decodeURIComponent(rawParam).trim();
+    } catch {
+      return res.status(400).json({ error: 'VALIDATION_ERROR: Invalid invoice number encoding.' });
+    }
+    if (!requested || !/^[a-zA-Z0-9_/-]{3,80}$/.test(requested) || requested.includes('..')) {
       return res.status(400).json({ error: 'VALIDATION_ERROR: Invalid invoice number format.' });
     }
     if (/^INV-2026-LEGACY-/i.test(requested) || requested === 'INV-PENDING-RECONCILIATION') {
@@ -342,72 +478,8 @@ export function createBillingRoutes(): Router {
         return res.status(404).json({ error: 'NOT_FOUND: Invoice not found for this account.' });
       }
 
-      const escapeHtml = (value: unknown): string =>
-        String(value ?? '')
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
-
-      const symbol = invoice.currency === 'INR' ? '₹' : '$';
-      const safeFileNum = invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '');
-      const formatPct = (rate?: number, fallbackPct = 18): string => {
-        const pct = typeof rate === 'number' && Number.isFinite(rate)
-          ? Number((rate * 100).toFixed(2))
-          : fallbackPct;
-        return `${pct}%`;
-      };
-      const taxRows =
-        invoice.cgstAmount !== undefined && invoice.sgstAmount !== undefined
-          ? `<tr><td>CGST (${formatPct(invoice.cgstRate, 9)})</td><td class="num">${symbol}${invoice.cgstAmount.toFixed(2)}</td></tr><tr><td>SGST (${formatPct(invoice.sgstRate, 9)})</td><td class="num">${symbol}${invoice.sgstAmount.toFixed(2)}</td></tr>`
-          : `<tr><td>IGST (${formatPct(invoice.igstRate ?? invoice.taxRate, 18)})</td><td class="num">${symbol}${(invoice.igstAmount ?? invoice.gstAmount).toFixed(2)}</td></tr>`;
-
-      const html = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>AIRA Tax Invoice ${escapeHtml(invoice.invoiceNumber)}</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, sans-serif; color: #1c1917; margin: 36px; max-width: 760px; }
-    .hdr { display: flex; justify-content: space-between; border-bottom: 2px solid #e7e5e4; padding-bottom: 16px; margin-bottom: 24px; }
-    .badge { display: inline-block; padding: 3px 8px; border-radius: 6px; background: #ecfdf5; color: #065f46; font-weight: 600; font-size: 12px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { border-bottom: 1px solid #e7e5e4; padding: 10px 8px; text-align: left; font-size: 14px; }
-    .num { text-align: right; font-variant-numeric: tabular-nums; }
-    .total { font-weight: 700; font-size: 16px; background: #fafaf9; }
-    .meta { font-size: 13px; color: #57534e; line-height: 1.6; }
-  </style>
-</head>
-<body>
-  <div class="hdr">
-    <div>
-      <h1 style="margin:0;font-size:22px;">Tax Invoice</h1>
-      <div class="meta"><strong>${escapeHtml(invoice.supplierName)}</strong>${invoice.supplierGstin ? ` · GSTIN: ${escapeHtml(invoice.supplierGstin)}` : ''}</div>
-      <div class="meta">SAC: ${escapeHtml(invoice.sacCode)} · Tax Compliance: ${escapeHtml(invoice.taxComplianceStatus)}</div>
-    </div>
-    <div style="text-align:right;">
-      <div style="font-family:monospace;font-weight:700;font-size:16px;">${escapeHtml(invoice.invoiceNumber)}</div>
-      <div class="meta">Date: ${escapeHtml(invoice.date)}</div>
-      <span class="badge">${escapeHtml(invoice.status)}</span>
-    </div>
-  </div>
-  <div class="meta">
-    <div><strong>Customer Principal:</strong> ${escapeHtml(principal.userId)}</div>
-    <div><strong>Place of Supply:</strong> ${escapeHtml(invoice.placeOfSupply)}</div>
-    <div><strong>Currency:</strong> ${escapeHtml(invoice.currency)}</div>
-  </div>
-  <table>
-    <thead><tr><th>Description</th><th class="num">Amount</th></tr></thead>
-    <tbody>
-      <tr><td>${escapeHtml(invoice.plan)} (Taxable Base)</td><td class="num">${symbol}${invoice.taxableBase.toFixed(2)}</td></tr>
-      ${taxRows}
-      <tr class="total"><td>Total Amount (${escapeHtml(invoice.currency)})</td><td class="num">${symbol}${invoice.totalAmount.toFixed(2)}</td></tr>
-    </tbody>
-  </table>
-  <p class="meta" style="margin-top:28px;">This is a computer-generated GST-compliant invoice from ${escapeHtml(invoice.supplierName)}.</p>
-</body>
-</html>`;
+      const safeFileNum = invoice.invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, '-');
+      const html = buildInvoiceHtmlDocument(invoice);
 
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="AIRA-GST-Invoice-${safeFileNum}.html"`);
@@ -416,7 +488,9 @@ export function createBillingRoutes(): Router {
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to generate invoice download.' });
     }
-  });
+  };
+  router.get('/invoices/:invoiceNumber/download', handleInvoiceDownload);
+  router.get(/^\/invoices\/(.+)\/download$/, handleInvoiceDownload);
 
   /**
    * Protected: Initiate subscription checkout session.
@@ -425,7 +499,7 @@ export function createBillingRoutes(): Router {
     const principal = req.principal;
     if (!principal) return res.status(401).json({ error: 'Unauthorized' });
 
-    const { planId, currency, gateway, customerPhone, customerDetails, idempotencyKey: bodyIdempotencyKey } = req.body || {};
+    const { planId, currency, gateway, customerPhone, customerDetails, billingProfile, idempotencyKey: bodyIdempotencyKey } = req.body || {};
     if (!planId || (planId !== 'plus' && planId !== 'pro')) {
       return res.status(400).json({ error: 'Invalid planId. Must be "plus" or "pro".' });
     }
@@ -456,6 +530,20 @@ export function createBillingRoutes(): Router {
       }
     }
 
+    const mergedBillingProfile = billingProfile || (
+      (customerDetails?.stateCode || customerDetails?.billingState || customerDetails?.gstin || customerDetails?.customerGstin)
+        ? {
+            legalName: customerDetails?.legalName || customerDetails?.name,
+            addressLine1: customerDetails?.addressLine1 || customerDetails?.address,
+            city: customerDetails?.city,
+            stateCode: customerDetails?.stateCode || customerDetails?.billingState,
+            postalCode: customerDetails?.postalCode,
+            country: customerDetails?.country || (currency === 'USD' ? 'US' : 'IN'),
+            customerGstin: customerDetails?.customerGstin || customerDetails?.gstin
+          }
+        : undefined
+    );
+
     try {
       const checkout = await paymentGatewayService.createSubscriptionCheckout(
         principal.userId,
@@ -468,7 +556,8 @@ export function createBillingRoutes(): Router {
           email: principalEmail || clientEmail,
           name: (principal as any)?.name || customerDetails?.name
         },
-        clientOpKey
+        clientOpKey,
+        mergedBillingProfile
       );
       res.json(checkout);
     } catch (err: any) {

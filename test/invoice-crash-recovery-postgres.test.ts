@@ -232,7 +232,7 @@ for (const engine of ENGINES) {
       });
 
       assert.ok(worker2Result?.invoiceNumber, 'Worker 2 must successfully issue the invoice');
-      assert.match(worker2Result.invoiceNumber, /^INV-2026-\d{4}$/, 'Invoice number must match sequential format');
+      assert.match(worker2Result.invoiceNumber, /^INV\/\d{2}-\d{2}\/\d{5}$/, 'Invoice number must match FY sequential format');
 
       // Step 5: Verify exactly one invoice exists in relational billing_invoices table
       const invoicesAfterRecovery = await db('billing_invoices').where({ subscription_id: 'sub_rec_test_1', cycle_number: 1 });
@@ -554,7 +554,7 @@ for (const engine of ENGINES) {
       });
 
       assert.ok(workerBResult?.invoiceNumber, 'Worker B must successfully issue the invoice');
-      assert.match(workerBResult.invoiceNumber, /^INV-2026-\d{4}$/);
+      assert.match(workerBResult.invoiceNumber, /^INV\/\d{2}-\d{2}\/\d{5}$/);
 
       // Verify claim in DB now has generation >= 2, status COMPLETED
       const claimRowB = await db('idempotent_operations').where({ key: cycleBindingKey }).first();
@@ -616,12 +616,24 @@ for (const engine of ENGINES) {
     });
 
     test(`[PG${engine.version}] GATE 6: Real PostgreSQL Credit-Note Savepoint, Rollback & Out-of-Band Reconciliation Suite`, async () => {
-      // 1. Seed a dedicated test subscription for refund verification
+      // 1. Seed a dedicated test customer & subscription for refund verification
       const now = Date.now();
       const subId = `sub_rf_test_${now}`;
-      const customerId = 'cust_rec_test_1';
+      const customerId = `cust_rf_${now}`;
       const initialPaymentId = `pay_rf_init_${now}`;
       const originalInvoiceNumber = `INV-2026-RF-${now}`;
+
+      await db('billing_customers').insert({
+        id: customerId,
+        principal_id: `principal_rf_${now}`,
+        email: `billing-rf-${now}@aira.test`,
+        name: 'AIRA Refund Recovery Tester',
+        default_currency: 'INR',
+        country_code: 'IN',
+        tax_info: JSON.stringify({ state: '09' }),
+        created_at: now,
+        updated_at: now
+      });
 
       await db('subscriptions').insert({
         id: subId,
@@ -708,7 +720,7 @@ for (const engine of ENGINES) {
       // Verify credit note was created in relational billing_credit_notes
       const cnRows1 = await db('billing_credit_notes').where({ refund_id: refundId1 });
       assert.strictEqual(cnRows1.length, 1, 'Exactly one credit note must be created in billing_credit_notes');
-      assert.match(cnRows1[0].credit_note_number, /^CN-2026-\d{4}$/, 'Credit note number must follow sequential format');
+      assert.match(cnRows1[0].credit_note_number, /^CN\/\d{2}-\d{2}\/\d{5}$/, 'Credit note number must follow FY sequential format');
       assert.strictEqual(cnRows1[0].original_invoice_number, originalInvoiceNumber, 'Must link to original invoice');
       assert.strictEqual(cnRows1[0].status, 'Refunded');
 

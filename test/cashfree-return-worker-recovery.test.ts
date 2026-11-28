@@ -881,8 +881,9 @@ describe('Cashfree Return Bridge, Worker Routing, Password Reset & Live Webhook 
       assert.match(ownerRes.headers.get('content-disposition') || '', /AIRA-GST-Invoice-INV-2026-9001\.html/);
       const html = await ownerRes.text();
       assert.match(html, /INV-2026-9001/);
-      assert.match(html, /SAC: 998431/);
+      assert.match(html, /SAC Code:.*998431/);
       assert.match(html, /₹999\.00/);
+      assert.ok(!html.includes('usr_inv_owner'), 'HTML tax invoice must never expose internal usr_ principal IDs');
 
       // 3. Cross-tenant principal gets 404
       const attackerRes = await fetch(`${bUrl}/api/billing/invoices/INV-2026-9001/download`, {

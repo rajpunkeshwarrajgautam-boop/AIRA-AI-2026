@@ -5,10 +5,10 @@ import {
   COMMERCIAL_PLANS,
   PlanTier,
   EntitlementState,
-  calculateVisionTariff,
   isModelAllowedForTier,
   isGuestPrincipal
 } from '../../../../packages/contracts/src/commercial.js';
+import { taxDeterminationService, validateGstin } from './tax-determination.js';
 
 function parseJsonSafe(val: any): Record<string, any> {
   if (!val) return {};
@@ -119,6 +119,31 @@ export interface StandardChatReservation {
   remainingMonthly: number;
 }
 
+export interface BillingTaxProfile {
+  legalName: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  stateCode: string | null;
+  stateName: string | null;
+  postalCode: string | null;
+  country: string;
+  customerGstin: string | null;
+  gstinValidatedAt: number | null;
+  isB2b: boolean;
+}
+
+export interface BillingTaxProfileInput {
+  legalName?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  stateCode?: string;
+  postalCode?: string;
+  country?: string;
+  customerGstin?: string;
+}
+
 export class CommercialBillingService {
   /**
    * Get or create a billing customer and ensure credit account exists.
@@ -183,10 +208,10 @@ export class CommercialBillingService {
           account_id: accountId,
           amount_credits: 100,
           remaining_credits: 100,
-          grant_type: 'subscription_monthly',
+          grant_type: 'promotional',
           expires_at: now + 30 * 24 * 60 * 60 * 1000,
           rollover_capped: true,
-          metadata: JSON.stringify({ note: 'Free tier welcome allotment' }),
+          metadata: JSON.stringify({ note: 'Free tier welcome allotment', isWelcomePromotional: true }),
           created_at: now
         });
 
@@ -300,7 +325,43 @@ export class CommercialBillingService {
     const currentBalance = Number(account.balance_credits || 0);
     const currentReserved = Number(account.reserved_credits || 0);
     const unreservedBalance = Math.max(0, currentBalance - currentReserved);
-    const actualExpire = Math.min(unreservedBalance, totalExpiredGrantCredits);
+
+    // Protect expired grant credits held under active reservations from before newer non-expired
+    // grants existed so settling that reservation still debits the held expired grant instead
+    // of stealing from newer paid grants or double-deducting the same credits.
+    let protectedByHeldReservations = 0;
+    if (currentReserved > 0) {
+      const heldReservations = await trx('credit_reservations')
+        .where({ account_id: accountId, status: 'HELD' })
+        .orderBy('created_at', 'asc')
+        .select('amount_credits', 'created_at');
+
+      if (Array.isArray(heldReservations) && heldReservations.length > 0) {
+        const nonExpiredGrants = await trx('credit_grants')
+          .where({ account_id: accountId })
+          .where('remaining_credits', '>', 0)
+          .where(function (this: any) {
+            this.whereNull('expires_at').orWhere('expires_at', '>', now);
+          })
+          .select('remaining_credits', 'created_at');
+
+        let cumulativeHeld = 0;
+        for (const hr of heldReservations) {
+          cumulativeHeld += Number(hr.amount_credits || 0);
+          const holdTs = Number(hr.created_at || 0);
+          const nonExpiredBeforeHold = (nonExpiredGrants || [])
+            .filter((g: any) => Number(g.created_at || 0) <= holdTs)
+            .reduce((s: number, g: any) => s + Number(g.remaining_credits || 0), 0);
+          const neededFromExpired = Math.max(0, cumulativeHeld - nonExpiredBeforeHold);
+          if (neededFromExpired > protectedByHeldReservations) {
+            protectedByHeldReservations = neededFromExpired;
+          }
+        }
+      }
+    }
+
+    const expirableGrantHeadroom = Math.max(0, totalExpiredGrantCredits - protectedByHeldReservations);
+    const actualExpire = Math.min(unreservedBalance, expirableGrantHeadroom);
     if (actualExpire <= 0) {
       return 0;
     }
@@ -328,6 +389,12 @@ export class CommercialBillingService {
         updated_at: now
       });
 
+    const expireKeyDigest = crypto
+      .createHash('sha256')
+      .update(`${account.id}:${touchedIds.slice().sort().join(',')}:${now}:${newBalance}`)
+      .digest('hex')
+      .slice(0, 32);
+
     await trx('credit_transactions').insert({
       id: `ctx_${crypto.randomUUID().replace(/-/g, '')}`,
       account_id: account.id,
@@ -335,7 +402,7 @@ export class CommercialBillingService {
       amount_credits: -actualExpire,
       balance_before: currentBalance,
       balance_after: newBalance,
-      idempotency_key: `expire_${account.id}_${touchedIds.slice().sort().join(',').slice(0, 80)}_${newBalance}`,
+      idempotency_key: `expire_${expireKeyDigest}`,
       description: `Expired ${touchedIds.length} credit grant(s)`,
       metadata: JSON.stringify({ expiredGrantIds: touchedIds, expiredGrantSum: totalExpiredGrantCredits, actualExpire }),
       created_at: now
@@ -862,7 +929,7 @@ export class CommercialBillingService {
     referenceId?: string,
     metadata: Record<string, any> = {}
   ): Promise<{ reservationId: string; amountCredits: number; expiresAt: number }> {
-    if (amountCredits <= 0) {
+    if (!Number.isFinite(amountCredits) || amountCredits <= 0) {
       throw new Error('Reservation amount must be positive.');
     }
 
@@ -974,6 +1041,9 @@ export class CommercialBillingService {
       }
 
       const holdAmount = Number(reservation.amount_credits);
+      if (!Number.isFinite(actualAmountCredits) || actualAmountCredits < 0) {
+        throw new Error('Actual settlement amount must be a finite non-negative number.');
+      }
       const actualDebit = Math.min(holdAmount, Math.max(0, actualAmountCredits));
       const releaseAmount = holdAmount - actualDebit;
 
@@ -1002,18 +1072,17 @@ export class CommercialBillingService {
         });
 
       if (actualDebit > 0) {
-        // Deduct settled debit across active non-expired grants (soonest-expiring first)
+        // Deduct settled debit across grants ordered soonest-expiring first, including grants that
+        // expired while held by this reservation so held expired credits absorb settlement rather
+        // than stealing from newer paid grants. Remaining expired balance is swept below.
         let remainingToDebit = actualDebit;
-        const activeGrants = await trx('credit_grants')
+        const debitCandidateGrants = await trx('credit_grants')
           .where({ account_id: account.id })
           .where('remaining_credits', '>', 0)
-          .where(function (this: any) {
-            this.whereNull('expires_at').orWhere('expires_at', '>', now);
-          })
           .orderByRaw('expires_at ASC NULLS LAST, created_at ASC')
           .forUpdate()
           .select('*');
-        for (const gr of activeGrants || []) {
+        for (const gr of debitCandidateGrants || []) {
           if (remainingToDebit <= 0) break;
           const rem = Number(gr.remaining_credits || 0);
           const take = Math.min(rem, remainingToDebit);
@@ -1038,10 +1107,16 @@ export class CommercialBillingService {
         });
       }
 
+      // Sweep any remaining expired grant credits that were held under reservation until settlement.
+      const sweptAfterSettle = await this.expireStaleCreditGrants(account.id, now, trx);
+      const finalBalance = sweptAfterSettle > 0
+        ? Number((await trx('credit_accounts').where({ id: account.id }).first())?.balance_credits ?? newBalance)
+        : newBalance;
+
       return {
         settledAmount: actualDebit,
         releasedAmount: releaseAmount,
-        balanceAfter: newBalance
+        balanceAfter: finalBalance
       };
     });
   }
@@ -1114,6 +1189,9 @@ export class CommercialBillingService {
     metadata: Record<string, any> = {},
     outerTrx?: Knex.Transaction | Knex
   ): Promise<{ newBalance: number; grantId: string }> {
+    if (!Number.isFinite(amountCredits) || amountCredits <= 0) {
+      throw new Error('Credit grant amount must be a positive finite number.');
+    }
     if (isGuestPrincipal(principalId)) {
       throw new Error('Cannot grant credits to guest principal.');
     }
@@ -1233,6 +1311,179 @@ export class CommercialBillingService {
       metadata: JSON.stringify(params.metadata || {}),
       created_at: Date.now()
     });
+  }
+
+  /**
+   * Reads persisted billing/GST tax profile for a principal from billing_customers.
+   */
+  async getBillingTaxProfile(principalId: string): Promise<BillingTaxProfile> {
+    const cust = await db('billing_customers').where({ principal_id: principalId }).first();
+    if (!cust) {
+      return {
+        legalName: null,
+        addressLine1: null,
+        addressLine2: null,
+        city: null,
+        stateCode: null,
+        stateName: null,
+        postalCode: null,
+        country: 'IN',
+        customerGstin: null,
+        gstinValidatedAt: null,
+        isB2b: false
+      };
+    }
+
+    const taxInfo = parseJsonSafe(cust.tax_info);
+    const rawState = cust.billing_state_code || taxInfo.stateCode || null;
+    const stateNorm = rawState ? taxDeterminationService.normalizePlaceOfSupply(rawState) : 'UNKNOWN';
+    const resolvedStateCode = stateNorm !== 'UNKNOWN' ? stateNorm : null;
+    const jurisdiction = resolvedStateCode ? taxDeterminationService.getJurisdiction(resolvedStateCode) : undefined;
+    const gstin = (cust.customer_gstin || taxInfo.gstin || null) as string | null;
+
+    return {
+      legalName: cust.billing_legal_name || cust.name || taxInfo.legalName || null,
+      addressLine1: cust.billing_address_line1 || taxInfo.addressLine1 || null,
+      addressLine2: cust.billing_address_line2 || taxInfo.addressLine2 || null,
+      city: cust.billing_city || taxInfo.city || null,
+      stateCode: resolvedStateCode,
+      stateName: jurisdiction?.name || null,
+      postalCode: cust.billing_postal_code || taxInfo.postalCode || null,
+      country: (cust.billing_country || cust.country_code || 'IN').toUpperCase(),
+      customerGstin: gstin ? String(gstin).toUpperCase() : null,
+      gstinValidatedAt: cust.gstin_validated_at ? Number(cust.gstin_validated_at) : null,
+      isB2b: Boolean(gstin && validateGstin(gstin).valid)
+    };
+  }
+
+  /**
+   * Validates and persists a subscriber's GST billing state/UT & optional B2B GSTIN.
+   * Rejects retired state code '25', invalid GSTINs, and state/GSTIN prefix mismatches.
+   */
+  async upsertBillingTaxProfile(
+    principalId: string,
+    input: BillingTaxProfileInput,
+    outerTrx?: Knex.Transaction | Knex
+  ): Promise<BillingTaxProfile> {
+    const cleanCountry = (input.country || 'IN').trim().toUpperCase().slice(0, 8) || 'IN';
+    const rawGstin = typeof input.customerGstin === 'string' ? input.customerGstin.trim().toUpperCase() : '';
+    const rawState = typeof input.stateCode === 'string' ? input.stateCode.trim() : '';
+
+    let resolvedStateCode: string | null = null;
+    if (rawState) {
+      const normalized = taxDeterminationService.normalizePlaceOfSupply(rawState);
+      if (normalized === 'UNKNOWN') {
+        throw new Error(`VALIDATION_ERROR: Unsupported Indian GST state or Union Territory code '${rawState}'.`);
+      }
+      resolvedStateCode = normalized;
+    }
+
+    let validatedGstin: string | null = null;
+    let gstinValidatedAt: number | null = null;
+    if (rawGstin) {
+      const check = validateGstin(rawGstin);
+      if (!check.valid || !check.normalized || !check.stateCode) {
+        throw new Error(`VALIDATION_ERROR: Invalid B2B GSTIN '${rawGstin}': ${check.reason || 'verification failed'}.`);
+      }
+      if (resolvedStateCode && resolvedStateCode !== check.stateCode) {
+        throw new Error(
+          `VALIDATION_ERROR: GSTIN state prefix '${check.stateCode}' does not match selected billing state '${resolvedStateCode}'.`
+        );
+      }
+      validatedGstin = check.normalized;
+      resolvedStateCode = check.stateCode;
+      gstinValidatedAt = Date.now();
+    }
+
+    if (cleanCountry === 'IN' && !resolvedStateCode) {
+      throw new Error('VALIDATION_ERROR: A valid Indian State or Union Territory is required for GST billing.');
+    }
+
+    const executor = outerTrx || db;
+    let custRow = await executor('billing_customers').where({ principal_id: principalId }).first();
+    if (!custRow) {
+      const customer = await this.getOrCreateCustomer(principalId, undefined, input.legalName, cleanCountry);
+      custRow = await executor('billing_customers').where({ id: customer.id }).first() || { id: customer.id };
+    }
+    const prevTaxInfo = parseJsonSafe(custRow?.tax_info);
+    const now = Date.now();
+
+    const cleanOpt = (v: unknown, maxLen: number): string | null => {
+      if (typeof v !== 'string') return null;
+      const t = v.trim();
+      return t ? t.slice(0, maxLen) : null;
+    };
+
+    // Preserve existing columns when omitted (`undefined`) so partial updates during checkout
+    // do not silently wipe previously saved B2B GSTIN or billing addresses, while explicit
+    // empty string / null clears the field intentionally.
+    const legalName = input.legalName !== undefined
+      ? cleanOpt(input.legalName, 255)
+      : (custRow?.billing_legal_name ?? custRow?.name ?? null);
+    const addressLine1 = input.addressLine1 !== undefined
+      ? cleanOpt(input.addressLine1, 255)
+      : (custRow?.billing_address_line1 ?? null);
+    const addressLine2 = input.addressLine2 !== undefined
+      ? cleanOpt(input.addressLine2, 255)
+      : (custRow?.billing_address_line2 ?? null);
+    const city = input.city !== undefined
+      ? cleanOpt(input.city, 120)
+      : (custRow?.billing_city ?? null);
+    const postalCode = input.postalCode !== undefined
+      ? cleanOpt(input.postalCode, 16)
+      : (custRow?.billing_postal_code ?? null);
+
+    let effectiveGstin: string | null = validatedGstin;
+    let effectiveGstinValidatedAt: number | null = gstinValidatedAt;
+    if (input.customerGstin === undefined) {
+      const prevGstin = typeof custRow?.customer_gstin === 'string' ? custRow.customer_gstin.trim().toUpperCase() : null;
+      if (prevGstin && resolvedStateCode && prevGstin.slice(0, 2) !== resolvedStateCode) {
+        throw new Error(
+          `VALIDATION_ERROR: Saved B2B GSTIN prefix '${prevGstin.slice(0, 2)}' does not match updated billing state '${resolvedStateCode}'. Clear or update GSTIN to switch states.`
+        );
+      }
+      effectiveGstin = prevGstin;
+      effectiveGstinValidatedAt = prevGstin ? (Number(custRow?.gstin_validated_at || 0) || now) : null;
+    }
+
+    await executor('billing_customers').where({ id: custRow.id }).update({
+      billing_legal_name: legalName,
+      billing_address_line1: addressLine1,
+      billing_address_line2: addressLine2,
+      billing_city: city,
+      billing_state_code: resolvedStateCode,
+      billing_postal_code: postalCode,
+      billing_country: cleanCountry,
+      customer_gstin: effectiveGstin,
+      gstin_validated_at: effectiveGstinValidatedAt,
+      tax_info: JSON.stringify({
+        ...prevTaxInfo,
+        legalName,
+        addressLine1,
+        addressLine2,
+        city,
+        stateCode: resolvedStateCode,
+        postalCode,
+        country: cleanCountry,
+        gstin: effectiveGstin
+      }),
+      updated_at: now
+    });
+
+    const jurisdiction = resolvedStateCode ? taxDeterminationService.getJurisdiction(resolvedStateCode) : undefined;
+    return {
+      legalName,
+      addressLine1,
+      addressLine2,
+      city,
+      stateCode: resolvedStateCode,
+      stateName: jurisdiction?.name || null,
+      postalCode,
+      country: cleanCountry,
+      customerGstin: effectiveGstin,
+      gstinValidatedAt: effectiveGstinValidatedAt,
+      isB2b: Boolean(effectiveGstin)
+    };
   }
 }
 

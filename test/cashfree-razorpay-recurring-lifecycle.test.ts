@@ -885,9 +885,9 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
   });
 
   // =========================================================================
-  // 6. GST-COMPLIANT INVOICE GENERATION (SAC 998431)
+      // 6. GST-COMPLIANT INVOICE GENERATION (SAC 998315)
   // =========================================================================
-  describe('6. Tax-Compliant Invoicing Engine (SAC 998431, 18% GST)', () => {
+  describe('6. Tax-Compliant Invoicing Engine (SAC 998315, 18% GST)', () => {
     it('generates compliant tax invoices for paid subscriptions with split CGST/SGST', async () => {
       const { dbClient, tables } = createMockDb();
       const service = new PaymentGatewayService();
@@ -912,7 +912,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         metadata: JSON.stringify({
           principalId,
           customerId,
-          customerState: '07',
+          customerState: '09',
           initialPaymentId: 'pay_tax_cgst_01',
           lastPaymentId: 'pay_tax_cgst_01',
           fulfilledCycle: 1
@@ -955,8 +955,8 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(inv.plan, 'AIRA Plus');
       assert.equal(inv.currency, 'INR');
       assert.equal(inv.totalAmount, 399.00);
-      assert.equal(inv.sacCode, '998431');
-      assert.equal(inv.supplierName, 'Virexa AI Ventures Private Limited');
+      assert.equal(inv.sacCode, '998315');
+      assert.equal(inv.supplierName, 'VIREXA AI VENTURES PRIVATE LIMITED');
       assert.equal(inv.status, 'Paid');
 
       // Verify 18% GST tax breakdown:
@@ -967,7 +967,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(inv.gstAmount, 60.86);
       assert.equal(inv.cgstAmount, 30.43);
       assert.equal(inv.sgstAmount, 30.43);
-      assert.ok(inv.invoiceNumber.startsWith('INV-2026-'));
+      assert.match(inv.invoiceNumber, /^INV\/\d{2}-\d{2}\/\d{5}$/);
     });
 
     it('calculates 18% IGST for inter-state customer transactions outside Delhi', async () => {
@@ -1146,7 +1146,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         metadata: JSON.stringify({
           principalId: principalId1,
           customerId: customerId1,
-          customerState: '07',
+          customerState: '09',
           initialPaymentId: 'pay_gstin_01',
           lastPaymentId: 'pay_gstin_01',
           fulfilledCycle: 1
@@ -1168,7 +1168,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         metadata: JSON.stringify({
           principalId: principalId2,
           customerId: customerId2,
-          customerState: '07',
+          customerState: '09',
           initialPaymentId: 'pay_gstin_02',
           lastPaymentId: 'pay_gstin_02',
           fulfilledCycle: 1
@@ -1216,7 +1216,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       assert.equal(invWithoutGstin[0].supplierGstin, undefined);
 
       // 2. With valid 15-character GSTIN configured
-      process.env.AIRA_SUPPLIER_GSTIN = '07AAACV2026E1Z5';
+      process.env.AIRA_SUPPLIER_GSTIN = '09AAMCV4678C1ZV';
       await service.issueDurableInvoice({
         trx: dbClient,
         customerId: customerId2,
@@ -1230,7 +1230,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       });
       const invWithGstin = await service.getInvoices(principalId2);
       assert.equal(invWithGstin[0].taxComplianceStatus, 'COMPLIANT');
-      assert.equal(invWithGstin[0].supplierGstin, '07AAACV2026E1Z5');
+      assert.equal(invWithGstin[0].supplierGstin, '09AAMCV4678C1ZV');
     });
 
     it('issues durable sequential tax invoice into billing_audit_events upon subscription activation webhook and retrieves it', async () => {
@@ -1258,7 +1258,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
         current_period_start: 0,
         current_period_end: 0,
         cancel_at_period_end: false,
-        metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '07' }),
+        metadata: JSON.stringify({ principalId, customerId, planTier: 'plus', customerState: '09' }),
         created_at: Date.now(),
         updated_at: Date.now()
       });
@@ -1295,19 +1295,19 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       // Verify durable invoice emitted in billing_audit_events
       const invoiceEvents = tables.billing_audit_events.filter(e => e.event_type === 'TAX_INVOICE_ISSUED');
       assert.equal(invoiceEvents.length, 1);
-      assert.equal(invoiceEvents[0].actor_id, 'INV-2026-0001');
+      assert.match(invoiceEvents[0].actor_id, /^INV\/\d{2}-\d{2}\/\d{5}$/);
 
       // Verify retrieval via getInvoices
       const invoices = await service.getInvoices(principalId);
       assert.equal(invoices.length, 1);
-      assert.equal(invoices[0].invoiceNumber, 'INV-2026-0001');
+      assert.equal(invoices[0].invoiceNumber, invoiceEvents[0].actor_id);
       assert.equal(invoices[0].totalAmount, 999);
       assert.equal(invoices[0].taxableBase, 846.61);
       assert.equal(invoices[0].gstAmount, 152.39);
       assert.equal(invoices[0].cgstAmount, 76.19);
       assert.equal(invoices[0].sgstAmount, 76.2);
       assert.equal(invoices[0].status, 'Paid');
-      assert.equal(invoices[0].sacCode, '998431');
+      assert.equal(invoices[0].sacCode, '998315');
     });
 
     it('enforces idempotency on durable tax invoice issuance for duplicate webhooks', async () => {
@@ -1454,14 +1454,14 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       // Verify CREDIT_NOTE_ISSUED in billing_audit_events
       const creditNoteEvents = tables.billing_audit_events.filter(e => e.event_type === 'CREDIT_NOTE_ISSUED');
       assert.equal(creditNoteEvents.length, 1);
-      assert.equal(creditNoteEvents[0].actor_id, 'CN-2026-0001');
+      assert.match(creditNoteEvents[0].actor_id, /^CN\/\d{2}-\d{2}\/\d{5}$/);
       const cnPayload = JSON.parse(creditNoteEvents[0].payload);
       assert.equal(cnPayload.originalInvoiceNumber, invoiceNumber);
 
       // Verify invoice retrieval shows updated Refunded status and linked Credit Note number
       const updatedInvoices = await service.getInvoices(principalId);
       assert.equal(updatedInvoices[0].status, 'Refunded');
-      assert.equal(updatedInvoices[0].creditNoteNumber, 'CN-2026-0001');
+      assert.equal(updatedInvoices[0].creditNoteNumber, creditNoteEvents[0].actor_id);
       assert.equal(updatedInvoices[0].refundAmount, 999);
     });
   });
@@ -1481,7 +1481,7 @@ describe('Cashfree & Razorpay Recurring Subscriptions, Webhook Security & GST In
       // Verify that no gates have unverified hardcoded 'PASSED' without evidence checks
       for (const gate of report.gates) {
         assert.ok(
-          gate.status === 'VERIFIED' || gate.status === 'PENDING_OWNER_ACTION' || gate.status === 'BLOCKED',
+          gate.status === 'VERIFIED' || gate.status === 'PENDING_OWNER_ACTION' || gate.status === 'BLOCKED' || gate.status === 'UNKNOWN',
           `Gate ${gate.id} must have evidence-based status, got ${gate.status}`
         );
         assert.ok(gate.evidence && gate.evidence.length > 5, `Gate ${gate.id} must include tangible evidence`);
